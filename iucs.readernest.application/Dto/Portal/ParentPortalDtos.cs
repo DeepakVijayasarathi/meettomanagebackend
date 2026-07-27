@@ -70,6 +70,14 @@ namespace iucs.readernest.application.Dto.Reports
 
         public IReadOnlyList<CourseRevenueDto> RevenueByDepartment { get; set; } = [];
 
+        /// <summary>
+        /// Collected revenue grouped by course, for invoices that carry a CourseId (mainly
+        /// subscription-driven billing). Invoices with no course resolved (e.g. manual
+        /// admin-created invoices) are rolled into a single "Unassigned" bucket rather than
+        /// dropped, so this total always reconciles with RevenueCollected.
+        /// </summary>
+        public IReadOnlyList<CourseRevenueDto> RevenueByCourse { get; set; } = [];
+
         /// <summary>Cash collected per month for the last 6 calendar months (oldest first).</summary>
         public IReadOnlyList<RevenuePointDto> RevenueTrend { get; set; } = [];
 

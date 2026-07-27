@@ -151,7 +151,7 @@ namespace iucs.readernest.application.Services
                 .CountAsync(e => e.Status == EnrollmentStatus.Active, cancellationToken);
 
             var invoices = await _unitOfWork.Repository<Invoice>().Query()
-                .Select(i => new { i.Department, i.Amount, i.AmountPaid, i.Status })
+                .Select(i => new { i.Department, i.Amount, i.AmountPaid, i.Status, i.CourseId, CourseName = i.Course != null ? i.Course.Name : null })
                 .ToListAsync(cancellationToken);
             var revenueCollected = invoices.Sum(i => i.AmountPaid);
             var revenuePending = invoices
@@ -213,6 +213,16 @@ namespace iucs.readernest.application.Services
             var revenueByDepartment = invoices
                 .GroupBy(i => i.Department)
                 .Select(g => new CourseRevenueDto { Name = g.Key.ToString(), Revenue = g.Sum(i => i.AmountPaid) })
+                .OrderByDescending(r => r.Revenue)
+                .ToList();
+
+            // Course-wise revenue: only invoices with a resolved course roll up by name;
+            // everything else (manual/admin invoices with no course context) is a single
+            // "Unassigned" bucket so the total still reconciles with RevenueCollected.
+            var revenueByCourse = invoices
+                .GroupBy(i => i.CourseId.HasValue ? i.CourseName ?? "Unassigned" : "Unassigned")
+                .Select(g => new CourseRevenueDto { Name = g.Key, Revenue = g.Sum(i => i.AmountPaid) })
+                .Where(r => r.Revenue > 0)
                 .OrderByDescending(r => r.Revenue)
                 .ToList();
 
@@ -332,6 +342,7 @@ namespace iucs.readernest.application.Services
                     ? 0
                     : Math.Round((double)completedSessions / activeTeachers, 1),
                 RevenueByDepartment = revenueByDepartment,
+                RevenueByCourse = revenueByCourse,
                 RevenueTrend = revenueTrend,
                 EnrollmentFunnel = enrollmentFunnel,
                 WeeklyAttendanceTrend = weeklyAttendanceTrend,
@@ -348,7 +359,8 @@ namespace iucs.readernest.application.Services
                 "revenue" => await RevenueCsvAsync(cancellationToken),
                 "payouts" => await PayoutsCsvAsync(cancellationToken),
                 "conversion" => await ConversionCsvAsync(cancellationToken),
-                _ => throw new DomainValidationException("Unknown report. Use: attendance, revenue, payouts or conversion."),
+                "performance" => await PerformanceCsvAsync(cancellationToken),
+                _ => throw new DomainValidationException("Unknown report. Use: attendance, revenue, payouts, conversion or performance."),
             };
         }
 
@@ -444,6 +456,21 @@ namespace iucs.readernest.application.Services
                     Escape($"{p.TeacherProfile.User.FirstName} {p.TeacherProfile.User.LastName}"),
                     $"{p.PeriodYear}-{p.PeriodMonth:D2}", p.Status,
                     p.Items.Count(i => i.Type == PayoutItemType.SessionEarning), p.TotalAmount));
+            }
+
+            return csv.ToString();
+        }
+
+        private async Task<string> PerformanceCsvAsync(CancellationToken cancellationToken)
+        {
+            var teachers = await GetTeacherPerformanceAsync(cancellationToken);
+
+            var csv = new StringBuilder("Teacher,Department,SessionsCompleted,TeacherNoShows,UpcomingSessions,StudentAttendancePercent,SummariesWritten\n");
+            foreach (var t in teachers)
+            {
+                csv.AppendLine(string.Join(',',
+                    Escape(t.TeacherName), Escape(t.Department), t.SessionsCompleted, t.TeacherNoShows,
+                    t.UpcomingSessions, t.StudentAttendancePercent, t.SummariesWritten));
             }
 
             return csv.ToString();

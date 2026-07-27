@@ -67,6 +67,7 @@ namespace iucs.readernest.api.Services
                         ParentProfileId = subscription.ParentProfileId,
                         ChildId = subscription.ChildId,
                         SubscriptionId = subscription.Id,
+                        CourseId = subscription.PackagePlan.CourseId,
                         // Route to the department's payment account (dual-gateway requirement);
                         // plans without a course default to Phonics
                         Department = subscription.PackagePlan.Course?.Department ?? Department.Phonics,

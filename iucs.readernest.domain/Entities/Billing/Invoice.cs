@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Common;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
@@ -28,6 +29,16 @@ namespace iucs.readernest.domain.Entities.Billing
         public Guid? SubscriptionId { get; set; }
 
         public Subscription? Subscription { get; set; }
+
+        /// <summary>
+        /// The course this invoice bills for, when known at creation time (e.g. a
+        /// subscription-driven invoice, where the plan's course is in scope). Nullable —
+        /// manually-created/admin invoices don't require one. Powers course-wise revenue
+        /// reporting; independent of Department, which drives payment-account routing.
+        /// </summary>
+        public Guid? CourseId { get; set; }
+
+        public Course? Course { get; set; }
 
         public Guid PaymentAccountId { get; set; }
 

@@ -184,6 +184,8 @@ namespace iucs.readernest.application.Services
         {
             IQueryable<Invoice> query = _unitOfWork.Repository<Invoice>().Query()
                 .Include(i => i.Child)
+                .Include(i => i.Course)
+                .Include(i => i.ParentProfile).ThenInclude(p => p.User)
                 .Include(i => i.Subscription).ThenInclude(s => s!.PackagePlan).ThenInclude(p => p.Course);
             if (status.HasValue)
             {
@@ -227,6 +229,7 @@ namespace iucs.readernest.application.Services
                 ParentProfileId = request.ParentProfileId,
                 ChildId = request.ChildId,
                 SubscriptionId = request.SubscriptionId,
+                CourseId = request.CourseId,
                 PaymentAccountId = account.Id,
                 Department = request.Department,
                 Amount = request.Amount,
@@ -1178,6 +1181,7 @@ namespace iucs.readernest.application.Services
                         ParentProfileId = request.ParentProfileId,
                         ChildId = request.ChildId,
                         SubscriptionId = subscription.Id,
+                        CourseId = plan.CourseId,
                         Department = await DepartmentForPlanAsync(plan, cancellationToken),
                         Amount = plan.Price,
                         DueDate = today.AddDays(7),
@@ -1219,6 +1223,7 @@ namespace iucs.readernest.application.Services
                     ParentProfileId = subscription.ParentProfileId,
                     ChildId = subscription.ChildId,
                     SubscriptionId = subscription.Id,
+                    CourseId = plan.CourseId,
                     Department = await DepartmentForPlanAsync(plan, cancellationToken),
                     Amount = plan.Price,
                     DueDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(7),

@@ -17,12 +17,17 @@ namespace iucs.readernest.application.Services
             string? changesJson = null,
             CancellationToken cancellationToken = default);
 
-        /// <summary>Paged, newest-first audit trail for the admin/sub-admin Audit Log screen.</summary>
+        /// <summary>
+        /// Paged, newest-first audit trail for the admin/sub-admin Audit Log screen.
+        /// When <paramref name="restrictToActorId"/> is set, only that user's own actions are returned
+        /// — used for callers without platform-wide Settings:View access.
+        /// </summary>
         Task<PagedResult<AuditLogDto>> ListAsync(
             string? entityName,
             AuditAction? action,
             int page,
             int pageSize,
+            Guid? restrictToActorId = null,
             CancellationToken cancellationToken = default);
     }
 }

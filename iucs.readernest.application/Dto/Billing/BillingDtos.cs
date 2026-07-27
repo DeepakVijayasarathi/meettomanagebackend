@@ -59,8 +59,15 @@ namespace iucs.readernest.application.Dto.Billing
         /// <summary>Resolved display name for the invoiced child; null when the invoice has no child linked.</summary>
         public string? ChildName { get; set; }
 
-        /// <summary>Resolved course/plan name via the invoice's subscription, when it has one.</summary>
+        public Guid? CourseId { get; set; }
+
+        /// <summary>Resolved course name — direct via CourseId when set, else via the invoice's subscription/plan.</summary>
         public string? CourseName { get; set; }
+
+        /// <summary>Resolved display name for the invoicing parent — the account holder, not the child.</summary>
+        public string? ParentName { get; set; }
+
+        public string? ParentEmail { get; set; }
 
         public Department Department { get; set; }
 
@@ -87,6 +94,9 @@ namespace iucs.readernest.application.Dto.Billing
         public Guid? ChildId { get; set; }
 
         public Guid? SubscriptionId { get; set; }
+
+        /// <summary>Course this invoice bills for, when known (e.g. resolved from the plan at the call site).</summary>
+        public Guid? CourseId { get; set; }
 
         /// <summary>Routes the invoice to the department's payment account (dual-gateway requirement).</summary>
         [Required]

@@ -44,12 +44,18 @@ namespace iucs.readernest.application.Services
             AuditAction? action,
             int page,
             int pageSize,
+            Guid? restrictToActorId = null,
             CancellationToken cancellationToken = default)
         {
             page = Math.Max(page, 1);
             pageSize = Math.Clamp(pageSize, 1, 200);
 
             var query = _unitOfWork.Repository<AuditLog>().Query();
+            if (restrictToActorId.HasValue)
+            {
+                query = query.Where(a => a.ActorUserId == restrictToActorId.Value);
+            }
+
             if (!string.IsNullOrWhiteSpace(entityName))
             {
                 query = query.Where(a => a.EntityName == entityName);
