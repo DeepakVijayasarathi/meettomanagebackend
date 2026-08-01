@@ -38,9 +38,12 @@ namespace iucs.readernest.api.Services
 
             if (integration is null || !integration.IsEnabled || string.IsNullOrWhiteSpace(host))
             {
+                // Never log the rendered body: it routinely carries a temporary password
+                // (welcome-credentials), review notes, or other content not meant for the
+                // log aggregator — subject/recipient is enough to see delivery was skipped.
                 _logger.LogInformation(
-                    "EMAIL (not sent — SMTP integration disabled or unconfigured) to {To} | {Subject}\n{Body}",
-                    toEmail, subject, body);
+                    "EMAIL (not sent — SMTP integration disabled or unconfigured) to {To} | {Subject}",
+                    toEmail, subject);
                 return;
             }
 

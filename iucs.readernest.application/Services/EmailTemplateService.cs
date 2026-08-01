@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Communication;
 using iucs.readernest.domain.Entities.Communication;
@@ -105,26 +106,41 @@ namespace iucs.readernest.application.Services
             return (SubstituteSubject(template.Subject, tokens), SubstituteHtml(template.HtmlBody, tokens));
         }
 
+        // Single-pass placeholder match: each {{Token}} in the ORIGINAL template is
+        // matched exactly once and replaced via a MatchEvaluator, whose return value is
+        // never re-scanned. A sequential Replace-per-token loop (the previous
+        // implementation) would let one token's substituted value — if it happened to
+        // contain a literal "{{OtherToken}}" — get matched and replaced all over again
+        // by a later iteration, substituting content into a spot nothing in the template
+        // ever placed there.
+        private static readonly Regex TokenPattern = new(@"\{\{(\w+)\}\}", RegexOptions.Compiled);
+
         private static string SubstituteSubject(string subject, IReadOnlyDictionary<string, string> tokens)
         {
-            foreach (var (key, value) in tokens)
+            return TokenPattern.Replace(subject, match =>
             {
+                if (!tokens.TryGetValue(match.Groups[1].Value, out var value))
+                {
+                    return match.Value;
+                }
+
                 // Subject is a plain-text mail header — strip line breaks so a token value
                 // can never smuggle extra headers in (header injection), but no HTML escaping.
-                var safe = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ");
-                subject = subject.Replace("{{" + key + "}}", safe);
-            }
-            return subject;
+                return (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ");
+            });
         }
 
         private static string SubstituteHtml(string html, IReadOnlyDictionary<string, string> tokens)
         {
-            foreach (var (key, value) in tokens)
+            return TokenPattern.Replace(html, match =>
             {
-                var safe = WebUtility.HtmlEncode(value ?? string.Empty).Replace("\n", "<br/>");
-                html = html.Replace("{{" + key + "}}", safe);
-            }
-            return html;
+                if (!tokens.TryGetValue(match.Groups[1].Value, out var value))
+                {
+                    return match.Value;
+                }
+
+                return WebUtility.HtmlEncode(value ?? string.Empty).Replace("\n", "<br/>");
+            });
         }
 
         private static IReadOnlyList<string> DecodePlaceholders(string json)

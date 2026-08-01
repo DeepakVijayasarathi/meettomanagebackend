@@ -375,10 +375,16 @@ namespace iucs.readernest.application.Services
 
         public async Task SetPermissionsAsync(
             Guid userId,
+            Guid currentUserId,
             IReadOnlyList<PermissionDto> permissions,
             Guid? roleDefinitionId = null,
             CancellationToken cancellationToken = default)
         {
+            if (userId == currentUserId)
+            {
+                throw new DomainValidationException("You cannot change your own permissions.");
+            }
+
             var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), userId);
 

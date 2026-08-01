@@ -21,15 +21,21 @@ namespace iucs.readernest.api.Controllers
             _roleService = roleService;
         }
 
+        // Gated on Settings, not UserManagement: a RoleDefinition IS the permission
+        // matrix other Sub Admins run on, so it's platform configuration (same category
+        // as Settings/Integrations/Menus) rather than routine user-record management —
+        // a Sub Admin whose job is "manage user records" must not also be able to grant
+        // or edit any role's permission matrix, including one already assigned to someone
+        // else, through the same claim.
         [HttpGet]
-        [HasPermission(PermissionModule.UserManagement, PermissionAction.View)]
+        [HasPermission(PermissionModule.Settings, PermissionAction.View)]
         public async Task<ActionResult<IReadOnlyList<RoleDto>>> List(CancellationToken cancellationToken)
         {
             return Ok(await _roleService.ListAsync(cancellationToken));
         }
 
         [HttpPost]
-        [HasPermission(PermissionModule.UserManagement, PermissionAction.Create)]
+        [HasPermission(PermissionModule.Settings, PermissionAction.Edit)]
         public async Task<ActionResult<RoleDto>> Create(SaveRoleRequest request, CancellationToken cancellationToken)
         {
             var role = await _roleService.CreateAsync(request, cancellationToken);
@@ -37,14 +43,14 @@ namespace iucs.readernest.api.Controllers
         }
 
         [HttpPut("{id:guid}")]
-        [HasPermission(PermissionModule.UserManagement, PermissionAction.Edit)]
+        [HasPermission(PermissionModule.Settings, PermissionAction.Edit)]
         public async Task<ActionResult<RoleDto>> Update(Guid id, SaveRoleRequest request, CancellationToken cancellationToken)
         {
             return Ok(await _roleService.UpdateAsync(id, request, cancellationToken));
         }
 
         [HttpDelete("{id:guid}")]
-        [HasPermission(PermissionModule.UserManagement, PermissionAction.Delete)]
+        [HasPermission(PermissionModule.Settings, PermissionAction.Edit)]
         public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
         {
             await _roleService.DeleteAsync(id, cancellationToken);

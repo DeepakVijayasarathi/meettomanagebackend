@@ -204,6 +204,20 @@ namespace iucs.readernest.api.Controllers
                 return NotFound();
             }
 
+            // Only Teacher/Parent have a meaningful "personal schedule" to sync — Admin/
+            // SubAdmin/AdmissionTeam have no owning batch/session scope, so MyCalendarFeed's
+            // role switch would otherwise fall through to an unfiltered org-wide session
+            // list for them. Refusing the token here means one can never be issued.
+            if (user.Role is not (UserRole.Teacher or UserRole.Parent))
+            {
+                return BadRequest(new ProblemDetails
+                {
+                    Status = 400,
+                    Title = "Bad Request",
+                    Detail = "A personal calendar feed is only available to Teacher and Parent accounts.",
+                });
+            }
+
             if (user.CalendarFeedToken is null)
             {
                 user.CalendarFeedToken = Guid.NewGuid();
@@ -237,11 +251,15 @@ namespace iucs.readernest.api.Controllers
 
             var from = DateTime.UtcNow.AddDays(-30);
             var to = DateTime.UtcNow.AddDays(120);
+            // No unscoped fallback: Admin/SubAdmin/AdmissionTeam have no owning session
+            // scope, and MyCalendarFeedUrl no longer issues them a token — but a token
+            // already on a legacy record must never fall through to every session in
+            // the institution, so it gets an empty feed instead.
             var sessions = user.Role switch
             {
                 UserRole.Teacher => await _sessionService.ListForTeacherUserAsync(user.Id, from, to, cancellationToken),
                 UserRole.Parent => await parentPortal.GetScheduleAsync(user.Id, from, to, cancellationToken),
-                _ => await _sessionService.ListAsync(from, to, null, null, cancellationToken),
+                _ => [],
             };
 
             return IcsFile(sessions);

@@ -35,8 +35,14 @@ namespace iucs.readernest.application.Services
 
         Task<IReadOnlyList<PermissionDto>> GetPermissionsAsync(Guid userId, CancellationToken cancellationToken = default);
 
+        /// <summary>
+        /// currentUserId blocks a Sub Admin from editing their own grant matrix — the same
+        /// self-modification guard DeleteAsync already applies, closing an otherwise-open
+        /// self-escalation path (grant yourself every module via your own edit permission).
+        /// </summary>
         Task SetPermissionsAsync(
             Guid userId,
+            Guid currentUserId,
             IReadOnlyList<PermissionDto> permissions,
             Guid? roleDefinitionId = null,
             CancellationToken cancellationToken = default);

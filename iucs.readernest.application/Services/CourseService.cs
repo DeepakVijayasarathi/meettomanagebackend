@@ -2,6 +2,7 @@ using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Courses;
 using iucs.readernest.application.Mappings;
 using iucs.readernest.domain.Entities.Academics;
+using iucs.readernest.domain.Entities.Sessions;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
 using Microsoft.EntityFrameworkCore;
@@ -115,6 +116,43 @@ namespace iucs.readernest.application.Services
             var category = await ValidateAsync(request, cancellationToken);
             var course = await _unitOfWork.Repository<Course>().GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(Course), id);
+
+            // Switching to Individual bypasses BatchService's own "one student per
+            // Individual batch" guard entirely, since that guard only fires when a BATCH
+            // is edited — not when the course backing it changes type out from under it.
+            if (request.Type == CourseType.Individual && course.Type != CourseType.Individual)
+            {
+                var hasMultiStudentBatch = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                    .Where(e => e.Status == EnrollmentStatus.Active && e.Batch.CourseId == id)
+                    .GroupBy(e => e.BatchId)
+                    .AnyAsync(g => g.Count() > 1, cancellationToken);
+                if (hasMultiStudentBatch)
+                {
+                    throw new DomainValidationException(
+                        "This course has a batch with more than one active student; it can't switch to Individual " +
+                        "until students are moved to separate batches.");
+                }
+            }
+
+            // TotalSessions/DurationMinutes are baked into any schedule already generated
+            // from them (SessionService.GenerateScheduleAsync). Changing either afterward
+            // desyncs MoveBatchToDormantIfCourseCompletedAsync's completedSessions vs.
+            // TotalSessions check against a schedule sized for the old values.
+            if ((request.TotalSessions != course.TotalSessions || request.DurationMinutes != course.DurationMinutes))
+            {
+                var batchIds = await _unitOfWork.Repository<Batch>().Query()
+                    .Where(b => b.CourseId == id)
+                    .Select(b => b.Id)
+                    .ToListAsync(cancellationToken);
+                var hasGeneratedSchedule = batchIds.Count > 0 && await _unitOfWork.Repository<ClassSession>()
+                    .ExistsAsync(s => s.BatchId != null && batchIds.Contains(s.BatchId.Value), cancellationToken);
+                if (hasGeneratedSchedule)
+                {
+                    throw new DomainValidationException(
+                        "This course already has a batch with a generated schedule; TotalSessions and " +
+                        "DurationMinutes can no longer change without desyncing it.");
+                }
+            }
 
             course.CourseCategoryId = request.CourseCategoryId;
             course.CourseCategory = category;

@@ -201,7 +201,8 @@ namespace iucs.readernest.api.Controllers
             List<PermissionDto> permissions,
             CancellationToken cancellationToken)
         {
-            await _userService.SetPermissionsAsync(id, permissions, cancellationToken: cancellationToken);
+            var currentUserId = Guid.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+            await _userService.SetPermissionsAsync(id, currentUserId, permissions, cancellationToken: cancellationToken);
             return NoContent();
         }
 
@@ -234,7 +235,8 @@ namespace iucs.readernest.api.Controllers
                 });
             }
 
-            await _userService.SetPermissionsAsync(id, role.Permissions, role.Id, cancellationToken);
+            var currentUserId = Guid.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+            await _userService.SetPermissionsAsync(id, currentUserId, role.Permissions, role.Id, cancellationToken);
             return NoContent();
         }
     }
