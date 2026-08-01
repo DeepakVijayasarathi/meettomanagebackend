@@ -1,6 +1,7 @@
 using System.Text;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Reports;
+using iucs.readernest.application.Helper;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Admission;
 using iucs.readernest.domain.Entities.Billing;
@@ -102,9 +103,21 @@ namespace iucs.readernest.application.Services
             var talkSeconds = events.Where(e => e.Type == EngagementEventType.TalkTimeSeconds).Sum(e => e.Value);
             var cameraSeconds = events.Where(e => e.Type == EngagementEventType.CameraOnSeconds).Sum(e => e.Value);
 
-            var sessionCount = Math.Max(1, events.Select(e => e.ClassSessionId).Distinct().Count());
-            var avgScore = Math.Min(100,
-                (Math.Min(quizCorrect * 2, 30) + Math.Min(quizAttempts, 20) + Math.Min(activity * 2, 20) + Math.Min(whiteboard, 15)) / sessionCount * 2);
+            // Same per-session formula the live session summary uses (EngagementScoring.Score),
+            // averaged across every session this child has events for — so this screen's score
+            // always reconciles with what any single session's live summary shows, instead of
+            // applying the caps once across the whole history (the previous, independently
+            // written formula here, which also silently omitted the attention-ping signal).
+            var scoresBySession = events
+                .GroupBy(e => e.ClassSessionId)
+                .Select(sessionEvents => EngagementScoring.Score(
+                    quizCorrect: sessionEvents.Where(e => e.Type == EngagementEventType.QuizCorrect).Sum(e => e.Value),
+                    quizAttempts: sessionEvents.Where(e => e.Type is EngagementEventType.QuizAttempt or EngagementEventType.QuizCorrect).Sum(e => e.Value),
+                    activity: sessionEvents.Where(e => e.Type is EngagementEventType.ActivityClick or EngagementEventType.ActivityCompleted).Sum(e => e.Value),
+                    whiteboard: sessionEvents.Where(e => e.Type == EngagementEventType.WhiteboardInteraction).Sum(e => e.Value),
+                    attention: sessionEvents.Where(e => e.Type == EngagementEventType.AttentionPing).Sum(e => e.Value)))
+                .ToList();
+            var avgScore = scoresBySession.Count == 0 ? 0 : (int)Math.Round(scoresBySession.Average());
 
             // Generated progress insights: rule-based narrative from the captured signals
             var name = child.FirstName;

@@ -40,8 +40,12 @@ namespace iucs.readernest.api.Controllers
             return Ok(await _enrollmentService.ListForParentUserAsync(userId, cancellationToken));
         }
 
+        // Gated on Admission, not UserManagement: enrollment submissions carry raw
+        // family/child JSON, and UserManagement:View is also granted to Coordinator for
+        // an unrelated reason (browsing users for scheduling) — that shared claim would
+        // otherwise let Coordinator read/download every family's enrollment data too.
         [HttpGet]
-        [HasPermission(PermissionModule.UserManagement, PermissionAction.View)]
+        [HasPermission(PermissionModule.Admission, PermissionAction.View)]
         public async Task<ActionResult<IReadOnlyList<EnrollmentFormDto>>> List(
             [FromQuery] EnrollmentFormStatus? status,
             CancellationToken cancellationToken)
@@ -51,7 +55,7 @@ namespace iucs.readernest.api.Controllers
 
         /// <summary>Approval creates the Child record and unlocks the parent dashboard.</summary>
         [HttpPost("{id:guid}/review")]
-        [HasPermission(PermissionModule.UserManagement, PermissionAction.Approve)]
+        [HasPermission(PermissionModule.Admission, PermissionAction.Approve)]
         public async Task<ActionResult<EnrollmentFormDto>> Review(
             Guid id,
             ReviewEnrollmentFormRequest request,
@@ -62,7 +66,7 @@ namespace iucs.readernest.api.Controllers
 
         /// <summary>Admin edits the submitted answers before approval.</summary>
         [HttpPut("{id:guid}")]
-        [HasPermission(PermissionModule.UserManagement, PermissionAction.Edit)]
+        [HasPermission(PermissionModule.Admission, PermissionAction.Edit)]
         public async Task<ActionResult<EnrollmentFormDto>> Update(
             Guid id,
             SubmitEnrollmentFormRequest request,
@@ -73,7 +77,7 @@ namespace iucs.readernest.api.Controllers
 
         /// <summary>Admin download of the submitted form as a JSON document.</summary>
         [HttpGet("{id:guid}/download")]
-        [HasPermission(PermissionModule.UserManagement, PermissionAction.View)]
+        [HasPermission(PermissionModule.Admission, PermissionAction.View)]
         public async Task<IActionResult> Download(Guid id, CancellationToken cancellationToken)
         {
             var form = await _enrollmentService.GetAsync(id, cancellationToken);

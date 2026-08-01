@@ -2,12 +2,21 @@ using iucs.readernest.api.Auth;
 using iucs.readernest.application.Dto.Billing;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace iucs.readernest.api.Controllers
 {
+    // Parent also carries BillingFinance:View (for their own /parent/billing screen,
+    // served separately by ParentPortalController) and AdmissionTeam carries
+    // BillingFinance:View/Create/Approve (for payment-tracking during conversion) — the
+    // same claims this whole admin console runs on. Without a role restriction, either
+    // could call this unscoped List and enumerate every family's invoices/amounts, or
+    // target another family specifically via ?parentProfileId=. AdmissionTeam is kept
+    // in the allow-list since its seeded grants look deliberate; Parent never is.
     [ApiController]
     [Route("api/invoices")]
+    [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
     public class InvoicesController : ControllerBase
     {
         private readonly IBillingService _billingService;

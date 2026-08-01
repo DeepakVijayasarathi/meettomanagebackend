@@ -65,7 +65,7 @@ namespace iucs.readernest.tests
 
         private AcademicOpsService CreateAcademicOpsService() => new(_db.UnitOfWork, _auditLog, _notifications);
 
-        private GamificationService CreateGamificationService() => new(_db.UnitOfWork);
+        private GamificationService CreateGamificationService() => new(_db.UnitOfWork, CreateSessionService());
 
         private DemoBookingService CreateDemoBookingService() =>
             new(_db.UnitOfWork, _auditLog, _emailSender, _emailTemplates, new FakeCrmNotifier());
@@ -549,14 +549,17 @@ namespace iucs.readernest.tests
             // A real session id — StudentAward.ClassSessionId is a FK.
             var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
             var sessionId = session.Id;
+            // GrantAsync now requires genuine session participation — the session's own
+            // assigned teacher is a valid caller.
+            var callerId = (await _db.Context.TeacherProfiles.FindAsync(session.TeacherProfileId))!.UserId;
 
-            await gamification.GrantAsync(new GrantAwardRequest { SessionId = sessionId, ParticipantName = "Aarav", Points = 2 });
+            await gamification.GrantAsync(callerId, new GrantAwardRequest { SessionId = sessionId, ParticipantName = "Aarav", Points = 2 });
             var afterTwo = await gamification.GetLeaderboardAsync(sessionId, 10);
             Assert.Equal(2, afterTwo.Single().Stars);
             Assert.Empty(afterTwo.Single().Badges);
 
             // Crossing 3 stars auto-grants the "Rising Star" milestone.
-            var granted = await gamification.GrantAsync(new GrantAwardRequest { SessionId = sessionId, ParticipantName = "Aarav", Points = 1 });
+            var granted = await gamification.GrantAsync(callerId, new GrantAwardRequest { SessionId = sessionId, ParticipantName = "Aarav", Points = 1 });
             Assert.Contains(granted, a => a.Kind == AwardKind.Milestone);
 
             var afterThree = await gamification.GetLeaderboardAsync(sessionId, 10);

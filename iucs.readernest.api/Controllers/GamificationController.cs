@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using iucs.readernest.application.Dto.Sessions;
 using iucs.readernest.application.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -7,8 +8,9 @@ namespace iucs.readernest.api.Controllers
 {
     /// <summary>
     /// Persistent gamification: stars/badges/milestones earned in live classes.
-    /// Any signed-in participant can post their own awards from the classroom;
-    /// the leaderboard is readable by every portal (names only, no PII).
+    /// A session participant can post their own star awards from the classroom; a
+    /// Badge/session-less award requires Teacher/Admin. The leaderboard is readable
+    /// by every portal (names only, no PII).
     /// </summary>
     [ApiController]
     [Route("api/gamification")]
@@ -27,7 +29,8 @@ namespace iucs.readernest.api.Controllers
             GrantAwardRequest request,
             CancellationToken cancellationToken)
         {
-            return Ok(await _gamificationService.GrantAsync(request, cancellationToken));
+            var callerUserId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            return Ok(await _gamificationService.GrantAsync(callerUserId, request, cancellationToken));
         }
 
         [HttpGet("leaderboard")]

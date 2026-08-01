@@ -1,5 +1,7 @@
+using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Sessions;
 using iucs.readernest.domain.Entities.Sessions;
+using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
 using Microsoft.EntityFrameworkCore;
@@ -17,14 +19,50 @@ namespace iucs.readernest.application.Services
         ];
 
         private readonly IUnitOfWork _unitOfWork;
+        private readonly ISessionService _sessionService;
 
-        public GamificationService(IUnitOfWork unitOfWork)
+        public GamificationService(IUnitOfWork unitOfWork, ISessionService sessionService)
         {
             _unitOfWork = unitOfWork;
+            _sessionService = sessionService;
         }
 
-        public async Task<IReadOnlyList<AwardDto>> GrantAsync(GrantAwardRequest request, CancellationToken cancellationToken = default)
+        public async Task<IReadOnlyList<AwardDto>> GrantAsync(
+            Guid callerUserId, GrantAwardRequest request, CancellationToken cancellationToken = default)
         {
+            // Milestones are exclusively server-computed below when stars cross a
+            // threshold — a client must never be able to mint one directly.
+            if (request.Kind == AwardKind.Milestone)
+            {
+                throw new DomainValidationException("Milestone awards are granted automatically and cannot be requested directly.");
+            }
+
+            var caller = await _unitOfWork.Repository<User>().GetByIdAsync(callerUserId, cancellationToken)
+                ?? throw new UnauthorizedException("Unknown user.");
+            var isStaff = caller.Role is UserRole.Admin or UserRole.Teacher;
+
+            // A named Badge is "granted by a teacher or an activity" (see AwardKind) — never
+            // self-awarded by a student/parent. A Star is the live-quiz self-report flow any
+            // genuine session participant can post for themselves.
+            if (request.Kind == AwardKind.Badge && !isStaff)
+            {
+                throw new ForbiddenException("Only a teacher or admin can grant a badge.");
+            }
+
+            if (request.SessionId.HasValue)
+            {
+                if (!await _sessionService.IsSessionParticipantAsync(request.SessionId.Value, callerUserId, cancellationToken))
+                {
+                    throw new ForbiddenException("You do not have access to this session.");
+                }
+            }
+            else if (!isStaff)
+            {
+                // No session to scope against — only a trusted role can award outside a
+                // specific, ownership-checked class.
+                throw new ForbiddenException("An award not tied to a specific session can only be granted by a teacher or admin.");
+            }
+
             var name = request.ParticipantName.Trim();
             var repository = _unitOfWork.Repository<StudentAward>();
             var granted = new List<StudentAward>();

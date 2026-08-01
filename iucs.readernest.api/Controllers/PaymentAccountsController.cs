@@ -2,13 +2,20 @@ using iucs.readernest.api.Auth;
 using iucs.readernest.application.Dto.Billing;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace iucs.readernest.api.Controllers
 {
-    /// <summary>Department payment accounts + parent→account mapping (admin Payment Gateway Mapping screen).</summary>
+    /// <summary>
+    /// Department payment accounts + parent→account mapping (admin Payment Gateway Mapping screen).
+    /// Parent also carries BillingFinance:View for their own /parent/billing screen (served
+    /// separately by ParentPortalController) — without a role restriction that same claim
+    /// would reach this gateway-wiring configuration screen too.
+    /// </summary>
     [ApiController]
     [Route("api/payment-accounts")]
+    [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
     public class PaymentAccountsController : ControllerBase
     {
         private readonly IBillingService _billingService;

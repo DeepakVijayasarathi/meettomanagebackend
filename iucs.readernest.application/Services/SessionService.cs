@@ -1,5 +1,6 @@
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Sessions;
+using iucs.readernest.application.Helper;
 using iucs.readernest.application.Mappings;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Entities.Academics;
@@ -673,14 +674,7 @@ namespace iucs.readernest.application.Services
                     var whiteboard = group.Where(e => e.Type == EngagementEventType.WhiteboardInteraction).Sum(e => e.Value);
                     var attention = group.Where(e => e.Type == EngagementEventType.AttentionPing).Sum(e => e.Value);
 
-                    // Weighted score: accuracy counts double; capped contributions keep one
-                    // hyperactive signal from masking absence everywhere else
-                    var score = Math.Min(100,
-                        Math.Min(quizCorrect * 2, 30)
-                        + Math.Min(quizAttempts, 20)
-                        + Math.Min(activity * 2, 20)
-                        + Math.Min(whiteboard, 15)
-                        + Math.Min(attention, 15));
+                    var score = EngagementScoring.Score(quizCorrect, quizAttempts, activity, whiteboard, attention);
 
                     return new EngagementSummaryDto
                     {

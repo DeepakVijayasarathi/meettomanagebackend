@@ -2,6 +2,7 @@ using iucs.readernest.api.Auth;
 using iucs.readernest.application.Dto.Communication;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace iucs.readernest.api.Controllers
@@ -9,9 +10,12 @@ namespace iucs.readernest.api.Controllers
     /// <summary>
     /// Email Template Master: the admin-designed Subject/HtmlBody every automated
     /// system email renders from. Shown on the admin Settings → Email Templates screen.
+    /// Parent also carries Communication:View for their own /parent/notifications screen —
+    /// without a role restriction that same claim would reach this system-template config too.
     /// </summary>
     [ApiController]
     [Route("api/email-templates")]
+    [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
     public class EmailTemplatesController : ControllerBase
     {
         private readonly IEmailTemplateService _emailTemplateService;

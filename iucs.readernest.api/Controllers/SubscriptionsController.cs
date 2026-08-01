@@ -2,12 +2,17 @@ using iucs.readernest.api.Auth;
 using iucs.readernest.application.Dto.Billing;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace iucs.readernest.api.Controllers
 {
+    // Parent also carries BillingFinance:View for their own /parent/billing screen
+    // (served separately by ParentPortalController) — without a role restriction that
+    // same claim reaches this unscoped, admin-only subscriptions screen too.
     [ApiController]
     [Route("api/subscriptions")]
+    [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
     public class SubscriptionsController : ControllerBase
     {
         private readonly IBillingService _billingService;
