@@ -496,7 +496,16 @@ namespace iucs.readernest.application.Services
         private static string Escape(string? value)
         {
             if (string.IsNullOrEmpty(value)) return "";
-            return value.Contains(',') || value.Contains('"')
+
+            // Formula injection: a value opening with =/+/-/@ is interpreted by Excel/Sheets
+            // as a formula the moment the file is opened. These fields carry user/parent
+            // input (child, parent, teacher names), so neutralize it with a leading apostrophe.
+            if (value.Length > 0 && (value[0] is '=' or '+' or '-' or '@'))
+            {
+                value = "'" + value;
+            }
+
+            return value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r')
                 ? $"\"{value.Replace("\"", "\"\"")}\""
                 : value;
         }

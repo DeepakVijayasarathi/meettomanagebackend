@@ -309,11 +309,15 @@ namespace iucs.readernest.application.Services
             CaptureAttendanceRequest request,
             CancellationToken cancellationToken = default)
         {
-            var sessionExists = await _unitOfWork.Repository<ClassSession>()
-                .ExistsAsync(s => s.Id == sessionId, cancellationToken);
-            if (!sessionExists)
+            var session = await _unitOfWork.Repository<ClassSession>()
+                .FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken)
+                ?? throw new NotFoundException(nameof(ClassSession), sessionId);
+
+            if (session.Status is SessionStatus.Cancelled or SessionStatus.Rescheduled
+                or SessionStatus.TeacherNoShow or SessionStatus.StudentNoShow)
             {
-                throw new NotFoundException(nameof(ClassSession), sessionId);
+                throw new DomainValidationException(
+                    $"Attendance cannot be recorded for a session in status '{session.Status}'.");
             }
 
             var repository = _unitOfWork.Repository<SessionAttendance>();

@@ -412,6 +412,8 @@ namespace iucs.readernest.application.Services
                 if (weekdays.Contains(date.DayOfWeek) && !holidays.Contains(date))
                 {
                     var startUtc = date.ToDateTime(request.StartTimeUtc, DateTimeKind.Utc);
+                    await EnsureTeacherIsFreeAsync(
+                        batch.TeacherProfileId, startUtc, startUtc.AddMinutes(course.DurationMinutes), cancellationToken);
                     await sessionRepository.AddAsync(
                         new ClassSession
                         {

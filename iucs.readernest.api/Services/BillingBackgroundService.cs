@@ -83,6 +83,7 @@ namespace iucs.readernest.api.Services
                     BillingCycle.Yearly => subscription.NextBillingAtUtc!.Value.AddYears(1),
                     _ => null, // one-time plans bill once
                 };
+                unitOfWork.Repository<Subscription>().Update(subscription);
             }
 
             // Fee overdue check: unpaid invoices past their due date turn Overdue
@@ -95,6 +96,7 @@ namespace iucs.readernest.api.Services
             foreach (var invoice in overdueInvoices)
             {
                 invoice.Status = InvoiceStatus.Overdue;
+                unitOfWork.Repository<Invoice>().Update(invoice);
             }
 
             // Account suspension: any parent left with an overdue invoice and no active

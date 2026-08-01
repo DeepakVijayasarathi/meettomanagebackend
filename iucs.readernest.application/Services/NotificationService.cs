@@ -82,6 +82,11 @@ namespace iucs.readernest.application.Services
             }
 
             await _unitOfWork.Repository<Notification>().AddAsync(notification, cancellationToken);
+
+            // Callers routinely send a notification after their own SaveChangesAsync has
+            // already run (e.g. as a side effect once the business entity is committed), so
+            // this row must persist itself rather than rely on a save that may never come.
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
         public async Task<NotificationFeedDto> GetFeedForUserAsync(

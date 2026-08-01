@@ -682,6 +682,21 @@ namespace iucs.readernest.application.Services
 
             var invoice = await _unitOfWork.Repository<Invoice>().GetByIdAsync(transaction.InvoiceId, cancellationToken)
                 ?? throw new NotFoundException(nameof(Invoice), transaction.InvoiceId);
+
+            if (invoice.Status is InvoiceStatus.Paid or InvoiceStatus.Cancelled)
+            {
+                // Another payment (a parallel checkout attempt, or a manual cash entry) already
+                // settled this invoice before this gateway transaction confirmed. The money did
+                // arrive at the gateway — the transaction is still recorded as Success above —
+                // but it must not be double-applied to an invoice that's already covered.
+                // Flagged in the audit trail since it now needs a manual refund.
+                await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
+                    changesJson: $"{{\"overpayment\":{transaction.Amount},\"gatewayRef\":\"{gatewayReference}\",\"invoiceStatus\":\"{invoice.Status}\"}}",
+                    cancellationToken: cancellationToken);
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+                return;
+            }
+
             await ApplyPaymentToInvoiceAsync(invoice, transaction.Amount, cancellationToken);
 
             await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
@@ -947,9 +962,17 @@ namespace iucs.readernest.application.Services
             var transaction = await _unitOfWork.Repository<PaymentTransaction>().GetByIdAsync(request.PaymentTransactionId, cancellationToken)
                 ?? throw new NotFoundException(nameof(PaymentTransaction), request.PaymentTransactionId);
 
-            if (request.Amount > transaction.Amount)
+            // Sum every refund not already rejected — a second request must not be able to
+            // stack on top of one still pending review or one already paid out.
+            var alreadyRefunded = await _unitOfWork.Repository<Refund>().Query()
+                .Where(r => r.PaymentTransactionId == transaction.Id && r.Status != RefundStatus.Rejected)
+                .SumAsync(r => (decimal?)r.Amount, cancellationToken) ?? 0m;
+
+            if (alreadyRefunded + request.Amount > transaction.Amount)
             {
-                throw new DomainValidationException($"Refund of {request.Amount} exceeds the transaction amount of {transaction.Amount}.");
+                throw new DomainValidationException(
+                    $"Refund of {request.Amount} would exceed the transaction amount of {transaction.Amount} " +
+                    $"({alreadyRefunded} already requested/refunded).");
             }
 
             var refund = new Refund

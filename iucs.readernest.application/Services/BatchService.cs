@@ -144,6 +144,11 @@ namespace iucs.readernest.application.Services
             var batch = await _unitOfWork.Repository<Batch>().FirstOrDefaultAsync(b => b.Id == batchId, cancellationToken)
                 ?? throw new NotFoundException(nameof(Batch), batchId);
 
+            if (batch.Status != BatchStatus.Active)
+            {
+                throw new DomainValidationException($"Batch '{batch.Name}' is {batch.Status} and cannot take new enrollments.");
+            }
+
             var child = await _unitOfWork.Repository<Child>().Query()
                 .Include(c => c.ParentProfile).ThenInclude(p => p.User)
                 .FirstOrDefaultAsync(c => c.Id == childId, cancellationToken)
