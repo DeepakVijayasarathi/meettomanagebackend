@@ -34,5 +34,14 @@ namespace iucs.readernest.domain.Repository
 
         /// <summary>Composable no-tracking query for service-layer filtering, paging and projections.</summary>
         IQueryable<TEntity> Query();
+
+        /// <summary>
+        /// Composable TRACKED query for bulk read-then-mutate flows — filter down to the rows
+        /// that need updating, mutate each in memory, and a single SaveChangesAsync persists
+        /// all of them. Use this instead of the ids-then-loop-GetByIdAsync pattern (one query
+        /// to find candidates, then N more round trips to re-fetch each one tracked) that
+        /// otherwise shows up anywhere a bulk status flip is needed.
+        /// </summary>
+        IQueryable<TEntity> TrackedQuery();
     }
 }

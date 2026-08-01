@@ -4,6 +4,7 @@ using iucs.readernest.application.Dto.Common;
 using iucs.readernest.application.Dto.Users;
 using iucs.readernest.application.Helper;
 using iucs.readernest.application.Mappings;
+using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Entities.Communication;
 using iucs.readernest.domain.Entities.Integrations;
 using iucs.readernest.domain.Entities.Sessions;
@@ -236,15 +237,45 @@ namespace iucs.readernest.application.Services
             var user = await _unitOfWork.Repository<User>().GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), id);
 
+            var wasActive = user.Status == UserStatus.Active;
             user.Status = status;
 
             var action = status == UserStatus.Suspended ? AuditAction.Suspend
                 : status == UserStatus.Active ? AuditAction.Restore
                 : AuditAction.Update;
             await _auditLog.StageAsync(action, nameof(User), user.Id.ToString(), cancellationToken: cancellationToken);
+
+            // A parent who can no longer sign in can't pay either — leaving their
+            // subscription Active would let BillingBackgroundService keep invoicing (and
+            // eventually suspend/dun) an account nobody can act on. Pausing is one-way here:
+            // resuming billing after a restore is a deliberate admin call, not an automatic one.
+            if (user.Role == UserRole.Parent && wasActive && status != UserStatus.Active)
+            {
+                await PauseSubscriptionsForParentUserAsync(id, cancellationToken);
+            }
+
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return user.ToDto();
+        }
+
+        private async Task PauseSubscriptionsForParentUserAsync(Guid parentUserId, CancellationToken cancellationToken)
+        {
+            var parentProfile = await _unitOfWork.Repository<ParentProfile>()
+                .FirstOrDefaultAsync(p => p.UserId == parentUserId, cancellationToken);
+            if (parentProfile is null)
+            {
+                return;
+            }
+
+            var subscriptions = await _unitOfWork.Repository<Subscription>().TrackedQuery()
+                .Where(s => s.ParentProfileId == parentProfile.Id && s.Status == SubscriptionStatus.Active)
+                .ToListAsync(cancellationToken);
+
+            foreach (var subscription in subscriptions)
+            {
+                subscription.Status = SubscriptionStatus.Paused;
+            }
         }
 
         public async Task<UserDto> ChangeRoleAsync(Guid id, UserRole newRole, CancellationToken cancellationToken = default)
@@ -531,6 +562,33 @@ namespace iucs.readernest.application.Services
                 {
                     throw new ConflictException("Cannot delete the last remaining Admin account.");
                 }
+            }
+
+            // Same "don't strand operational history" rule ChangeRoleAsync applies before
+            // swapping a profile's role — a hard delete is even less reversible, so it needs
+            // the same guard: a parent with children, or a teacher with sessions on the
+            // calendar, must be reassigned/removed through that flow first.
+            switch (user.Role)
+            {
+                case UserRole.Parent:
+                    if (await _unitOfWork.Repository<Child>().ExistsAsync(c => c.ParentProfile.UserId == id, cancellationToken))
+                    {
+                        throw new ConflictException(
+                            "This parent has children on file — reassign or remove them before deleting the account.");
+                    }
+                    break;
+                case UserRole.Teacher:
+                    if (await _unitOfWork.Repository<ClassSession>().ExistsAsync(
+                        s => s.TeacherProfile.UserId == id
+                            && s.Status != SessionStatus.Completed
+                            && s.Status != SessionStatus.Cancelled
+                            && s.Status != SessionStatus.Rescheduled,
+                        cancellationToken))
+                    {
+                        throw new ConflictException(
+                            "This teacher has upcoming or unresolved class sessions on file — reassign or cancel them before deleting the account.");
+                    }
+                    break;
             }
 
             repository.Remove(user);

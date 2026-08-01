@@ -1,6 +1,8 @@
+using iucs.readernest.domain.Entities.Admission;
 using iucs.readernest.domain.Entities.Common;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
+using Microsoft.EntityFrameworkCore;
 
 namespace iucs.readernest.domain.Entities.Academics
 {
@@ -9,6 +11,7 @@ namespace iucs.readernest.domain.Entities.Academics
     /// client (open item in the sprint plan), so answers are stored as a JSON document
     /// rather than fixed columns. Admin can view/edit/approve/download submissions.
     /// </summary>
+    [Index(nameof(DemoBookingId), IsUnique = true)]
     public class EnrollmentForm : AuditEntity
     {
         public Guid ParentProfileId { get; set; }
@@ -19,6 +22,16 @@ namespace iucs.readernest.domain.Entities.Academics
         public Guid? ChildId { get; set; }
 
         public Child? Child { get; set; }
+
+        /// <summary>
+        /// The demo booking (if any) whose parent email matched this form's parent at
+        /// submission time — closes the admissions traceability loop: approving this form
+        /// auto-marks that DemoBooking Enrolled instead of leaving conversion tracking as a
+        /// disconnected, manually-set label with nothing behind it.
+        /// </summary>
+        public Guid? DemoBookingId { get; set; }
+
+        public DemoBooking? DemoBooking { get; set; }
 
         public string FormDataJson { get; set; } = "{}";
 

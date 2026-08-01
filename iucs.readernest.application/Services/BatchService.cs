@@ -2,6 +2,8 @@ using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Batches;
 using iucs.readernest.application.Mappings;
 using iucs.readernest.domain.Entities.Academics;
+using iucs.readernest.domain.Entities.Billing;
+using iucs.readernest.domain.Entities.Sessions;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
@@ -73,10 +75,21 @@ namespace iucs.readernest.application.Services
             var batch = await _unitOfWork.Repository<Batch>().GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(Batch), id);
 
+            var newCapacity = course.Type == CourseType.Individual ? 1 : request.Capacity;
+            var activeCount = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                .CountAsync(e => e.BatchId == id && e.Status == EnrollmentStatus.Active, cancellationToken);
+            if (newCapacity < activeCount)
+            {
+                throw new DomainValidationException(
+                    $"Batch '{batch.Name}' has {activeCount} active student(s); capacity can't be set below that " +
+                    $"(withdraw students first). Switching an Individual course batch to Group (or back) is " +
+                    $"blocked the same way once more than one student is enrolled.");
+            }
+
             batch.CourseId = request.CourseId;
             batch.TeacherProfileId = request.TeacherProfileId;
             batch.Name = request.Name.Trim();
-            batch.Capacity = course.Type == CourseType.Individual ? 1 : request.Capacity;
+            batch.Capacity = newCapacity;
             batch.StartDate = request.StartDate;
             batch.EndDate = request.EndDate;
 
@@ -94,14 +107,73 @@ namespace iucs.readernest.application.Services
             batch.Status = status;
             if (status == BatchStatus.Dormant && batch.CompletedAtUtc is null)
             {
-                // Anchors the 15-day recording access window for this batch
+                // Marks when this batch stopped running — informational only; each
+                // SessionRecording carries its own independent 15-day ExpiresAtUtc set at
+                // upload time (SessionService.AddRecordingAsync), so this field doesn't gate it.
                 batch.CompletedAtUtc = DateTime.UtcNow;
+            }
+
+            // A batch that's Dormant/Archived isn't running classes anymore — a still-Scheduled
+            // future session left on the calendar would keep blocking the teacher's other slots
+            // and go out via reminders for a batch nobody's tracking. The natural
+            // course-completion path (MoveBatchToDormantIfCourseCompletedAsync) never has any
+            // future sessions left to cancel; this only bites the manual/early transition.
+            if (status is BatchStatus.Dormant or BatchStatus.Archived)
+            {
+                var now = DateTime.UtcNow;
+                var danglingSessions = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
+                    .Where(s => s.BatchId == id
+                        && (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward)
+                        && s.ScheduledStartAtUtc > now)
+                    .ToListAsync(cancellationToken);
+
+                foreach (var session in danglingSessions)
+                {
+                    session.Status = SessionStatus.Cancelled;
+                    session.CancellationReason = $"Batch marked {status}.";
+                }
+
+                await ExpireSubscriptionsForCompletedBatchAsync(batch, cancellationToken);
             }
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(Batch), batch.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return await GetAsync(batch.Id, cancellationToken);
+        }
+
+        /// <summary>
+        /// A Subscription has no direct link to a Batch — only ChildId + PackagePlanId — so
+        /// there's no FK this could join on directly. Instead: find the children who were
+        /// actively enrolled in this (now finished) batch, then find their Active subscriptions
+        /// whose plan is for the SAME course this batch just ran. Those subscriptions were
+        /// paying for a course that has now finished, so leaving them Active would let
+        /// BillingBackgroundService keep invoicing for it indefinitely.
+        /// Edge case accepted: a child enrolled in two concurrent batches of the same course
+        /// would have that subscription expired when either batch finishes first.
+        /// </summary>
+        private async Task ExpireSubscriptionsForCompletedBatchAsync(Batch batch, CancellationToken cancellationToken)
+        {
+            var childIds = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                .Where(e => e.BatchId == batch.Id && e.Status == EnrollmentStatus.Active)
+                .Select(e => e.ChildId)
+                .ToListAsync(cancellationToken);
+            if (childIds.Count == 0)
+            {
+                return;
+            }
+
+            var subscriptions = await _unitOfWork.Repository<Subscription>().TrackedQuery()
+                .Where(s => childIds.Contains(s.ChildId)
+                    && s.Status == SubscriptionStatus.Active
+                    && s.PackagePlan.CourseId == batch.CourseId)
+                .ToListAsync(cancellationToken);
+
+            foreach (var subscription in subscriptions)
+            {
+                subscription.Status = SubscriptionStatus.Expired;
+                subscription.NextBillingAtUtc = null;
+            }
         }
 
         public async Task<IReadOnlyList<BatchStudentDto>> ListEnrollmentsAsync(Guid batchId, CancellationToken cancellationToken = default)

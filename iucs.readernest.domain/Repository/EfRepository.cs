@@ -67,5 +67,10 @@ namespace iucs.readernest.domain.Repository
         {
             return _dbSet.AsNoTracking();
         }
+
+        public IQueryable<TEntity> TrackedQuery()
+        {
+            return _dbSet;
+        }
     }
 }

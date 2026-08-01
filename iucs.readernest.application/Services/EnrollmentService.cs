@@ -3,6 +3,7 @@ using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Billing;
 using iucs.readernest.application.Dto.Enrollment;
 using iucs.readernest.domain.Entities.Academics;
+using iucs.readernest.domain.Entities.Admission;
 using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
@@ -48,6 +49,26 @@ namespace iucs.readernest.application.Services
             if (form is null)
             {
                 form = new EnrollmentForm { ParentProfileId = parent.Id };
+
+                // Best-effort traceability: if this parent booked a demo before an account
+                // existed for them, link the two so approving this form can auto-mark that
+                // lead Enrolled instead of leaving conversion tracking as a disconnected,
+                // manually-set label with nothing behind it.
+                var user = await _unitOfWork.Repository<User>().GetByIdAsync(parentUserId, cancellationToken);
+                if (user is not null)
+                {
+                    var alreadyLinkedBookingIds = await _unitOfWork.Repository<EnrollmentForm>().Query()
+                        .Where(f => f.DemoBookingId != null)
+                        .Select(f => f.DemoBookingId!.Value)
+                        .ToListAsync(cancellationToken);
+
+                    var matchedBooking = await _unitOfWork.Repository<DemoBooking>().Query()
+                        .Where(b => b.ParentEmail == user.Email && !alreadyLinkedBookingIds.Contains(b.Id))
+                        .OrderByDescending(b => b.CreatedAtUtc)
+                        .FirstOrDefaultAsync(cancellationToken);
+                    form.DemoBookingId = matchedBooking?.Id;
+                }
+
                 await _unitOfWork.Repository<EnrollmentForm>().AddAsync(form, cancellationToken);
             }
 
@@ -175,6 +196,20 @@ namespace iucs.readernest.application.Services
                 {
                     parentProfile.EnrollmentFormCompleted = true;
                     _unitOfWork.Repository<ParentProfile>().Update(parentProfile);
+                }
+
+                // Close the admissions loop: this form's linked demo booking (if any)
+                // just produced a real Child record, so mark it Enrolled with actual
+                // evidence behind the label instead of requiring a separate manual flip.
+                if (form.DemoBookingId.HasValue)
+                {
+                    var linkedBooking = await _unitOfWork.Repository<DemoBooking>()
+                        .GetByIdAsync(form.DemoBookingId.Value, cancellationToken);
+                    if (linkedBooking is not null && linkedBooking.ConversionStatus != ConversionStatus.Enrolled)
+                    {
+                        linkedBooking.ConversionStatus = ConversionStatus.Enrolled;
+                        _unitOfWork.Repository<DemoBooking>().Update(linkedBooking);
+                    }
                 }
             }
             else

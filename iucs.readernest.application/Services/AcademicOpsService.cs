@@ -51,22 +51,14 @@ namespace iucs.readernest.application.Services
             // slot (skipping further holidays), keeping the traceability link.
             var dayStart = request.Date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
             var dayEnd = dayStart.AddDays(1);
-            var clashingIds = await _unitOfWork.Repository<ClassSession>().Query()
+            var clashingSessions = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
                 .Where(s => (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward)
                             && s.ScheduledStartAtUtc >= dayStart
                             && s.ScheduledStartAtUtc < dayEnd)
-                .Select(s => s.Id)
                 .ToListAsync(cancellationToken);
 
-            foreach (var sessionId in clashingIds)
+            foreach (var session in clashingSessions)
             {
-                var session = await _unitOfWork.Repository<ClassSession>()
-                    .FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken);
-                if (session is null)
-                {
-                    continue;
-                }
-
                 var offsetDays = 7;
                 while (await _unitOfWork.Repository<Holiday>().ExistsAsync(
                            h => h.Date == request.Date.AddDays(offsetDays), cancellationToken))
@@ -92,10 +84,10 @@ namespace iucs.readernest.application.Services
                 session.CancellationReason = $"Holiday — {holiday.Name}; carried forward to {request.Date.AddDays(offsetDays):yyyy-MM-dd}";
             }
 
-            if (clashingIds.Count > 0)
+            if (clashingSessions.Count > 0)
             {
                 await _auditLog.StageAsync(AuditAction.Update, nameof(ClassSession), null,
-                    changesJson: $"{{\"holidayCarryForward\":{clashingIds.Count}}}", cancellationToken: cancellationToken);
+                    changesJson: $"{{\"holidayCarryForward\":{clashingSessions.Count}}}", cancellationToken: cancellationToken);
                 await _unitOfWork.SaveChangesAsync(cancellationToken);
             }
 

@@ -31,33 +31,49 @@ namespace iucs.readernest.application.Services
                 .Where(t => t.User.Status == UserStatus.Active)
                 .ToListAsync(cancellationToken);
 
+            // Two bulk queries for every teacher instead of two per teacher — this used to be
+            // 1 + 2N round trips (N teachers), now it's always 3 regardless of teacher count.
+            var teacherIds = teachers.Select(t => t.Id).ToList();
+            var sessions = await _unitOfWork.Repository<ClassSession>().Query()
+                .Where(s => teacherIds.Contains(s.TeacherProfileId))
+                .Select(s => new { s.Id, s.TeacherProfileId, s.Status, s.ScheduledStartAtUtc, HasSummary = s.Summary != null })
+                .ToListAsync(cancellationToken);
+
+            var completedIds = sessions.Where(s => s.Status == SessionStatus.Completed).Select(s => s.Id).ToList();
+            var attendanceRows = await _unitOfWork.Repository<SessionAttendance>().Query()
+                .Where(a => completedIds.Contains(a.ClassSessionId) && a.ParticipantType == ParticipantType.Student)
+                .Select(a => new { a.ClassSessionId, a.Status })
+                .ToListAsync(cancellationToken);
+
+            var sessionsByTeacher = sessions.ToLookup(s => s.TeacherProfileId);
+            var attendanceBySession = attendanceRows.ToLookup(a => a.ClassSessionId);
+
             var now = DateTime.UtcNow;
             var result = new List<TeacherPerformanceDto>(teachers.Count);
             foreach (var teacher in teachers)
             {
-                var sessions = await _unitOfWork.Repository<ClassSession>().Query()
-                    .Where(s => s.TeacherProfileId == teacher.Id)
-                    .Select(s => new { s.Id, s.Status, s.ScheduledStartAtUtc, HasSummary = s.Summary != null })
-                    .ToListAsync(cancellationToken);
-                var completedIds = sessions.Where(s => s.Status == SessionStatus.Completed).Select(s => s.Id).ToList();
-
-                var attendanceRows = await _unitOfWork.Repository<SessionAttendance>().Query()
-                    .Where(a => completedIds.Contains(a.ClassSessionId) && a.ParticipantType == ParticipantType.Student)
+                var teacherSessions = sessionsByTeacher[teacher.Id].ToList();
+                var teacherCompletedIds = teacherSessions
+                    .Where(s => s.Status == SessionStatus.Completed)
+                    .Select(s => s.Id)
+                    .ToHashSet();
+                var teacherAttendance = teacherCompletedIds
+                    .SelectMany(id => attendanceBySession[id])
                     .Select(a => a.Status)
-                    .ToListAsync(cancellationToken);
+                    .ToList();
 
                 result.Add(new TeacherPerformanceDto
                 {
                     TeacherProfileId = teacher.Id,
                     TeacherName = $"{teacher.User.FirstName} {teacher.User.LastName}",
                     Department = teacher.Department?.ToString(),
-                    SessionsCompleted = completedIds.Count,
-                    TeacherNoShows = sessions.Count(s => s.Status == SessionStatus.TeacherNoShow),
-                    UpcomingSessions = sessions.Count(s => s.Status == SessionStatus.Scheduled && s.ScheduledStartAtUtc > now),
-                    StudentAttendancePercent = attendanceRows.Count == 0
+                    SessionsCompleted = teacherCompletedIds.Count,
+                    TeacherNoShows = teacherSessions.Count(s => s.Status == SessionStatus.TeacherNoShow),
+                    UpcomingSessions = teacherSessions.Count(s => s.Status == SessionStatus.Scheduled && s.ScheduledStartAtUtc > now),
+                    StudentAttendancePercent = teacherAttendance.Count == 0
                         ? 100
-                        : Math.Round(100.0 * attendanceRows.Count(a => a != AttendanceStatus.Absent) / attendanceRows.Count, 1),
-                    SummariesWritten = sessions.Count(s => s.HasSummary),
+                        : Math.Round(100.0 * teacherAttendance.Count(a => a != AttendanceStatus.Absent) / teacherAttendance.Count, 1),
+                    SummariesWritten = teacherSessions.Count(s => s.HasSummary),
                 });
             }
 

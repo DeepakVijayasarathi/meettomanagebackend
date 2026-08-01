@@ -355,19 +355,13 @@ namespace iucs.readernest.application.Services
                 invoice.PaidAtUtc = DateTime.UtcNow;
 
                 // Access restoration: full payment auto-lifts any active fee suspension.
-                // Load each tracked (Query() is AsNoTracking, so mutations there never persist).
-                var suspensionIds = await _unitOfWork.Repository<FeeSuspension>().Query()
+                // TrackedQuery() fetches every matching row already tracked, so each is
+                // mutated in place with no extra per-row round trip to re-fetch it.
+                var suspensions = await _unitOfWork.Repository<FeeSuspension>().TrackedQuery()
                     .Where(s => s.ParentProfileId == invoice.ParentProfileId && s.Status == SuspensionStatus.Active)
-                    .Select(s => s.Id)
                     .ToListAsync(cancellationToken);
-                foreach (var suspensionId in suspensionIds)
+                foreach (var suspension in suspensions)
                 {
-                    var suspension = await _unitOfWork.Repository<FeeSuspension>().GetByIdAsync(suspensionId, cancellationToken);
-                    if (suspension is null)
-                    {
-                        continue;
-                    }
-
                     suspension.Status = SuspensionStatus.Lifted;
                     suspension.LiftedAtUtc = DateTime.UtcNow;
                     suspension.AutoRestored = true;
@@ -377,20 +371,13 @@ namespace iucs.readernest.application.Services
                 // Close any other still-pending cash intents on this invoice: the money
                 // arrived through another payment, so there is nothing left to collect and
                 // they must not linger in the staff confirmation queue.
-                var staleIntentIds = await _unitOfWork.Repository<PaymentTransaction>().Query()
+                var staleIntents = await _unitOfWork.Repository<PaymentTransaction>().TrackedQuery()
                     .Where(t => t.InvoiceId == invoice.Id
                         && t.Method == PaymentMethod.Cash
                         && t.Status == TransactionStatus.Pending)
-                    .Select(t => t.Id)
                     .ToListAsync(cancellationToken);
-                foreach (var intentId in staleIntentIds)
+                foreach (var intent in staleIntents)
                 {
-                    var intent = await _unitOfWork.Repository<PaymentTransaction>().GetByIdAsync(intentId, cancellationToken);
-                    if (intent is null)
-                    {
-                        continue;
-                    }
-
                     intent.Status = TransactionStatus.Failed;
                     intent.FailureReason = "Invoice was settled by another payment before this cash intent was collected.";
                     _unitOfWork.Repository<PaymentTransaction>().Update(intent);
@@ -399,6 +386,29 @@ namespace iucs.readernest.application.Services
             else
             {
                 invoice.Status = InvoiceStatus.PartiallyPaid;
+            }
+        }
+
+        /// <summary>
+        /// Starting a new payment attempt (cash intent, gateway redirect, or inline checkout)
+        /// makes any other still-pending intent on this same invoice stale — the parent chose
+        /// a different method or retried, so the old one must not be settleable independently
+        /// later. Without this, two concurrent pending intents (e.g. an abandoned redirect link
+        /// plus a fresh inline checkout) could both complete at the gateway; the invoice-status
+        /// guard in SettleGatewayTransactionAsync stops that from double-crediting the invoice,
+        /// but leaving the stale one live is unnecessary exposure this closes at the source.
+        /// </summary>
+        private async Task SupersedePendingIntentsAsync(Guid invoiceId, CancellationToken cancellationToken)
+        {
+            var stalePending = await _unitOfWork.Repository<PaymentTransaction>().TrackedQuery()
+                .Where(t => t.InvoiceId == invoiceId && t.Status == TransactionStatus.Pending)
+                .ToListAsync(cancellationToken);
+
+            foreach (var stale in stalePending)
+            {
+                stale.Status = TransactionStatus.Failed;
+                stale.FailureReason = "Superseded by a new payment attempt on this invoice.";
+                _unitOfWork.Repository<PaymentTransaction>().Update(stale);
             }
         }
 
@@ -447,6 +457,7 @@ namespace iucs.readernest.application.Services
             if (methodKey == "cash")
             {
                 var reference = $"CASH-{Guid.NewGuid():N}";
+                await SupersedePendingIntentsAsync(invoice.Id, cancellationToken);
                 await _unitOfWork.Repository<PaymentTransaction>().AddAsync(
                     new PaymentTransaction
                     {
@@ -503,6 +514,7 @@ namespace iucs.readernest.application.Services
                 };
             }
 
+            await SupersedePendingIntentsAsync(invoice.Id, cancellationToken);
             await _unitOfWork.Repository<PaymentTransaction>().AddAsync(
                 new PaymentTransaction
                 {
@@ -569,6 +581,7 @@ namespace iucs.readernest.application.Services
                 return new InlineCheckoutDto { Mode = "unavailable", Message = checkout.UnavailableReason };
             }
 
+            await SupersedePendingIntentsAsync(invoice.Id, cancellationToken);
             await _unitOfWork.Repository<PaymentTransaction>().AddAsync(
                 new PaymentTransaction
                 {
@@ -657,6 +670,18 @@ namespace iucs.readernest.application.Services
 
             if (transaction.Status != TransactionStatus.Pending)
             {
+                if (succeeded && transaction.Status == TransactionStatus.Failed)
+                {
+                    // The gateway reports a paid link/order we'd already given up on (expired,
+                    // or superseded by a later payment attempt on the same invoice) — real
+                    // money may have arrived after the fact. Flag it instead of a silent no-op
+                    // so someone reconciles it by hand; don't touch the invoice balance here.
+                    await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), transaction.InvoiceId.ToString(),
+                        changesJson: $"{{\"lateSuccessOnSupersededTransaction\":\"{gatewayReference}\"}}",
+                        cancellationToken: cancellationToken);
+                    await _unitOfWork.SaveChangesAsync(cancellationToken);
+                }
+
                 return;
             }
 

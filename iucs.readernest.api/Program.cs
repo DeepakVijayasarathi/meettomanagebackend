@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
 using iucs.readernest.api.Auth;
@@ -9,6 +10,8 @@ using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Data;
 using iucs.readernest.domain.Data.Interceptors;
+using iucs.readernest.domain.Entities.Users;
+using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
@@ -119,6 +122,29 @@ builder.Services
                 }
 
                 return Task.CompletedTask;
+            },
+            // The JWT itself stays valid for up to AccessTokenMinutes (8h) regardless of what
+            // happens to the account after it was issued — a deactivated/deleted/role-changed
+            // user would otherwise keep full API access on their existing token until it
+            // naturally expires. Re-checking current status here closes that window down to
+            // the request itself, at the cost of one indexed PK lookup per authenticated call.
+            OnTokenValidated = async context =>
+            {
+                var userIdClaim = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+                if (!Guid.TryParse(userIdClaim, out var userId))
+                {
+                    context.Fail("Token is missing a valid subject.");
+                    return;
+                }
+
+                var unitOfWork = context.HttpContext.RequestServices.GetRequiredService<IUnitOfWork>();
+                var user = await unitOfWork.Repository<User>().Query()
+                    .Select(u => new { u.Id, u.Status })
+                    .FirstOrDefaultAsync(u => u.Id == userId);
+                if (user is null || user.Status != UserStatus.Active)
+                {
+                    context.Fail("This account is no longer active.");
+                }
             },
         };
     });

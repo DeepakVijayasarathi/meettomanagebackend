@@ -3,6 +3,7 @@ using iucs.readernest.application.Dto.Sessions;
 using iucs.readernest.application.Mappings;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Entities.Academics;
+using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Entities.Sessions;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
@@ -469,6 +470,41 @@ namespace iucs.readernest.application.Services
             {
                 batch.Status = BatchStatus.Dormant;
                 batch.CompletedAtUtc = DateTime.UtcNow;
+                await ExpireSubscriptionsForCompletedBatchAsync(batch, cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// A Subscription has no direct link to a Batch — only ChildId + PackagePlanId — so
+        /// there's no FK this could join on directly. Instead: find the children who were
+        /// actively enrolled in this (now finished) batch, then find their Active subscriptions
+        /// whose plan is for the SAME course this batch just ran. Those subscriptions were
+        /// paying for a course that has now finished, so leaving them Active would let
+        /// BillingBackgroundService keep invoicing for it indefinitely.
+        /// Edge case accepted: a child enrolled in two concurrent batches of the same course
+        /// would have that subscription expired when either batch finishes first.
+        /// </summary>
+        private async Task ExpireSubscriptionsForCompletedBatchAsync(Batch batch, CancellationToken cancellationToken)
+        {
+            var childIds = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                .Where(e => e.BatchId == batch.Id && e.Status == EnrollmentStatus.Active)
+                .Select(e => e.ChildId)
+                .ToListAsync(cancellationToken);
+            if (childIds.Count == 0)
+            {
+                return;
+            }
+
+            var subscriptions = await _unitOfWork.Repository<Subscription>().TrackedQuery()
+                .Where(s => childIds.Contains(s.ChildId)
+                    && s.Status == SubscriptionStatus.Active
+                    && s.PackagePlan.CourseId == batch.CourseId)
+                .ToListAsync(cancellationToken);
+
+            foreach (var subscription in subscriptions)
+            {
+                subscription.Status = SubscriptionStatus.Expired;
+                subscription.NextBillingAtUtc = null;
             }
         }
 
