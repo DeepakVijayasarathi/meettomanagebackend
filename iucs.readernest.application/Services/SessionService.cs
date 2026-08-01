@@ -612,37 +612,47 @@ namespace iucs.readernest.application.Services
             var userId = _currentUser.UserId
                 ?? throw new UnauthorizedException("Not signed in.");
 
-            var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
-                ?? throw new UnauthorizedException("Unknown user.");
+            if (!await IsSessionParticipantAsync(session, userId, cancellationToken))
+            {
+                throw new ForbiddenException("You do not have access to this session.");
+            }
+        }
+
+        public async Task<bool> IsSessionParticipantAsync(Guid sessionId, Guid userId, CancellationToken cancellationToken = default)
+        {
+            var session = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(sessionId, cancellationToken);
+            return session is not null && await IsSessionParticipantAsync(session, userId, cancellationToken);
+        }
+
+        private async Task<bool> IsSessionParticipantAsync(ClassSession session, Guid userId, CancellationToken cancellationToken)
+        {
+            var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken);
+            if (user is null)
+            {
+                return false;
+            }
 
             if (user.Role == UserRole.Admin)
             {
-                return;
+                return true;
             }
 
             if (user.Role == UserRole.Teacher)
             {
-                var isAssignedTeacher = await _unitOfWork.Repository<TeacherProfile>()
+                return await _unitOfWork.Repository<TeacherProfile>()
                     .ExistsAsync(t => t.Id == session.TeacherProfileId && t.UserId == userId, cancellationToken);
-                if (isAssignedTeacher)
-                {
-                    return;
-                }
             }
-            else if (user.Role == UserRole.Parent && session.BatchId.HasValue)
+
+            if (user.Role == UserRole.Parent && session.BatchId.HasValue)
             {
-                var hasChildInBatch = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                return await _unitOfWork.Repository<BatchEnrollment>().Query()
                     .Where(e => e.BatchId == session.BatchId.Value)
                     .Join(_unitOfWork.Repository<Child>().Query(), e => e.ChildId, c => c.Id, (e, c) => c.ParentProfileId)
                     .Join(_unitOfWork.Repository<ParentProfile>().Query(), parentProfileId => parentProfileId, p => p.Id, (parentProfileId, p) => p.UserId)
                     .AnyAsync(u => u == userId, cancellationToken);
-                if (hasChildInBatch)
-                {
-                    return;
-                }
             }
 
-            throw new ForbiddenException("You do not have access to this session.");
+            return false;
         }
 
         public async Task<IReadOnlyList<EngagementSummaryDto>> GetEngagementSummaryAsync(

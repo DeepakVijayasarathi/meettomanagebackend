@@ -1,3 +1,4 @@
+using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Common.Interfaces;
 
 namespace iucs.readernest.api.Services
@@ -9,6 +10,17 @@ namespace iucs.readernest.api.Services
     /// </summary>
     public class LocalFileStorage : IFileStorage
     {
+        // Learning-resource types only: worksheets/books/slides, images, audio/video,
+        // zipped bundles. Deliberately excludes executables and script/markup types
+        // (.exe/.sh/.js/.html/.svg/...) that could be uploaded under a resource's file
+        // slot and later served back with a client-supplied Content-Type.
+        private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".txt",
+            ".jpg", ".jpeg", ".png", ".gif", ".webp",
+            ".mp4", ".webm", ".mov", ".mp3", ".wav", ".zip",
+        };
+
         private readonly string _rootPath;
 
         public LocalFileStorage(IWebHostEnvironment environment, IConfiguration configuration)
@@ -22,10 +34,17 @@ namespace iucs.readernest.api.Services
             string originalFileName,
             CancellationToken cancellationToken = default)
         {
+            var extension = Path.GetExtension(originalFileName);
+            if (string.IsNullOrEmpty(extension) || !AllowedExtensions.Contains(extension))
+            {
+                throw new DomainValidationException(
+                    $"File type '{extension}' is not allowed. Supported types: " +
+                    string.Join(", ", AllowedExtensions.OrderBy(e => e)) + ".");
+            }
+
             Directory.CreateDirectory(_rootPath);
 
-            var extension = Path.GetExtension(originalFileName);
-            var relativePath = $"{Guid.NewGuid():N}{extension}";
+            var relativePath = $"{Guid.NewGuid():N}{extension.ToLowerInvariant()}";
             var absolutePath = Path.Combine(_rootPath, relativePath);
 
             await using var target = File.Create(absolutePath);

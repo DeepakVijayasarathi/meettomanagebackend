@@ -60,5 +60,14 @@ namespace iucs.readernest.application.Services
 
         /// <summary>Per-participant engagement scores and learning outcome indicators.</summary>
         Task<IReadOnlyList<EngagementSummaryDto>> GetEngagementSummaryAsync(Guid sessionId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Whether the given user genuinely belongs to this session — Admin always,
+        /// the specific assigned teacher, or a parent with a child enrolled in the
+        /// session's batch. Used to gate access to the live classroom (ClassroomHub)
+        /// and any other entry point that must confirm real participation, not just
+        /// "is a valid logged-in user of some role."
+        /// </summary>
+        Task<bool> IsSessionParticipantAsync(Guid sessionId, Guid userId, CancellationToken cancellationToken = default);
     }
 }

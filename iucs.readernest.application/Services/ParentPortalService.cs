@@ -195,17 +195,38 @@ namespace iucs.readernest.application.Services
                 throw new DomainValidationException("Content access is suspended until the pending fee is settled.");
             }
 
-            var access = await _unitOfWork.Repository<ResourceAccess>().Query()
+            // Same two paths GetResourcesAsync lists from: an explicit per-parent grant, or
+            // batch-wide visibility reaching every parent with an actively enrolled child in
+            // that batch. Checking only ResourceAccess here (as this used to) meant a resource
+            // shared the primary way — via batch visibility, no per-parent grant — could never
+            // actually be downloaded despite showing up in the parent's resource list.
+            var direct = await _unitOfWork.Repository<ResourceAccess>().Query()
                 .Include(a => a.Resource)
-                .FirstOrDefaultAsync(a => a.ParentProfileId == parent.Id && a.ResourceId == resourceId, cancellationToken)
-                ?? throw new NotFoundException("This resource has not been shared with your account.");
+                .FirstOrDefaultAsync(a => a.ParentProfileId == parent.Id && a.ResourceId == resourceId, cancellationToken);
 
-            if (!access.Resource.IsDownloadable)
+            var resource = direct?.Resource;
+            if (resource is null)
+            {
+                var enrolledBatchIds = _unitOfWork.Repository<BatchEnrollment>().Query()
+                    .Where(e => e.Status == EnrollmentStatus.Active && e.Child.ParentProfileId == parent.Id)
+                    .Select(e => e.BatchId);
+                resource = await _unitOfWork.Repository<ResourceBatchVisibility>().Query()
+                    .Where(v => v.ResourceId == resourceId && enrolledBatchIds.Contains(v.BatchId))
+                    .Select(v => v.Resource)
+                    .FirstOrDefaultAsync(cancellationToken);
+            }
+
+            if (resource is null)
+            {
+                throw new NotFoundException("This resource has not been shared with your account.");
+            }
+
+            if (!resource.IsDownloadable)
             {
                 throw new DomainValidationException("This resource is view-only and cannot be downloaded.");
             }
 
-            return access.Resource.ToDto();
+            return resource.ToDto();
         }
 
         private async Task<ParentProfile> GetParentAsync(Guid parentUserId, CancellationToken cancellationToken)

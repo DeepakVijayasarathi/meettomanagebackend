@@ -24,7 +24,12 @@ namespace iucs.readernest.api.Controllers
             _fileStorage = fileStorage;
         }
 
+        // Admin console only: Teacher and Parent also carry ContentAccessManagement:View
+        // (they need SOME grant in that module to reach their own scoped /mine and portal
+        // routes), so HasPermission alone doesn't exclude them from this unscoped,
+        // see/download-everything screen — the role check is what actually does.
         [HttpGet]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
         [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.View)]
         public async Task<ActionResult<IReadOnlyList<ResourceDto>>> List(
             [FromQuery] ResourceType? type,
@@ -88,6 +93,7 @@ namespace iucs.readernest.api.Controllers
         }
 
         [HttpPost]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
         [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Create)]
         [RequestSizeLimit(MaxUploadBytes)]
         public async Task<ActionResult<ResourceDto>> Upload(
@@ -113,6 +119,7 @@ namespace iucs.readernest.api.Controllers
         }
 
         [HttpGet("{id:guid}/download")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
         [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.View)]
         public async Task<IActionResult> Download(Guid id, CancellationToken cancellationToken)
         {
@@ -129,6 +136,7 @@ namespace iucs.readernest.api.Controllers
         }
 
         [HttpPost("{id:guid}/grants")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
         [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Edit)]
         public async Task<IActionResult> GrantAccess(
             Guid id,

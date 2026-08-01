@@ -189,6 +189,12 @@ namespace iucs.readernest.application.Services
             var payout = await GetOrCreateCurrentPayoutAsync(
                 session.TeacherProfileId, session.ScheduledStartAtUtc, cancellationToken);
 
+            if (payout.PeriodYear != sessionDate.Year || payout.PeriodMonth != sessionDate.Month)
+            {
+                var rolledNote = $"Rolled into {payout.PeriodYear}-{payout.PeriodMonth:D2}'s payout because {sessionDate:yyyy-MM}'s was already closed.";
+                note = string.IsNullOrEmpty(note) ? rolledNote : $"{note} ({rolledNote})";
+            }
+
             payout.Items.Add(new PayoutItem
             {
                 PayoutId = payout.Id,
@@ -304,32 +310,49 @@ namespace iucs.readernest.application.Services
             DateTime sessionStartUtc,
             CancellationToken cancellationToken)
         {
-            // Load TRACKED (Query() is AsNoTracking): items added to an untracked payout
-            // are silently dropped at SaveChanges — every accrual after the month's first
-            // session would be lost. New items attach through the tracked parent.
-            var payout = await _unitOfWork.Repository<Payout>().FirstOrDefaultAsync(
-                p => p.TeacherProfileId == teacherProfileId
-                     && p.PeriodYear == sessionStartUtc.Year
-                     && p.PeriodMonth == sessionStartUtc.Month,
-                cancellationToken);
-
-            if (payout is not null)
+            var payout = await FindPayoutForPeriodAsync(teacherProfileId, sessionStartUtc.Year, sessionStartUtc.Month, cancellationToken);
+            if (payout is null)
             {
-                if (payout.Status != PayoutStatus.Pending)
-                {
-                    throw new DomainValidationException(
-                        $"The payout for {sessionStartUtc:yyyy-MM} is already {payout.Status} and cannot accrue new items.");
-                }
+                return await CreatePayoutAsync(teacherProfileId, sessionStartUtc.Year, sessionStartUtc.Month, cancellationToken);
+            }
 
+            if (payout.Status == PayoutStatus.Pending)
+            {
                 return payout;
             }
 
-            payout = new Payout
+            // This month's payout is already Finalized/Paid. Session completion (and
+            // no-show marking) must never hard-fail just because payroll ran before every
+            // session for the month was done — that would leave the class permanently
+            // un-completable. Roll the late item into the next month's payout instead;
+            // the closed period's own total is never reopened or mutated.
+            var nextPeriod = sessionStartUtc.AddMonths(1);
+            var nextPayout = await FindPayoutForPeriodAsync(teacherProfileId, nextPeriod.Year, nextPeriod.Month, cancellationToken);
+            if (nextPayout is not null && nextPayout.Status != PayoutStatus.Pending)
             {
-                TeacherProfileId = teacherProfileId,
-                PeriodYear = sessionStartUtc.Year,
-                PeriodMonth = sessionStartUtc.Month,
-            };
+                throw new DomainValidationException(
+                    $"The payout for {sessionStartUtc:yyyy-MM} is already {payout.Status}, and {nextPeriod:yyyy-MM}'s payout is " +
+                    $"also {nextPayout.Status}; this item can't be accrued automatically. Reopen one of these periods first.");
+            }
+
+            return nextPayout ?? await CreatePayoutAsync(teacherProfileId, nextPeriod.Year, nextPeriod.Month, cancellationToken);
+        }
+
+        // Load TRACKED (Query() is AsNoTracking): items added to an untracked payout
+        // are silently dropped at SaveChanges — every accrual after the month's first
+        // session would be lost. New items attach through the tracked parent.
+        private async Task<Payout?> FindPayoutForPeriodAsync(
+            Guid teacherProfileId, int year, int month, CancellationToken cancellationToken)
+        {
+            return await _unitOfWork.Repository<Payout>().FirstOrDefaultAsync(
+                p => p.TeacherProfileId == teacherProfileId && p.PeriodYear == year && p.PeriodMonth == month,
+                cancellationToken);
+        }
+
+        private async Task<Payout> CreatePayoutAsync(
+            Guid teacherProfileId, int year, int month, CancellationToken cancellationToken)
+        {
+            var payout = new Payout { TeacherProfileId = teacherProfileId, PeriodYear = year, PeriodMonth = month };
             await _unitOfWork.Repository<Payout>().AddAsync(payout, cancellationToken);
             return payout;
         }

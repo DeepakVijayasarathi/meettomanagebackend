@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Claims;
+using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
@@ -19,6 +20,13 @@ namespace iucs.readernest.api.Hubs
         private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ParticipantState>> Rooms = new();
         private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, int>> Scores = new();
 
+        private readonly ISessionService _sessionService;
+
+        public ClassroomHub(ISessionService sessionService)
+        {
+            _sessionService = sessionService;
+        }
+
         public record ParticipantState(string Name, string Role, bool HandRaised);
 
         private static string Group(string sessionId) => $"classroom-{sessionId}";
@@ -32,10 +40,52 @@ namespace iucs.readernest.api.Hubs
             ?? Context.User?.FindFirstValue("name")
             ?? "Participant";
 
+        /// <summary>
+        /// The connection must have already completed a successfully-authorized
+        /// JoinSession for THIS exact sessionId — every other hub method is gated on
+        /// this so a connection can never act on a room it never legitimately joined
+        /// (SendBoard/SendChat/AnswerQuiz would otherwise be a blind relay callable by
+        /// anyone who merely knows the session id, without ever having joined it).
+        /// </summary>
+        private bool IsJoined(string sessionId) =>
+            Context.Items.TryGetValue("sessionId", out var value) && value is string joined && joined == sessionId;
+
+        /// <summary>Joined AND the room recorded this connection's role as teacher at join time.</summary>
+        private bool IsTeacherInRoom(string sessionId) =>
+            IsJoined(sessionId)
+            && Rooms.TryGetValue(sessionId, out var room)
+            && room.TryGetValue(Context.ConnectionId, out var state)
+            && state.Role == "teacher";
+
         // ---- lifecycle ----
 
+        /// <summary>
+        /// Join is the single authorization checkpoint for the whole room: it confirms
+        /// the caller genuinely belongs to this session (Admin, the specifically
+        /// assigned teacher, or a parent with a child enrolled in the session's batch)
+        /// via ISessionService.IsSessionParticipantAsync — the same check the REST
+        /// engagement endpoint uses. Without this, any authenticated user of any role
+        /// could join, watch, and control a class that isn't theirs by guessing/knowing
+        /// its session id.
+        /// </summary>
         public async Task JoinSession(string sessionId, string displayName)
         {
+            if (!Guid.TryParse(sessionId, out var sessionGuid))
+            {
+                throw new HubException("Invalid session id.");
+            }
+
+            var userIdClaim = Context.User?.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (!Guid.TryParse(userIdClaim, out var userId))
+            {
+                throw new HubException("Not signed in.");
+            }
+
+            if (!await _sessionService.IsSessionParticipantAsync(sessionGuid, userId, Context.ConnectionAborted))
+            {
+                throw new HubException("You do not have access to this session.");
+            }
+
             var name = string.IsNullOrWhiteSpace(displayName) ? UserName : displayName.Trim();
             var role = IsTeacher ? "teacher" : "student";
 
@@ -68,6 +118,11 @@ namespace iucs.readernest.api.Hubs
         /// <summary>Relays one board operation (stroke/clear/page op) to everyone else in the class.</summary>
         public async Task SendBoard(string sessionId, string opJson)
         {
+            if (!IsJoined(sessionId))
+            {
+                return;
+            }
+
             await Clients.OthersInGroup(Group(sessionId)).SendAsync("Board", opJson);
         }
 
@@ -75,7 +130,7 @@ namespace iucs.readernest.api.Hubs
 
         public async Task SendChat(string sessionId, string text)
         {
-            if (string.IsNullOrWhiteSpace(text))
+            if (!IsJoined(sessionId) || string.IsNullOrWhiteSpace(text))
             {
                 return;
             }
@@ -88,7 +143,7 @@ namespace iucs.readernest.api.Hubs
         /// <summary>Teacher pushes a question to the class by index into the shared bank.</summary>
         public async Task StartQuiz(string sessionId, int questionIndex)
         {
-            if (!IsTeacher)
+            if (!IsTeacherInRoom(sessionId))
             {
                 return;
             }
@@ -98,7 +153,7 @@ namespace iucs.readernest.api.Hubs
 
         public async Task EndQuiz(string sessionId)
         {
-            if (!IsTeacher)
+            if (!IsTeacherInRoom(sessionId))
             {
                 return;
             }
@@ -109,6 +164,11 @@ namespace iucs.readernest.api.Hubs
         /// <summary>Student answer: correct answers score a star; the leaderboard broadcasts live.</summary>
         public async Task AnswerQuiz(string sessionId, int questionIndex, bool correct)
         {
+            if (!IsJoined(sessionId))
+            {
+                return;
+            }
+
             var name = UserNameFor(sessionId);
             if (correct)
             {
@@ -124,7 +184,7 @@ namespace iucs.readernest.api.Hubs
 
         public async Task Celebrate(string sessionId, string? message)
         {
-            if (!IsTeacher)
+            if (!IsTeacherInRoom(sessionId))
             {
                 return;
             }
@@ -134,7 +194,8 @@ namespace iucs.readernest.api.Hubs
 
         public async Task RaiseHand(string sessionId, bool raised)
         {
-            if (Rooms.TryGetValue(sessionId, out var room)
+            if (IsJoined(sessionId)
+                && Rooms.TryGetValue(sessionId, out var room)
                 && room.TryGetValue(Context.ConnectionId, out var state))
             {
                 room[Context.ConnectionId] = state with { HandRaised = raised };
@@ -145,7 +206,15 @@ namespace iucs.readernest.api.Hubs
         /// <summary>Teacher-only board permission toggle for a participant (by connection id).</summary>
         public async Task SetBoardAccess(string sessionId, string connectionId, bool allowed)
         {
-            if (!IsTeacher)
+            if (!IsTeacherInRoom(sessionId))
+            {
+                return;
+            }
+
+            // The target connection must be a member of THIS room too — otherwise a
+            // legitimate teacher of one class could grant/revoke board access on an
+            // arbitrary connection id belonging to a completely different session.
+            if (!Rooms.TryGetValue(sessionId, out var room) || !room.ContainsKey(connectionId))
             {
                 return;
             }
