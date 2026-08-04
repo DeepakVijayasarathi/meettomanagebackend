@@ -41,6 +41,12 @@ services:
       Seed__AdminLastName: Admin
       Cors__AllowedOrigins__0: ${PORTAL_ORIGIN:?set in .env}
       Payments__PayNowBaseUrl: ${PORTAL_ORIGIN}
+      # LocalFileStorage defaults to {ContentRootPath}/uploads (i.e. /app/uploads, given
+      # the Dockerfile's WORKDIR /app) when this isn't set — NOT the reader_nest_uploads
+      # volume below, which is mounted at /app/storage. Without this, every uploaded
+      # resource lands in the container's writable layer and is silently lost on the next
+      # restart/redeploy while the DB still points at it.
+      Storage__LocalPath: /app/storage
     ports:
       - "5288:8080"
     volumes:
