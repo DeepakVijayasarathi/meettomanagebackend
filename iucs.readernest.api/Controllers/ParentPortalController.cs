@@ -181,6 +181,15 @@ namespace iucs.readernest.api.Controllers
             return Ok(await billingService.ReconcileInvoicePaymentAsync(UserId(), id, cancellationToken));
         }
 
+        /// <summary>Non-expired recordings for a session, once the caller's own child is confirmed enrolled in its batch.</summary>
+        [HttpGet("sessions/{sessionId:guid}/recordings")]
+        public async Task<ActionResult<IReadOnlyList<SessionRecordingDto>>> SessionRecordings(
+            Guid sessionId,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await _parentPortal.GetRecordingsAsync(UserId(), sessionId, cancellationToken));
+        }
+
         /// <summary>Grant-checked worksheet download (books stay view-only).</summary>
         [HttpGet("resources/{id:guid}/download")]
         public async Task<IActionResult> DownloadResource(

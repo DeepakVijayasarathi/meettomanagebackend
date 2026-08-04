@@ -229,6 +229,47 @@ namespace iucs.readernest.application.Services
             return resource.ToDto();
         }
 
+        public async Task<IReadOnlyList<SessionRecordingDto>> GetRecordingsAsync(
+            Guid parentUserId, Guid sessionId, CancellationToken cancellationToken = default)
+        {
+            var parent = await GetParentAsync(parentUserId, cancellationToken);
+
+            var session = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(sessionId, cancellationToken)
+                ?? throw new NotFoundException(nameof(ClassSession), sessionId);
+
+            var hasChildInBatch = session.BatchId.HasValue && await _unitOfWork.Repository<BatchEnrollment>().Query()
+                .AnyAsync(e => e.BatchId == session.BatchId.Value
+                    && e.Status == EnrollmentStatus.Active
+                    && e.Child.ParentProfileId == parent.Id, cancellationToken);
+            if (!hasChildInBatch)
+            {
+                throw new NotFoundException("This session's recordings have not been shared with your account.");
+            }
+
+            var suspended = await _unitOfWork.Repository<FeeSuspension>().ExistsAsync(
+                s => s.ParentProfileId == parent.Id && s.Status == SuspensionStatus.Active, cancellationToken);
+            if (suspended)
+            {
+                throw new DomainValidationException("Content access is suspended until the pending fee is settled.");
+            }
+
+            var now = DateTime.UtcNow;
+            var recordings = await _unitOfWork.Repository<SessionRecording>().Query()
+                .Where(r => r.ClassSessionId == sessionId && (r.ExpiresAtUtc == null || r.ExpiresAtUtc > now))
+                .OrderByDescending(r => r.CreatedAtUtc)
+                .ToListAsync(cancellationToken);
+
+            return recordings.Select(r => new SessionRecordingDto
+            {
+                Id = r.Id,
+                ClassSessionId = r.ClassSessionId,
+                StorageUrl = r.StorageUrl,
+                DurationSeconds = r.DurationSeconds,
+                ExpiresAtUtc = r.ExpiresAtUtc,
+                CreatedAtUtc = r.CreatedAtUtc,
+            }).ToList();
+        }
+
         private async Task<ParentProfile> GetParentAsync(Guid parentUserId, CancellationToken cancellationToken)
         {
             return await _unitOfWork.Repository<ParentProfile>()

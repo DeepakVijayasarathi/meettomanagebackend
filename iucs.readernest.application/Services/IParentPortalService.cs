@@ -27,5 +27,14 @@ namespace iucs.readernest.application.Services
         /// handing back the resource for a parent download.
         /// </summary>
         Task<ResourceDto> GetResourceForDownloadAsync(Guid parentUserId, Guid resourceId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Non-expired recordings for a session, once the caller's own child is confirmed
+        /// enrolled in that session's batch. The "15-day parent view window" this feature
+        /// is documented around (SessionService.AddRecordingAsync, Batch.CompletedAtUtc)
+        /// had no parent-reachable endpoint anywhere until this one.
+        /// </summary>
+        Task<IReadOnlyList<SessionRecordingDto>> GetRecordingsAsync(
+            Guid parentUserId, Guid sessionId, CancellationToken cancellationToken = default);
     }
 }

@@ -229,7 +229,35 @@ namespace iucs.readernest.application.Services
             leave.ReviewNote = request.ReviewNote;
             leave.ReviewedAtUtc = DateTime.UtcNow;
 
-            await _auditLog.StageAsync(AuditAction.Update, nameof(LeaveRequest), leave.Id.ToString(), cancellationToken: cancellationToken);
+            // Approving leave must actually resolve the sessions it covers — previously
+            // this only computed AffectedSessionCount for display and sent a notice; the
+            // sessions themselves stayed Scheduled indefinitely for a teacher now on leave,
+            // still blocking EnsureTeacherIsFreeAsync's slot checks and still completable.
+            // This does NOT auto-reschedule a makeup class (unlike the no-show carry-forward
+            // flow) — picking a new date/capacity for a makeup is an admin call, not one to
+            // make silently here.
+            var affectedCount = 0;
+            if (leave.Status == LeaveStatus.Approved)
+            {
+                var affectedSessions = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
+                    .Where(s => s.TeacherProfileId == leave.TeacherProfileId
+                        && s.Status == SessionStatus.Scheduled
+                        && s.ScheduledStartAtUtc < leave.EndAtUtc
+                        && s.ScheduledEndAtUtc > leave.StartAtUtc)
+                    .ToListAsync(cancellationToken);
+                affectedCount = affectedSessions.Count;
+
+                foreach (var session in affectedSessions)
+                {
+                    session.Status = SessionStatus.Cancelled;
+                    session.CancellationReason =
+                        $"Teacher on approved leave ({leave.StartAtUtc:dd MMM yyyy} – {leave.EndAtUtc:dd MMM yyyy}).";
+                }
+            }
+
+            await _auditLog.StageAsync(AuditAction.Update, nameof(LeaveRequest), leave.Id.ToString(),
+                changesJson: affectedCount > 0 ? $"{{\"sessionsCancelled\":{affectedCount}}}" : null,
+                cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             // The review is committed from here on; the notification fan-out must not be
@@ -293,7 +321,16 @@ namespace iucs.readernest.application.Services
 
             // Attach the nav for DTO mapping only, after the last SaveChanges (avoids re-tracking).
             leave.TeacherProfile = teacherProfile;
-            return await ToDtoAsync(leave, cancellationToken);
+            var dto = await ToDtoAsync(leave, cancellationToken);
+            if (leave.Status == LeaveStatus.Approved)
+            {
+                // ToDtoAsync recomputes this by counting Scheduled sessions in the window —
+                // now 0, since approval just cancelled them. Report what this approval
+                // actually resolved, not a live count that undercounts its own effect.
+                dto.AffectedSessionCount = affectedCount;
+            }
+
+            return dto;
         }
 
         public async Task<IReadOnlyList<SessionAttendanceDto>> CaptureAttendanceAsync(
