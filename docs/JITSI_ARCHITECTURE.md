@@ -21,8 +21,15 @@ self-hosting; JaaS remains the fallback if ops capacity becomes a risk.
   display name; teachers join as moderators.
 - **Production hardening (Sprint 2)**: JWT-secured rooms (prosody `token_verification`)
   so only authenticated portal users can join; secure domain to enforce lobby/waiting room.
-- **Recording (blocked on infra decision)**: Jibri pool writing to client cloud storage;
-  `SessionRecording.ExpiresAtUtc` drives the 15-day parent access window.
+- **Recording (auto-start blocked on infra decision)**: the "jitsi" Integration's
+  `autoRecord` config field (Settings → Integrations → Jitsi Meet, default `"true"`)
+  gates whether `JitsiLive` calls `startRecording` on host join — on = auto, off =
+  the teacher relies entirely on the manual "Recording" registration on My Classes
+  (or Jitsi's own toolbar button, which still auto-registers via `recordingLinkAvailable`
+  either way). The auto-start command itself is a no-op until a Jibri pool exists on
+  the deployment, so admins should leave it off until Jibri is provisioned to avoid a
+  confusing "nothing happened" toolbar state. `SessionRecording.ExpiresAtUtc` drives
+  the 15-day parent access window regardless of how the recording was registered.
 - Teacher controls (mute participant, disable camera, lobby) map to IFrame API
   commands: `muteEveryone`, `sendEndpointTextMessage`, `toggleLobby`, participant actions.
 

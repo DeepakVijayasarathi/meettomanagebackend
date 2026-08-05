@@ -19,7 +19,12 @@ namespace iucs.readernest.application.Helper
                 return null;
             }
 
-            var domain = DefaultDomain;
+            return $"https://{ResolveDomain(integrationConfigJson)}/{meetingRoomId}";
+        }
+
+        /// <summary>Reads the "domain" key out of the "jitsi" Integration's ConfigJson, falling back to the seeded default.</summary>
+        public static string ResolveDomain(string? integrationConfigJson)
+        {
             if (!string.IsNullOrWhiteSpace(integrationConfigJson))
             {
                 try
@@ -28,7 +33,7 @@ namespace iucs.readernest.application.Helper
                     if (config is not null && config.TryGetValue("domain", out var configuredDomain)
                         && !string.IsNullOrWhiteSpace(configuredDomain))
                     {
-                        domain = configuredDomain;
+                        return configuredDomain;
                     }
                 }
                 catch (JsonException)
@@ -37,7 +42,7 @@ namespace iucs.readernest.application.Helper
                 }
             }
 
-            return $"https://{domain}/{meetingRoomId}";
+            return DefaultDomain;
         }
     }
 }

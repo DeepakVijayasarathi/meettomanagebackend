@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using iucs.readernest.api.Auth;
 using iucs.readernest.application.Dto.Academics;
+using iucs.readernest.application.Dto.Integrations;
 using iucs.readernest.application.Dto.Sessions;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
@@ -14,10 +15,20 @@ namespace iucs.readernest.api.Controllers
     public class SessionsController : ControllerBase
     {
         private readonly ISessionService _sessionService;
+        private readonly IIntegrationService _integrationService;
 
-        public SessionsController(ISessionService sessionService)
+        public SessionsController(ISessionService sessionService, IIntegrationService integrationService)
         {
             _sessionService = sessionService;
+            _integrationService = integrationService;
+        }
+
+        /// <summary>Non-secret Jitsi settings (domain + auto-record toggle) for whoever is about to join a live class.</summary>
+        [HttpGet("classroom-settings")]
+        [Authorize]
+        public async Task<ActionResult<JitsiSettingsDto>> ClassroomSettings(CancellationToken cancellationToken)
+        {
+            return Ok(await _integrationService.GetJitsiSettingsAsync(cancellationToken));
         }
 
         [HttpGet]

@@ -44,6 +44,7 @@ namespace iucs.readernest.api.Data
             await SeedIntegrationsAsync(context);
             await EnsureCashPaymentMethodAsync(context);
             await EnsureSmsIntegrationAsync(context);
+            await EnsureJitsiAutoRecordConfigAsync(context);
             await SeedEmailTemplatesAsync(context);
             await ReconcileJoinLinkEmailTemplatesAsync(context);
             await EnsureEmailTemplatesMenuAsync(context);
@@ -613,7 +614,7 @@ namespace iucs.readernest.api.Data
                     Description = "Primary live classroom video conferencing (self-hosted).",
                     IsEnabled = true,
                     IsSystem = true,
-                    ConfigJson = Json(new() { ["domain"] = "meet.techmisai.com" }),
+                    ConfigJson = Json(new() { ["domain"] = "meet.techmisai.com", ["autoRecord"] = "true" }),
                 },
                 CashPaymentMethod());
         }
@@ -681,6 +682,33 @@ namespace iucs.readernest.api.Data
                     ["fromNumber"] = "",
                 }),
             });
+        }
+
+        /// <summary>
+        /// Backfills the "autoRecord" key into an already-seeded "jitsi" Integration's ConfigJson
+        /// (databases created before this toggle existed). Runs every startup, no-ops once the
+        /// key is present so it never clobbers an admin's own on/off choice made in Settings.
+        /// </summary>
+        private static async Task EnsureJitsiAutoRecordConfigAsync(ReaderNestDbContext context)
+        {
+            var jitsi = context.Integrations.Local.FirstOrDefault(i => i.Key == "jitsi")
+                ?? await context.Integrations.FirstOrDefaultAsync(i => i.Key == "jitsi");
+            if (jitsi is null)
+            {
+                return;
+            }
+
+            var config = string.IsNullOrWhiteSpace(jitsi.ConfigJson)
+                ? new Dictionary<string, string?>()
+                : JsonSerializer.Deserialize<Dictionary<string, string?>>(jitsi.ConfigJson) ?? new Dictionary<string, string?>();
+
+            if (config.ContainsKey("autoRecord"))
+            {
+                return;
+            }
+
+            config["autoRecord"] = "true";
+            jitsi.ConfigJson = JsonSerializer.Serialize(config);
         }
 
         /// <summary>

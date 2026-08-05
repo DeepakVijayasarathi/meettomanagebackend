@@ -10,6 +10,9 @@ namespace iucs.readernest.application.Services
         /// <summary>Enabled payment-gateway integrations as key/name checkout options (no secrets); for the parent Pay Now popup.</summary>
         Task<IReadOnlyList<PaymentMethodOptionDto>> GetEnabledPaymentMethodsAsync(CancellationToken cancellationToken = default);
 
+        /// <summary>Non-secret Jitsi settings (domain + auto-record toggle) for whoever is about to join a live class.</summary>
+        Task<JitsiSettingsDto> GetJitsiSettingsAsync(CancellationToken cancellationToken = default);
+
         Task<IntegrationDto> CreateAsync(SaveIntegrationRequest request, CancellationToken cancellationToken = default);
 
         Task<IntegrationDto> UpdateAsync(Guid id, SaveIntegrationRequest request, CancellationToken cancellationToken = default);

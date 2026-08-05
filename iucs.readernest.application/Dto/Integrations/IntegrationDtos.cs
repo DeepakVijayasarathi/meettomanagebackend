@@ -36,4 +36,16 @@ namespace iucs.readernest.application.Dto.Integrations
 
         public Dictionary<string, string?> Config { get; set; } = [];
     }
+
+    /// <summary>
+    /// Non-secret slice of the "jitsi" Integration's config exposed to whoever is
+    /// about to join a live class (any authenticated role), so the client knows
+    /// which domain to embed and whether to auto-start recording on host join.
+    /// </summary>
+    public class JitsiSettingsDto
+    {
+        public string Domain { get; set; } = null!;
+
+        public bool AutoRecordEnabled { get; set; }
+    }
 }

@@ -2,6 +2,7 @@ using System.Text.Json;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Billing;
 using iucs.readernest.application.Dto.Integrations;
+using iucs.readernest.application.Helper;
 using iucs.readernest.domain.Entities.Integrations;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
@@ -36,6 +37,35 @@ namespace iucs.readernest.application.Services
                 .OrderBy(i => i.Name)
                 .Select(i => new PaymentMethodOptionDto { Key = i.Key, Name = i.Name })
                 .ToListAsync(cancellationToken);
+        }
+
+        public async Task<JitsiSettingsDto> GetJitsiSettingsAsync(CancellationToken cancellationToken = default)
+        {
+            var jitsi = await _unitOfWork.Repository<Integration>().Query()
+                .FirstOrDefaultAsync(i => i.Key == "jitsi", cancellationToken);
+
+            var autoRecord = true;
+            if (jitsi is not null && !string.IsNullOrWhiteSpace(jitsi.ConfigJson))
+            {
+                try
+                {
+                    var config = JsonSerializer.Deserialize<Dictionary<string, string?>>(jitsi.ConfigJson);
+                    if (config is not null && config.TryGetValue("autoRecord", out var raw) && bool.TryParse(raw, out var parsed))
+                    {
+                        autoRecord = parsed;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Malformed config — fall back to the current unconditional behaviour.
+                }
+            }
+
+            return new JitsiSettingsDto
+            {
+                Domain = JitsiLinkBuilder.ResolveDomain(jitsi?.ConfigJson),
+                AutoRecordEnabled = autoRecord,
+            };
         }
 
         public async Task<IntegrationDto> CreateAsync(
