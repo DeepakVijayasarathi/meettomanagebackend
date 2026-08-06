@@ -20,19 +20,22 @@ namespace iucs.readernest.application.Services
         private readonly ICrmNotifier _crmNotifier;
         private readonly IEmailSender _emailSender;
         private readonly IEmailTemplateService _emailTemplateService;
+        private readonly IJitsiTokenService _jitsiTokenService;
 
         public DemoBookingService(
             IUnitOfWork unitOfWork,
             IAuditLogService auditLog,
             IEmailSender emailSender,
             IEmailTemplateService emailTemplateService,
-            ICrmNotifier crmNotifier)
+            ICrmNotifier crmNotifier,
+            IJitsiTokenService jitsiTokenService)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _emailSender = emailSender;
             _emailTemplateService = emailTemplateService;
             _crmNotifier = crmNotifier;
+            _jitsiTokenService = jitsiTokenService;
         }
 
         public async Task<IReadOnlyList<DemoBookingDto>> ListAsync(
@@ -133,21 +136,42 @@ namespace iucs.readernest.application.Services
                 .Where(i => i.Key == "jitsi")
                 .Select(i => i.ConfigJson)
                 .FirstOrDefaultAsync(cancellationToken);
-            var joinUrl = JitsiLinkBuilder.BuildJoinUrl(session.MeetingRoomId, jitsiConfigJson) ?? "#";
+            var domain = JitsiLinkBuilder.ResolveDomain(jitsiConfigJson);
 
-            var (confirmationSubject, confirmationHtml) = await _emailTemplateService.RenderAsync(
+            // No account exists yet for a demo lead, so each invitee gets their own token
+            // (name + email baked in, expiring a couple of hours past the demo) instead of
+            // a bare room name that would work forever for anyone who ever saw the email.
+            string JoinUrlFor(string participantName, string participantEmail) =>
+                JitsiLinkBuilder.BuildJoinUrl(
+                    session.MeetingRoomId,
+                    jitsiConfigJson,
+                    _jitsiTokenService.CreateToken(
+                        domain, jitsiConfigJson, session.MeetingRoomId!, participantName, participantEmail,
+                        moderator: false, request.ScheduledEndAtUtc.AddHours(2)))
+                ?? "#";
+
+            var (parentSubject, parentHtml) = await _emailTemplateService.RenderAsync(
                 "demo-confirmed",
                 new Dictionary<string, string>
                 {
                     ["ChildName"] = booking.ChildName,
                     ["WhenLocal"] = $"{request.ScheduledStartAtUtc:u}",
-                    ["JoinUrl"] = joinUrl,
+                    ["JoinUrl"] = JoinUrlFor(booking.ParentName, booking.ParentEmail),
                 },
                 cancellationToken);
-            await _emailSender.SendAsync(booking.ParentEmail, confirmationSubject, confirmationHtml, cancellationToken);
+            await _emailSender.SendAsync(booking.ParentEmail, parentSubject, parentHtml, cancellationToken);
             foreach (var participant in booking.Participants.Where(p => !string.IsNullOrWhiteSpace(p.Email)))
             {
-                await _emailSender.SendAsync(participant.Email!, confirmationSubject, confirmationHtml, cancellationToken);
+                var (participantSubject, participantHtml) = await _emailTemplateService.RenderAsync(
+                    "demo-confirmed",
+                    new Dictionary<string, string>
+                    {
+                        ["ChildName"] = booking.ChildName,
+                        ["WhenLocal"] = $"{request.ScheduledStartAtUtc:u}",
+                        ["JoinUrl"] = JoinUrlFor(participant.Name, participant.Email!),
+                    },
+                    cancellationToken);
+                await _emailSender.SendAsync(participant.Email!, participantSubject, participantHtml, cancellationToken);
             }
 
             // New lead lands in the client's CRM (no-op when no webhook is configured)

@@ -1,10 +1,12 @@
 using iucs.readernest.application.Common.Exceptions;
+using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Dto.Sessions;
 using iucs.readernest.application.Helper;
 using iucs.readernest.application.Mappings;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Billing;
+using iucs.readernest.domain.Entities.Integrations;
 using iucs.readernest.domain.Entities.Sessions;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
@@ -29,19 +31,22 @@ namespace iucs.readernest.application.Services
         private readonly IPayoutService _payoutService;
         private readonly INotificationService _notificationService;
         private readonly ICurrentUserService _currentUser;
+        private readonly IJitsiTokenService _jitsiTokenService;
 
         public SessionService(
             IUnitOfWork unitOfWork,
             IAuditLogService auditLog,
             IPayoutService payoutService,
             INotificationService notificationService,
-            ICurrentUserService currentUser)
+            ICurrentUserService currentUser,
+            IJitsiTokenService jitsiTokenService)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _payoutService = payoutService;
             _notificationService = notificationService;
             _currentUser = currentUser;
+            _jitsiTokenService = jitsiTokenService;
         }
 
         public async Task<IReadOnlyList<ClassSessionDto>> ListAsync(
@@ -654,6 +659,83 @@ namespace iucs.readernest.application.Services
             }
 
             return false;
+        }
+
+        public async Task<JitsiJoinDto> GetJitsiJoinAsync(Guid sessionId, Guid userId, CancellationToken cancellationToken = default)
+        {
+            var session = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(sessionId, cancellationToken)
+                ?? throw new NotFoundException(nameof(ClassSession), sessionId);
+
+            if (string.IsNullOrWhiteSpace(session.MeetingRoomId))
+            {
+                throw new DomainValidationException("This session has no meeting room yet.");
+            }
+
+            var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
+                ?? throw new UnauthorizedException("Not signed in.");
+
+            if (!await IsSessionParticipantAsync(session, userId, cancellationToken))
+            {
+                throw new ForbiddenException("You do not have access to this session.");
+            }
+
+            var jitsiConfigJson = await _unitOfWork.Repository<Integration>().Query()
+                .Where(i => i.Key == "jitsi")
+                .Select(i => i.ConfigJson)
+                .FirstOrDefaultAsync(cancellationToken);
+            var domain = JitsiLinkBuilder.ResolveDomain(jitsiConfigJson);
+            var moderator = user.Role is UserRole.Teacher or UserRole.Admin;
+
+            var token = _jitsiTokenService.CreateToken(
+                domain,
+                jitsiConfigJson,
+                session.MeetingRoomId,
+                $"{user.FirstName} {user.LastName}",
+                user.Email,
+                moderator,
+                // A couple of hours past the scheduled end covers overruns without leaving a
+                // token that's valid indefinitely — it dies with the class, not with the link.
+                session.ScheduledEndAtUtc.AddHours(2));
+
+            return new JitsiJoinDto { Room = session.MeetingRoomId, Domain = domain, Token = token };
+        }
+
+        public async Task<ClassroomSettingsDto> GetClassroomSettingsAsync(CancellationToken cancellationToken = default)
+        {
+            var configJson = await _unitOfWork.Repository<Integration>().Query()
+                .Where(i => i.Key == "jitsi")
+                .Select(i => i.ConfigJson)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            return new ClassroomSettingsDto
+            {
+                Domain = JitsiLinkBuilder.ResolveDomain(configJson),
+                AutoRecordEnabled = ReadAutoRecordEnabled(configJson),
+            };
+        }
+
+        /// <summary>Defaults to on (today's unconditional behaviour) until an admin explicitly turns it off.</summary>
+        private static bool ReadAutoRecordEnabled(string? configJson)
+        {
+            if (string.IsNullOrWhiteSpace(configJson))
+            {
+                return true;
+            }
+
+            try
+            {
+                var config = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(configJson);
+                if (config is not null && config.TryGetValue("autoRecord", out var value) && bool.TryParse(value, out var parsed))
+                {
+                    return parsed;
+                }
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // Malformed config — keep the safe default.
+            }
+
+            return true;
         }
 
         public async Task<IReadOnlyList<EngagementSummaryDto>> GetEngagementSummaryAsync(

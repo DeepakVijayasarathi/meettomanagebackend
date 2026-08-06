@@ -613,7 +613,11 @@ namespace iucs.readernest.api.Data
                     Description = "Primary live classroom video conferencing (self-hosted).",
                     IsEnabled = true,
                     IsSystem = true,
-                    ConfigJson = Json(new() { ["domain"] = "meet.techmisai.com" }),
+                    // appId/appSecret are optional: blank means every join is unsigned, exactly
+                    // today's behaviour. Set both (and turn on prosody token_verification on the
+                    // Jitsi deployment — see docs/JITSI_ARCHITECTURE.md) to require a valid,
+                    // room-scoped token to join. autoRecord defaults on to match current behaviour.
+                    ConfigJson = Json(new() { ["domain"] = "meet.techmisai.com", ["appId"] = "", ["appSecret"] = "", ["autoRecord"] = "true" }),
                 },
                 CashPaymentMethod());
         }

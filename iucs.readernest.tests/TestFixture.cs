@@ -138,6 +138,19 @@ namespace iucs.readernest.tests
         }
     }
 
+    /// <summary>Mirrors production's "unconfigured" state (no appId/appSecret) — always returns no token.</summary>
+    public class FakeJitsiTokenService : IJitsiTokenService
+    {
+        public string? CreateToken(
+            string domain,
+            string? jitsiConfigJson,
+            string room,
+            string participantName,
+            string? participantEmail,
+            bool moderator,
+            DateTime expiresAtUtc) => null;
+    }
+
     /// <summary>
     /// Real ReaderNestDbContext (audit interceptor included) over SQLite in-memory,
     /// so smoke tests exercise the production model and save pipeline.

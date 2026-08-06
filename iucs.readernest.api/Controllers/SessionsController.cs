@@ -51,6 +51,29 @@ namespace iucs.readernest.api.Controllers
             return Ok(await _sessionService.GetAsync(id, cancellationToken));
         }
 
+        /// <summary>
+        /// The room + (once configured) a signed, session-scoped join token for the live
+        /// classroom. Authorized the same way as the ClassroomHub's JoinSession — Admin, the
+        /// assigned teacher, or a parent with a child enrolled in the session's batch — so a
+        /// forwarded/leaked room name alone is never enough to join once the Jitsi deployment
+        /// enforces token verification.
+        /// </summary>
+        [HttpGet("{id:guid}/jitsi-join")]
+        [Authorize]
+        public async Task<ActionResult<JitsiJoinDto>> GetJitsiJoin(Guid id, CancellationToken cancellationToken)
+        {
+            var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            return Ok(await _sessionService.GetJitsiJoinAsync(id, userId, cancellationToken));
+        }
+
+        /// <summary>Non-secret Jitsi settings (domain, auto-record) for whoever is about to join a live class.</summary>
+        [HttpGet("classroom-settings")]
+        [Authorize]
+        public async Task<ActionResult<ClassroomSettingsDto>> GetClassroomSettings(CancellationToken cancellationToken)
+        {
+            return Ok(await _sessionService.GetClassroomSettingsAsync(cancellationToken));
+        }
+
         [HttpPost]
         [HasPermission(PermissionModule.SessionCalendarManagement, PermissionAction.Create)]
         public async Task<ActionResult<ClassSessionDto>> Schedule(ScheduleSessionRequest request, CancellationToken cancellationToken)

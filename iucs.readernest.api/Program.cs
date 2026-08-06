@@ -63,6 +63,9 @@ builder.Services.AddScoped<IWhatsAppSender, WhatsAppSender>();
 // SMS delivery (MSG91/Twilio), driven by the DB "sms" integration.
 builder.Services.AddScoped<ISmsSender, SmsSender>();
 builder.Services.AddSingleton<IFileStorage, LocalFileStorage>();
+// Signs room-scoped Jitsi join tokens from the DB "jitsi" integration's appId/appSecret;
+// no-ops (null token, unsigned join) until an admin sets them — see JITSI_ARCHITECTURE.md.
+builder.Services.AddSingleton<IJitsiTokenService, JitsiTokenService>();
 // Dual-gateway abstraction: the dispatcher routes to Razorpay/Cashfree using live
 // credentials from Settings → Integrations, and falls back to the simulated gateway
 // while an integration is disabled or its keys are blank.

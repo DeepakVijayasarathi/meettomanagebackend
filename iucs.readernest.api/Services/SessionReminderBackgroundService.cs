@@ -58,6 +58,7 @@ namespace iucs.readernest.api.Services
             var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
             var emailTemplates = scope.ServiceProvider.GetRequiredService<IEmailTemplateService>();
             var emailSender = scope.ServiceProvider.GetRequiredService<IEmailSender>();
+            var jitsiTokens = scope.ServiceProvider.GetRequiredService<IJitsiTokenService>();
 
             var now = DateTime.UtcNow;
 
@@ -94,7 +95,17 @@ namespace iucs.readernest.api.Services
                     },
                     cancellationToken);
 
-                var joinUrl = JitsiLinkBuilder.BuildJoinUrl(session.MeetingRoomId, jitsiConfigJson) ?? "#";
+                var domain = JitsiLinkBuilder.ResolveDomain(jitsiConfigJson);
+                // Each recipient gets their own token, scoped to this room and expiring a
+                // couple of hours past the class — never a bare, forever-reusable room name.
+                string JoinUrlFor(string participantName, string? participantEmail) =>
+                    JitsiLinkBuilder.BuildJoinUrl(
+                        session.MeetingRoomId,
+                        jitsiConfigJson,
+                        jitsiTokens.CreateToken(
+                            domain, jitsiConfigJson, session.MeetingRoomId!, participantName, participantEmail,
+                            moderator: false, session.ScheduledEndAtUtc.AddHours(2)))
+                    ?? "#";
 
                 if (session.BatchId is null)
                 {
@@ -110,7 +121,7 @@ namespace iucs.readernest.api.Services
                             new Dictionary<string, string>
                             {
                                 ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, "Asia/Kolkata"),
-                                ["JoinUrl"] = joinUrl,
+                                ["JoinUrl"] = JoinUrlFor(demoBooking.ParentName, demoBooking.ParentEmail),
                             },
                             cancellationToken);
                         await emailSender.SendAsync(demoBooking.ParentEmail, subject, body, cancellationToken);
@@ -132,7 +143,7 @@ namespace iucs.readernest.api.Services
                         new Dictionary<string, string>
                         {
                             ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, parent.TimeZoneId),
-                            ["JoinUrl"] = joinUrl,
+                            ["JoinUrl"] = JoinUrlFor($"{parent.FirstName} {parent.LastName}", parent.Email),
                         },
                         cancellationToken);
                 }

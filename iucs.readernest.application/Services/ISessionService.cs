@@ -69,5 +69,16 @@ namespace iucs.readernest.application.Services
         /// "is a valid logged-in user of some role."
         /// </summary>
         Task<bool> IsSessionParticipantAsync(Guid sessionId, Guid userId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// The room + (when configured) a signed, room-scoped join token for the caller.
+        /// Authorized the same way as the ClassroomHub: Admin, the assigned teacher, or a
+        /// parent with a child enrolled in the session's batch — anyone else is refused
+        /// before a token is ever minted.
+        /// </summary>
+        Task<JitsiJoinDto> GetJitsiJoinAsync(Guid sessionId, Guid userId, CancellationToken cancellationToken = default);
+
+        /// <summary>Non-secret Jitsi settings (domain, auto-record) for whoever is about to join a live class.</summary>
+        Task<ClassroomSettingsDto> GetClassroomSettingsAsync(CancellationToken cancellationToken = default);
     }
 }
