@@ -97,16 +97,7 @@ namespace iucs.readernest.application.Services
         public async Task<ClassSessionDto> ScheduleAsync(ScheduleSessionRequest request, CancellationToken cancellationToken = default)
         {
             ValidateWindow(request.ScheduledStartAtUtc, request.ScheduledEndAtUtc);
-
-            // Business rule: no class is ever scheduled on a holiday.
-            var sessionDate = DateOnly.FromDateTime(request.ScheduledStartAtUtc);
-            var holiday = await _unitOfWork.Repository<Holiday>()
-                .FirstOrDefaultAsync(h => h.Date == sessionDate, cancellationToken);
-            if (holiday is not null)
-            {
-                throw new DomainValidationException(
-                    $"No class can be scheduled on {sessionDate:yyyy-MM-dd} — it's a holiday ({holiday.Name}). Pick the next available date.");
-            }
+            await EnsureNotHolidayAsync(request.ScheduledStartAtUtc, cancellationToken);
 
             if (request.Type == SessionType.Regular && request.BatchId is null)
             {
@@ -158,6 +149,9 @@ namespace iucs.readernest.application.Services
             CancellationToken cancellationToken = default)
         {
             ValidateWindow(request.ScheduledStartAtUtc, request.ScheduledEndAtUtc);
+            // Same rule ScheduleAsync enforces — a reschedule is a new calendar entry too,
+            // and was previously the one path that could land a class on a holiday.
+            await EnsureNotHolidayAsync(request.ScheduledStartAtUtc, cancellationToken);
 
             var original = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(ClassSession), id);
@@ -307,14 +301,29 @@ namespace iucs.readernest.application.Services
 
             // The missed class is never lost: a carried-forward session is placed one week
             // later at the same slot, keeping the traceability link for calendar and payouts.
+            // Unlike fresh scheduling, marking a no-show must never hard-fail, so this never
+            // throws — but it does still honour the "no class on a holiday" rule (walking
+            // forward a day at a time, bounded, to the next non-holiday date) and it checks
+            // for a teacher-schedule collision so that risk is recorded rather than silently
+            // invisible, even though it doesn't block the placement.
+            var duration = session.ScheduledEndAtUtc - session.ScheduledStartAtUtc;
+            var carriedForwardStart = await NextNonHolidayDateAsync(session.ScheduledStartAtUtc.AddDays(7), cancellationToken);
+            var carriedForwardEnd = carriedForwardStart.Add(duration);
+            var carriedForwardHasConflict = await _unitOfWork.Repository<ClassSession>().ExistsAsync(
+                s => s.TeacherProfileId == session.TeacherProfileId
+                    && (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.InProgress || s.Status == SessionStatus.CarriedForward)
+                    && s.ScheduledStartAtUtc < carriedForwardEnd
+                    && s.ScheduledEndAtUtc > carriedForwardStart,
+                cancellationToken);
+
             var carriedForward = new ClassSession
             {
                 BatchId = session.BatchId,
                 TeacherProfileId = session.TeacherProfileId,
                 Type = session.Type,
                 Status = SessionStatus.CarriedForward,
-                ScheduledStartAtUtc = session.ScheduledStartAtUtc.AddDays(7),
-                ScheduledEndAtUtc = session.ScheduledEndAtUtc.AddDays(7),
+                ScheduledStartAtUtc = carriedForwardStart,
+                ScheduledEndAtUtc = carriedForwardEnd,
                 MeetingRoomId = session.MeetingRoomId,
                 CarriedForwardFromSessionId = session.Id,
             };
@@ -336,11 +345,30 @@ namespace iucs.readernest.application.Services
             }
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(ClassSession), session.Id.ToString(),
-                changesJson: $"{{\"noShow\":\"{request.Party}\",\"carriedForwardTo\":\"{carriedForward.Id}\"}}",
+                changesJson: "{\"noShow\":\"" + request.Party + "\",\"carriedForwardTo\":\"" + carriedForward.Id + "\""
+                    + (carriedForwardHasConflict ? ",\"carriedForwardScheduleConflict\":true" : "") + "}",
                 cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return await GetAsync(carriedForward.Id, cancellationToken);
+        }
+
+        /// <summary>Walks forward a day at a time (bounded) to the next date that isn't a holiday.</summary>
+        private async Task<DateTime> NextNonHolidayDateAsync(DateTime candidateUtc, CancellationToken cancellationToken)
+        {
+            for (var i = 0; i < 14; i++)
+            {
+                var candidate = candidateUtc.AddDays(i);
+                var isHoliday = await _unitOfWork.Repository<Holiday>()
+                    .ExistsAsync(h => h.Date == DateOnly.FromDateTime(candidate), cancellationToken);
+                if (!isHoliday)
+                {
+                    return candidate;
+                }
+            }
+
+            // 14 consecutive holidays isn't realistic — fall back rather than search forever.
+            return candidateUtc;
         }
 
         public async Task<SessionRecordingDto> AddRecordingAsync(
@@ -818,6 +846,19 @@ namespace iucs.readernest.application.Services
             if (endUtc <= startUtc)
             {
                 throw new DomainValidationException("Session end time must be after the start time.");
+            }
+        }
+
+        /// <summary>Business rule: no class is ever scheduled — or rescheduled — onto a holiday.</summary>
+        private async Task EnsureNotHolidayAsync(DateTime startUtc, CancellationToken cancellationToken)
+        {
+            var sessionDate = DateOnly.FromDateTime(startUtc);
+            var holiday = await _unitOfWork.Repository<Holiday>()
+                .FirstOrDefaultAsync(h => h.Date == sessionDate, cancellationToken);
+            if (holiday is not null)
+            {
+                throw new DomainValidationException(
+                    $"No class can be scheduled on {sessionDate:yyyy-MM-dd} — it's a holiday ({holiday.Name}). Pick a different date.");
             }
         }
     }

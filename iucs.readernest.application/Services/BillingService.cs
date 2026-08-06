@@ -354,18 +354,32 @@ namespace iucs.readernest.application.Services
                 invoice.Status = InvoiceStatus.Paid;
                 invoice.PaidAtUtc = DateTime.UtcNow;
 
-                // Access restoration: full payment auto-lifts any active fee suspension.
-                // TrackedQuery() fetches every matching row already tracked, so each is
-                // mutated in place with no extra per-row round trip to re-fetch it.
-                var suspensions = await _unitOfWork.Repository<FeeSuspension>().TrackedQuery()
-                    .Where(s => s.ParentProfileId == invoice.ParentProfileId && s.Status == SuspensionStatus.Active)
-                    .ToListAsync(cancellationToken);
-                foreach (var suspension in suspensions)
+                // Access restoration: full payment on THIS invoice auto-lifts any active fee
+                // suspension for the parent — but only when nothing else is outstanding. A
+                // suspension is one row per parent (it can cover several overdue invoices at
+                // once, see BillingBackgroundService), so lifting it just because one of
+                // several overdue invoices got paid would silently restore access while the
+                // parent still owes money on another invoice.
+                var hasOtherOverdueInvoice = await _unitOfWork.Repository<Invoice>().ExistsAsync(
+                    i => i.ParentProfileId == invoice.ParentProfileId
+                        && i.Id != invoice.Id
+                        && i.Status == InvoiceStatus.Overdue,
+                    cancellationToken);
+
+                if (!hasOtherOverdueInvoice)
                 {
-                    suspension.Status = SuspensionStatus.Lifted;
-                    suspension.LiftedAtUtc = DateTime.UtcNow;
-                    suspension.AutoRestored = true;
-                    _unitOfWork.Repository<FeeSuspension>().Update(suspension);
+                    // TrackedQuery() fetches every matching row already tracked, so each is
+                    // mutated in place with no extra per-row round trip to re-fetch it.
+                    var suspensions = await _unitOfWork.Repository<FeeSuspension>().TrackedQuery()
+                        .Where(s => s.ParentProfileId == invoice.ParentProfileId && s.Status == SuspensionStatus.Active)
+                        .ToListAsync(cancellationToken);
+                    foreach (var suspension in suspensions)
+                    {
+                        suspension.Status = SuspensionStatus.Lifted;
+                        suspension.LiftedAtUtc = DateTime.UtcNow;
+                        suspension.AutoRestored = true;
+                        _unitOfWork.Repository<FeeSuspension>().Update(suspension);
+                    }
                 }
 
                 // Close any other still-pending cash intents on this invoice: the money
@@ -708,7 +722,18 @@ namespace iucs.readernest.application.Services
             var invoice = await _unitOfWork.Repository<Invoice>().GetByIdAsync(transaction.InvoiceId, cancellationToken)
                 ?? throw new NotFoundException(nameof(Invoice), transaction.InvoiceId);
 
-            if (invoice.Status is InvoiceStatus.Paid or InvoiceStatus.Cancelled)
+            if (invoice.Status == InvoiceStatus.Cancelled)
+            {
+                // A cancelled invoice never accepts payment, regardless of balance.
+                await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
+                    changesJson: $"{{\"overpayment\":{transaction.Amount},\"gatewayRef\":\"{gatewayReference}\",\"invoiceStatus\":\"{invoice.Status}\"}}",
+                    cancellationToken: cancellationToken);
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+                return;
+            }
+
+            var remaining = invoice.Amount - invoice.AmountPaid;
+            if (remaining <= 0)
             {
                 // Another payment (a parallel checkout attempt, or a manual cash entry) already
                 // settled this invoice before this gateway transaction confirmed. The money did
@@ -722,10 +747,23 @@ namespace iucs.readernest.application.Services
                 return;
             }
 
-            await ApplyPaymentToInvoiceAsync(invoice, transaction.Amount, cancellationToken);
+            // Same idea, partial case: another payment landed on part of the balance while
+            // this gateway transaction was in flight. Apply only what's actually still owed —
+            // never let AmountPaid run past Amount — and flag the excess for reconciliation
+            // instead of silently inflating the invoice past 100% paid.
+            var amountToApply = transaction.Amount;
+            if (amountToApply > remaining)
+            {
+                await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
+                    changesJson: $"{{\"partialOverpayment\":{amountToApply - remaining},\"gatewayRef\":\"{gatewayReference}\"}}",
+                    cancellationToken: cancellationToken);
+                amountToApply = remaining;
+            }
+
+            await ApplyPaymentToInvoiceAsync(invoice, amountToApply, cancellationToken);
 
             await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
-                changesJson: $"{{\"amount\":{transaction.Amount},\"gatewayRef\":\"{gatewayReference}\"}}", cancellationToken: cancellationToken);
+                changesJson: $"{{\"amount\":{amountToApply},\"gatewayRef\":\"{gatewayReference}\"}}", cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             await NotifyAdminsAsync(
@@ -1216,7 +1254,19 @@ namespace iucs.readernest.application.Services
             };
             await _unitOfWork.Repository<Subscription>().AddAsync(subscription, cancellationToken);
             await _auditLog.StageAsync(AuditAction.Create, nameof(Subscription), subscription.Id.ToString(), cancellationToken: cancellationToken);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            try
+            {
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException)
+            {
+                // Backstop for the ExistsAsync check above, which is check-then-insert with no
+                // locking: two concurrent requests for the same child+plan can both pass it
+                // before either commits. The DB's own unique index (SubscriptionConfiguration)
+                // is what actually prevents the duplicate row; translate its rare violation into
+                // the same clean error the common-case check already gives the caller.
+                throw new ConflictException("This child already has an active subscription on that plan.");
+            }
 
             // First invoice is issued immediately — the parent has something to pay the
             // moment the subscription starts (the hourly job only handles later cycles),

@@ -59,22 +59,37 @@ namespace iucs.readernest.api.Services
                             && s.NextBillingAtUtc <= now)
                 .ToListAsync(cancellationToken);
 
+            var invoicedCount = 0;
             foreach (var subscription in dueSubscriptions)
             {
-                await billingService.CreateInvoiceAsync(
-                    new CreateInvoiceRequest
-                    {
-                        ParentProfileId = subscription.ParentProfileId,
-                        ChildId = subscription.ChildId,
-                        SubscriptionId = subscription.Id,
-                        CourseId = subscription.PackagePlan.CourseId,
-                        // Route to the department's payment account (dual-gateway requirement);
-                        // plans without a course default to Phonics
-                        Department = subscription.PackagePlan.Course?.Department ?? Department.Phonics,
-                        Amount = subscription.PackagePlan.Price,
-                        DueDate = DateOnly.FromDateTime(now.AddDays(7)),
-                    },
+                // Idempotency guard: CreateInvoiceAsync commits the invoice with its own
+                // SaveChangesAsync immediately, but the NextBillingAtUtc advance below is only
+                // saved at the end of this cycle. If the process dies or a later save in this
+                // same batch fails in between, the pointer never moves and the next cycle would
+                // otherwise re-bill this exact period. An invoice already issued at/after the
+                // due-instant we're about to bill for means this period is already covered.
+                var alreadyInvoicedThisPeriod = await unitOfWork.Repository<Invoice>().ExistsAsync(
+                    i => i.SubscriptionId == subscription.Id && i.IssuedAtUtc >= subscription.NextBillingAtUtc!.Value,
                     cancellationToken);
+
+                if (!alreadyInvoicedThisPeriod)
+                {
+                    await billingService.CreateInvoiceAsync(
+                        new CreateInvoiceRequest
+                        {
+                            ParentProfileId = subscription.ParentProfileId,
+                            ChildId = subscription.ChildId,
+                            SubscriptionId = subscription.Id,
+                            CourseId = subscription.PackagePlan.CourseId,
+                            // Route to the department's payment account (dual-gateway requirement);
+                            // plans without a course default to Phonics
+                            Department = subscription.PackagePlan.Course?.Department ?? Department.Phonics,
+                            Amount = subscription.PackagePlan.Price,
+                            DueDate = DateOnly.FromDateTime(now.AddDays(7)),
+                        },
+                        cancellationToken);
+                    invoicedCount++;
+                }
 
                 subscription.NextBillingAtUtc = subscription.PackagePlan.BillingCycle switch
                 {
@@ -97,6 +112,16 @@ namespace iucs.readernest.api.Services
             {
                 invoice.Status = InvoiceStatus.Overdue;
                 unitOfWork.Repository<Invoice>().Update(invoice);
+            }
+
+            // Commit the subscription pointers and overdue flips before the suspension sweep
+            // below queries Invoice via a no-tracking Query() (a direct DB read) — otherwise
+            // invoices that turned Overdue earlier in THIS cycle are invisible to that query,
+            // and their parent isn't suspended until the next cycle, a full hour later than
+            // the intent below ("any parent left with an overdue invoice ... gets one").
+            if (dueSubscriptions.Count > 0 || overdueInvoices.Count > 0)
+            {
+                await unitOfWork.SaveChangesAsync(cancellationToken);
             }
 
             // Account suspension: any parent left with an overdue invoice and no active
@@ -127,12 +152,16 @@ namespace iucs.readernest.api.Services
                 suspendedCount++;
             }
 
-            if (dueSubscriptions.Count > 0 || overdueInvoices.Count > 0 || suspendedCount > 0)
+            if (suspendedCount > 0)
             {
                 await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+
+            if (dueSubscriptions.Count > 0 || overdueInvoices.Count > 0 || suspendedCount > 0)
+            {
                 _logger.LogInformation(
-                    "Auto billing: generated {InvoiceCount} invoice(s), marked {OverdueCount} overdue, suspended {SuspendedCount} account(s).",
-                    dueSubscriptions.Count, overdueInvoices.Count, suspendedCount);
+                    "Auto billing: generated {InvoiceCount} invoice(s) ({DueCount} subscription(s) due), marked {OverdueCount} overdue, suspended {SuspendedCount} account(s).",
+                    invoicedCount, dueSubscriptions.Count, overdueInvoices.Count, suspendedCount);
             }
 
             // Pull-based payment settlement: catch any gateway payment whose webhook never

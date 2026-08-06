@@ -310,32 +310,32 @@ namespace iucs.readernest.application.Services
             DateTime sessionStartUtc,
             CancellationToken cancellationToken)
         {
-            var payout = await FindPayoutForPeriodAsync(teacherProfileId, sessionStartUtc.Year, sessionStartUtc.Month, cancellationToken);
-            if (payout is null)
+            // Session completion (and no-show marking) must never hard-fail just because
+            // payroll already ran for this month — that would leave the class permanently
+            // un-completable. Roll the late item forward into the next open (Pending, or not
+            // yet created) payout period; a closed period's own total is never reopened or
+            // mutated. Bounded so a pathological run of pre-finalized months can't hang the
+            // request — in real usage this resolves on the first or second hop.
+            var period = new DateTime(sessionStartUtc.Year, sessionStartUtc.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+            for (var hop = 0; hop < 24; hop++)
             {
-                return await CreatePayoutAsync(teacherProfileId, sessionStartUtc.Year, sessionStartUtc.Month, cancellationToken);
+                var payout = await FindPayoutForPeriodAsync(teacherProfileId, period.Year, period.Month, cancellationToken);
+                if (payout is null)
+                {
+                    return await CreatePayoutAsync(teacherProfileId, period.Year, period.Month, cancellationToken);
+                }
+
+                if (payout.Status == PayoutStatus.Pending)
+                {
+                    return payout;
+                }
+
+                period = period.AddMonths(1);
             }
 
-            if (payout.Status == PayoutStatus.Pending)
-            {
-                return payout;
-            }
-
-            // This month's payout is already Finalized/Paid. Session completion (and
-            // no-show marking) must never hard-fail just because payroll ran before every
-            // session for the month was done — that would leave the class permanently
-            // un-completable. Roll the late item into the next month's payout instead;
-            // the closed period's own total is never reopened or mutated.
-            var nextPeriod = sessionStartUtc.AddMonths(1);
-            var nextPayout = await FindPayoutForPeriodAsync(teacherProfileId, nextPeriod.Year, nextPeriod.Month, cancellationToken);
-            if (nextPayout is not null && nextPayout.Status != PayoutStatus.Pending)
-            {
-                throw new DomainValidationException(
-                    $"The payout for {sessionStartUtc:yyyy-MM} is already {payout.Status}, and {nextPeriod:yyyy-MM}'s payout is " +
-                    $"also {nextPayout.Status}; this item can't be accrued automatically. Reopen one of these periods first.");
-            }
-
-            return nextPayout ?? await CreatePayoutAsync(teacherProfileId, nextPeriod.Year, nextPeriod.Month, cancellationToken);
+            throw new DomainValidationException(
+                $"No open payout period found for {sessionStartUtc:yyyy-MM} within 24 months forward. " +
+                "Reopen one of the closed periods first.");
         }
 
         // Load TRACKED (Query() is AsNoTracking): items added to an untracked payout
