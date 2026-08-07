@@ -3,6 +3,7 @@ using iucs.readernest.application.Dto.Auth;
 using iucs.readernest.application.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace iucs.readernest.api.Controllers
 {
@@ -19,6 +20,7 @@ namespace iucs.readernest.api.Controllers
 
         [HttpPost("login")]
         [AllowAnonymous]
+        [EnableRateLimiting("login")]
         public async Task<ActionResult<LoginResponse>> Login(LoginRequest request, CancellationToken cancellationToken)
         {
             return Ok(await _authService.LoginAsync(request, cancellationToken));

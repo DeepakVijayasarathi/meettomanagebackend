@@ -7,18 +7,23 @@ using iucs.readernest.domain.Entities.Communication;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace iucs.readernest.application.Services
 {
     public class EmailTemplateService : IEmailTemplateService
     {
+        private const string CacheKeyPrefix = "email-template:";
+
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
+        private readonly IMemoryCache _cache;
 
-        public EmailTemplateService(IUnitOfWork unitOfWork, IAuditLogService auditLog)
+        public EmailTemplateService(IUnitOfWork unitOfWork, IAuditLogService auditLog, IMemoryCache cache)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
+            _cache = cache;
         }
 
         public async Task<IReadOnlyList<EmailTemplateDto>> ListAsync(CancellationToken cancellationToken = default)
@@ -62,6 +67,7 @@ namespace iucs.readernest.application.Services
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(EmailTemplate), template.Key, cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+            _cache.Remove(CacheKeyPrefix + template.Key);
             return ToDto(template);
         }
 
@@ -90,10 +96,22 @@ namespace iucs.readernest.application.Services
             IReadOnlyDictionary<string, string> tokens,
             CancellationToken cancellationToken = default)
         {
-            var template = await _unitOfWork.Repository<EmailTemplate>().Query()
-                .FirstOrDefaultAsync(t => t.Key == key, cancellationToken);
+            // Bulk sends (e.g. a class-summary email to every parent in a batch) call this
+            // once per recipient with the same key — a fresh SELECT per call was a real N+1.
+            // Cached as a plain snapshot (never the tracked entity: it belongs to this
+            // request's DbContext and must not be reused once that's disposed), invalidated
+            // by UpdateAsync so an edit takes effect immediately rather than waiting out the TTL.
+            var snapshot = await _cache.GetOrCreateAsync(CacheKeyPrefix + key, async entry =>
+            {
+                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);
+                var template = await _unitOfWork.Repository<EmailTemplate>().Query()
+                    .FirstOrDefaultAsync(t => t.Key == key, cancellationToken);
+                return template is null
+                    ? null
+                    : new TemplateSnapshot(template.Subject, template.HtmlBody, template.IsActive);
+            });
 
-            if (template is null || !template.IsActive)
+            if (snapshot is null || !snapshot.IsActive)
             {
                 // A missing/disabled template must never block the underlying business
                 // operation — fall back to a minimal generic message instead of throwing.
@@ -103,8 +121,10 @@ namespace iucs.readernest.application.Services
                 return (fallbackSubject, "<p>Please check your Reader Nest dashboard for details.</p>");
             }
 
-            return (SubstituteSubject(template.Subject, tokens), SubstituteHtml(template.HtmlBody, tokens));
+            return (SubstituteSubject(snapshot.Subject, tokens), SubstituteHtml(snapshot.HtmlBody, tokens));
         }
+
+        private sealed record TemplateSnapshot(string Subject, string HtmlBody, bool IsActive);
 
         // Single-pass placeholder match: each {{Token}} in the ORIGINAL template is
         // matched exactly once and replaced via a MatchEvaluator, whose return value is

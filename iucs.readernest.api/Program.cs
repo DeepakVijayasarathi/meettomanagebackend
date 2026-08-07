@@ -13,8 +13,10 @@ using iucs.readernest.domain.Data.Interceptors;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
@@ -152,8 +154,31 @@ builder.Services
         };
     });
 
+// In-memory cache for read-heavy, rarely-changing lookups (email template rendering
+// today; see EmailTemplateService) — process-local, fine for the current
+// single-instance deployment.
+builder.Services.AddMemoryCache();
+
 // Real-time classroom layer (roster, whiteboard sync, quizzes, celebrations)
 builder.Services.AddSignalR();
+
+// Brute-force protection on login: framework-provided rate limiting (built into
+// ASP.NET Core since .NET 7, no extra package). Rejects immediately over the limit
+// rather than queuing, so a flood gets a fast 429 instead of stacking up requests.
+// Partitioned per client IP so one attacker can't lock out everyone else.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("login", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+            }));
+});
 
 // Authorization: module/action permission policies (Admin passes implicitly)
 builder.Services.AddAuthorization();
@@ -178,7 +203,10 @@ if (allowedOrigins.Contains("*"))
 }
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy =>
-        policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
+        policy.WithOrigins(allowedOrigins)
+            .AllowAnyHeader()
+            .WithMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
+            .AllowCredentials()));
 
 var app = builder.Build();
 
@@ -194,12 +222,26 @@ else
     // In development the SPA calls the plain-HTTP port; redirecting to HTTPS
     // breaks CORS preflight requests, so only redirect outside development.
     app.UseHttpsRedirection();
+    app.UseHsts();
+
+    // Security headers: scoped to non-development so they never fight the dev-only
+    // Scalar/OpenAPI UI, which needs inline scripts/styles a strict CSP would block.
+    // This is a pure JSON API in production, so the policy can be tight.
+    app.Use(async (context, next) =>
+    {
+        context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+        context.Response.Headers.Append("X-Frame-Options", "DENY");
+        context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+        context.Response.Headers.Append("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+        await next();
+    });
 }
 
 app.UseCors();
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 app.MapControllers();
 app.MapHub<iucs.readernest.api.Hubs.ClassroomHub>("/hubs/classroom");

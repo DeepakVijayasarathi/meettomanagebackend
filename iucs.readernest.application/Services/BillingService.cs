@@ -46,14 +46,28 @@ namespace iucs.readernest.application.Services
                 .OrderBy(a => a.Department)
                 .ToListAsync(cancellationToken);
 
+            // One aggregate query for every account's totals, instead of pulling each
+            // account's ENTIRE transaction history into memory just to Count()/Sum() it
+            // in C# — this used to be N queries each materializing an unbounded row set.
+            var totals = await _unitOfWork.Repository<PaymentTransaction>().Query()
+                .Where(t => t.Status == TransactionStatus.Success)
+                .GroupBy(t => t.PaymentAccountId)
+                .Select(g => new { AccountId = g.Key, Count = g.Count(), Total = g.Sum(t => t.Amount) })
+                .ToDictionaryAsync(g => g.AccountId, cancellationToken);
+
             var result = new List<PaymentAccountDto>(accounts.Count);
             foreach (var account in accounts)
             {
-                var transactions = await _unitOfWork.Repository<PaymentTransaction>().Query()
+                // Only the 5 most recent transactions need their full Invoice/Child
+                // details — bounded at the SQL level (Take(5)) rather than in memory.
+                var recent = await _unitOfWork.Repository<PaymentTransaction>().Query()
                     .Where(t => t.PaymentAccountId == account.Id)
                     .Include(t => t.Invoice).ThenInclude(i => i.Child)
                     .OrderByDescending(t => t.CreatedAtUtc)
+                    .Take(5)
                     .ToListAsync(cancellationToken);
+
+                totals.TryGetValue(account.Id, out var accountTotals);
 
                 result.Add(new PaymentAccountDto
                 {
@@ -63,11 +77,9 @@ namespace iucs.readernest.application.Services
                     GatewayProvider = account.GatewayProvider,
                     GatewayAccountRef = account.GatewayAccountRef,
                     IsActive = account.IsActive,
-                    TransactionCount = transactions.Count(t => t.Status == TransactionStatus.Success),
-                    TotalCollected = transactions
-                        .Where(t => t.Status == TransactionStatus.Success)
-                        .Sum(t => t.Amount),
-                    RecentTransactions = transactions.Take(5).Select(t => new PaymentAccountTransactionDto
+                    TransactionCount = accountTotals?.Count ?? 0,
+                    TotalCollected = accountTotals?.Total ?? 0m,
+                    RecentTransactions = recent.Select(t => new PaymentAccountTransactionDto
                     {
                         Id = t.Id,
                         InvoiceNumber = t.Invoice.InvoiceNumber,

@@ -14,10 +14,12 @@ using iucs.readernest.application.Services;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Admission;
 using iucs.readernest.domain.Entities.Billing;
+using iucs.readernest.domain.Entities.Payouts;
 using iucs.readernest.domain.Entities.Sessions;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -35,7 +37,7 @@ namespace iucs.readernest.tests
         public SmokeTests()
         {
             _auditLog = new AuditLogService(_db.UnitOfWork, _db.CurrentUser);
-            _emailTemplates = new EmailTemplateService(_db.UnitOfWork, _auditLog);
+            _emailTemplates = new EmailTemplateService(_db.UnitOfWork, _auditLog, new MemoryCache(new MemoryCacheOptions()));
             _notifications = new NotificationService(_db.UnitOfWork, _emailSender, _emailTemplates, NullLogger<NotificationService>.Instance);
         }
 
@@ -161,6 +163,30 @@ namespace iucs.readernest.tests
             await CreateSessionService().CompleteAsync(second.Id);
             var overridden = _db.Context.PayoutItems.Single(i => i.ClassSessionId == second.Id);
             Assert.Equal(1200m, overridden.Amount);
+        }
+
+        [Fact]
+        public async Task CompleteSession_RollsPayoutForward_WhenCurrentAndNextMonthAreBothAlreadyFinalized()
+        {
+            // Finance can finalize payroll before every session for the month is actually
+            // done. This must never permanently block completing a late session — it used to
+            // throw here when BOTH the session's own month and the next one were finalized.
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var period = new DateTime(session.ScheduledStartAtUtc.Year, session.ScheduledStartAtUtc.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+            var next = period.AddMonths(1);
+            _db.Context.Payouts.AddRange(
+                new Payout { TeacherProfileId = session.TeacherProfileId, PeriodYear = period.Year, PeriodMonth = period.Month, Status = PayoutStatus.Finalized },
+                new Payout { TeacherProfileId = session.TeacherProfileId, PeriodYear = next.Year, PeriodMonth = next.Month, Status = PayoutStatus.Finalized });
+            await _db.Context.SaveChangesAsync();
+
+            var completed = await CreateSessionService().CompleteAsync(session.Id); // must not throw
+
+            Assert.Equal(SessionStatus.Completed, completed.Status);
+            var item = await _db.Context.PayoutItems.Include(i => i.Payout).FirstAsync(i => i.ClassSessionId == session.Id);
+            var rolledTo = period.AddMonths(2);
+            Assert.Equal(rolledTo.Year, item.Payout.PeriodYear);
+            Assert.Equal(rolledTo.Month, item.Payout.PeriodMonth);
+            Assert.Equal(PayoutStatus.Pending, item.Payout.Status); // the new period, still open
         }
 
         [Fact]
@@ -372,6 +398,48 @@ namespace iucs.readernest.tests
             var suspension = await _db.Context.FeeSuspensions.FirstAsync(s => s.ParentProfileId == parentProfile.Id);
             Assert.Equal(SuspensionStatus.Lifted, suspension.Status);
             Assert.True(suspension.AutoRestored);
+        }
+
+        [Fact]
+        public async Task FullPayment_DoesNotLiftSuspension_WhileAnotherInvoiceIsStillOverdue()
+        {
+            // A single suspension row can cover several overdue invoices at once
+            // (BillingBackgroundService groups by parent) — paying off just one of them
+            // must not restore access while another is still unpaid.
+            var parentUser = await _db.SeedUserAsync($"multi-susp-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.AddRange(parentProfile,
+                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+            await _db.Context.SaveChangesAsync();
+            var billing = CreateBillingService();
+
+            var invoiceA = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 500,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-3)),
+            });
+            var invoiceB = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 300,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-3)),
+            });
+            // Simulates BillingBackgroundService's overdue sweep + suspension, without
+            // running the background service itself.
+            var trackedB = await _db.Context.Invoices.FirstAsync(i => i.Id == invoiceB.Id);
+            trackedB.Status = InvoiceStatus.Overdue;
+            _db.Context.FeeSuspensions.Add(new FeeSuspension
+            {
+                ParentProfileId = parentProfile.Id, InvoiceId = invoiceB.Id,
+                Status = SuspensionStatus.Active, SuspendedAtUtc = DateTime.UtcNow,
+            });
+            await _db.Context.SaveChangesAsync();
+
+            await billing.RecordPaymentAsync(invoiceA.Id, new RecordPaymentRequest { Amount = 500 });
+
+            var paidA = await _db.Context.Invoices.FirstAsync(i => i.Id == invoiceA.Id);
+            Assert.Equal(InvoiceStatus.Paid, paidA.Status);
+            var suspension = await _db.Context.FeeSuspensions.FirstAsync(s => s.ParentProfileId == parentProfile.Id);
+            Assert.Equal(SuspensionStatus.Active, suspension.Status); // invoice B is still overdue
         }
 
         [Fact]
@@ -878,6 +946,44 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task Reschedule_RejectsHolidayDate()
+        {
+            // ScheduleAsync already blocked holidays; RescheduleAsync didn't — a reschedule
+            // is a new calendar entry too, and was the one path that could land a class on one.
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 2);
+            var holidayDate = DateOnly.FromDateTime(session.ScheduledStartAtUtc.AddDays(3));
+            _db.Context.Holidays.Add(new Holiday { Name = "Founders' Day", Date = holidayDate });
+            await _db.Context.SaveChangesAsync();
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => CreateSessionService().RescheduleAsync(
+                session.Id,
+                new RescheduleSessionRequest
+                {
+                    ScheduledStartAtUtc = holidayDate.ToDateTime(TimeOnly.FromDateTime(session.ScheduledStartAtUtc)),
+                    ScheduledEndAtUtc = holidayDate.ToDateTime(TimeOnly.FromDateTime(session.ScheduledEndAtUtc)),
+                }));
+
+            var untouched = await _db.Context.ClassSessions.FindAsync(session.Id);
+            Assert.Equal(SessionStatus.Scheduled, untouched!.Status); // never rescheduled
+        }
+
+        [Fact]
+        public async Task MarkNoShow_CarriedForwardSession_SkipsAHolidayOneWeekOut()
+        {
+            // The naive "+7 days" placement used to ignore the holiday calendar entirely.
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 2);
+            var oneWeekOut = DateOnly.FromDateTime(session.ScheduledStartAtUtc.AddDays(7));
+            _db.Context.Holidays.Add(new Holiday { Name = "Regional Holiday", Date = oneWeekOut });
+            await _db.Context.SaveChangesAsync();
+
+            var carried = await CreateSessionService().MarkNoShowAsync(
+                session.Id, new MarkNoShowRequest { Party = NoShowParty.Student });
+
+            Assert.Equal(SessionStatus.CarriedForward, carried.Status);
+            Assert.NotEqual(oneWeekOut, DateOnly.FromDateTime(carried.ScheduledStartAtUtc));
+        }
+
+        [Fact]
         public async Task CompleteSession_MovesBatchToDormant_WhenCourseFinishes()
         {
             var (batch, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
@@ -1020,6 +1126,44 @@ namespace iucs.readernest.tests
             Assert.Equal(TransactionStatus.Success, settled.Status);
             Assert.StartsWith("RCP-", settled.ReceiptNumber);
             Assert.Contains("pay_123", settled.GatewayTransactionId);
+        }
+
+        [Fact]
+        public async Task GatewaySettlement_CapsAtRemainingBalance_WhenAnotherPaymentAlreadyLanded()
+        {
+            // A parallel checkout attempt and a manual cash payment can both be in flight on
+            // the same invoice; the gateway's late webhook must never push AmountPaid past
+            // Amount just because the transaction it's settling was created for the full price.
+            var parentUser = await _db.SeedUserAsync($"overpay-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.ParentProfiles.Add(parentProfile);
+            _db.Context.PaymentAccounts.Add(new PaymentAccount
+            {
+                Name = "Phonics", Department = Department.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "acc-1",
+            });
+            await _db.Context.SaveChangesAsync();
+
+            var billing = CreateBillingService();
+            var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+
+            // Gateway checkout starts for the full amount...
+            var checkout = await billing.InitiateParentPaymentAsync(
+                parentUser.Id, invoice.Id, new InitiateParentPaymentRequest { MethodKey = "razorpay" });
+
+            // ...but a cash payment covers part of the balance before the webhook arrives.
+            await billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 400 });
+            Assert.Equal(InvoiceStatus.PartiallyPaid, (await _db.Context.Invoices.FindAsync(invoice.Id))!.Status);
+
+            // The gateway now confirms the ORIGINAL full-amount transaction.
+            await billing.SettleGatewayTransactionAsync(checkout.GatewayReference!, true, "pay_late", null);
+
+            var settledInvoice = await _db.Context.Invoices.FirstAsync(i => i.Id == invoice.Id);
+            Assert.Equal(InvoiceStatus.Paid, settledInvoice.Status);
+            Assert.Equal(1000, settledInvoice.AmountPaid); // capped, not 400 + 1000 = 1400
         }
 
         [Fact]
