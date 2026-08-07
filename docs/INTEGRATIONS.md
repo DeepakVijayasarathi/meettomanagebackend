@@ -55,6 +55,17 @@ parameters; cancellations carry `STATUS:CANCELLED`.
 | `VITE_BRAND_LOGO_URL` | Replaces the logo image |
 | `VITE_BRAND_PRIMARY` | Primary/ring theme colour (HSL triple, e.g. `262 83% 58%`) |
 
+## Session recording (Jitsi)
+
+Settings → Integrations → **Jitsi Meet** config fields:
+
+| Field | Effect |
+|---|---|
+| `domain` | Self-hosted Jitsi domain used for both the classroom embed and join links in emails |
+| `autoRecord` | `"true"` (default) auto-starts recording when the teacher joins; `"false"` disables auto-start and leaves recording to the manual "Recording" button on teacher My Classes (or Jitsi's own toolbar button — either way, a finished recording still auto-registers against the session via `recordingLinkAvailable`) |
+
+Auto-start is a no-op until a Jibri pool exists on the deployment — see `JITSI_ARCHITECTURE.md`.
+
 ## Email/SMS reminders
 
 Reminder jobs are built in (session reminders, no-show and delayed-session

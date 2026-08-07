@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Dto.Communication;
 using iucs.readernest.domain.Entities.Communication;
@@ -64,7 +65,13 @@ namespace iucs.readernest.application.Services
                 Type = type,
                 Channel = NotificationChannel.Email,
                 Subject = subject,
-                Body = body,
+                // The in-app bell feed shows this Body directly as text, but every templated
+                // email is rendered from EmailTemplateSeedData.Wrap()'s full branded HTML shell —
+                // callers here only ever pass that (or the equivalent hand-built HTML from
+                // SendEmailAsync), never plain text. Store a stripped-down plain-text copy so
+                // the feed reads as a message instead of raw markup; the real HTML still goes
+                // out over email via _emailSender.SendAsync(body) below, unchanged.
+                Body = PlainTextFromHtml(body),
             };
 
             try
@@ -87,6 +94,36 @@ namespace iucs.readernest.application.Services
             // already run (e.g. as a side effect once the business entity is committed), so
             // this row must persist itself rather than rely on a save that may never come.
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// Strips markup (and the fixed "The Reader Nest" header/footer every templated email
+        /// is wrapped in — email chrome the in-app feed doesn't need, since the app already
+        /// supplies that context) down to a readable plain-text line for the notification feed.
+        /// </summary>
+        private static string PlainTextFromHtml(string html)
+        {
+            if (string.IsNullOrWhiteSpace(html))
+            {
+                return html;
+            }
+
+            var text = Regex.Replace(html, "<[^>]+>", " ");
+            text = System.Net.WebUtility.HtmlDecode(text);
+            text = Regex.Replace(text, @"\s+", " ").Trim();
+
+            const string Header = "The Reader Nest";
+            const string Footer = "The Reader Nest · Read · Write · Speak";
+            if (text.StartsWith(Header, StringComparison.Ordinal))
+            {
+                text = text[Header.Length..].TrimStart();
+            }
+            if (text.EndsWith(Footer, StringComparison.Ordinal))
+            {
+                text = text[..^Footer.Length].TrimEnd();
+            }
+
+            return text;
         }
 
         public async Task<NotificationFeedDto> GetFeedForUserAsync(
