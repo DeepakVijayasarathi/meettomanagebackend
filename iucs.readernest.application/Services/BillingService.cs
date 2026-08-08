@@ -60,8 +60,13 @@ namespace iucs.readernest.application.Services
             {
                 // Only the 5 most recent transactions need their full Invoice/Child
                 // details — bounded at the SQL level (Take(5)) rather than in memory.
+                // Status filter matches the totals aggregate above: without it, a failed
+                // or pending retry attempt shows up here looking like an extra completed
+                // payment for the same invoice (the DTO carries no status the UI surfaces),
+                // while TotalCollected/TransactionCount correctly exclude it — a visible
+                // mismatch between "recent transactions" and the totals right next to it.
                 var recent = await _unitOfWork.Repository<PaymentTransaction>().Query()
-                    .Where(t => t.PaymentAccountId == account.Id)
+                    .Where(t => t.PaymentAccountId == account.Id && t.Status == TransactionStatus.Success)
                     .Include(t => t.Invoice).ThenInclude(i => i.Child)
                     .OrderByDescending(t => t.CreatedAtUtc)
                     .Take(5)
