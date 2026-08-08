@@ -16,6 +16,7 @@ using iucs.readernest.domain.Repository;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -209,6 +210,23 @@ builder.Services.AddCors(options =>
             .AllowCredentials()));
 
 var app = builder.Build();
+
+// Must run before anything that reads Connection.RemoteIpAddress (the login rate
+// limiter below): the API is served through a TLS-terminating reverse proxy in
+// production, so without this every request otherwise reports the proxy's IP,
+// collapsing the per-client limiter into one shared counter. KnownNetworks/
+// KnownProxies are cleared because the proxy's address isn't fixed in this
+// container deployment; ForwardLimit keeps only the immediate hop trusted.
+var forwardedHeadersOptions = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+    ForwardLimit = 1,
+};
+// Defaults only trust loopback; the reverse proxy's actual address isn't fixed
+// in this container deployment, so trust the immediate hop regardless of address.
+forwardedHeadersOptions.KnownNetworks.Clear();
+forwardedHeadersOptions.KnownProxies.Clear();
+app.UseForwardedHeaders(forwardedHeadersOptions);
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
