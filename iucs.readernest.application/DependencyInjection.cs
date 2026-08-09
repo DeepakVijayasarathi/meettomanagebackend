@@ -23,6 +23,7 @@ namespace iucs.readernest.application
             services.AddScoped<IGamificationService, GamificationService>();
             services.AddScoped<IBillingService, BillingService>();
             services.AddScoped<IPayoutService, PayoutService>();
+            services.AddScoped<IProgressReportService, ProgressReportService>();
             services.AddScoped<IAcademicOpsService, AcademicOpsService>();
             services.AddScoped<IEnrollmentService, EnrollmentService>();
             services.AddScoped<IParentPortalService, ParentPortalService>();

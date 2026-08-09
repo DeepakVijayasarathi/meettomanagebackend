@@ -48,6 +48,8 @@ namespace iucs.readernest.api.Data
             await SeedEmailTemplatesAsync(context);
             await ReconcileJoinLinkEmailTemplatesAsync(context);
             await EnsureEmailTemplatesMenuAsync(context);
+            await EnsureProgressReportEmailTemplateAsync(context);
+            await EnsureProgressReportsMenuAsync(context);
 
             await context.SaveChangesAsync();
         }
@@ -346,6 +348,7 @@ namespace iucs.readernest.api.Data
             ("admin", "Insights", "Reports & Analytics", "/admin/reports", "BarChart3", PermissionModule.ReportsAnalytics),
             ("admin", "Insights", "Bulk Email", "/admin/bulk-email", "Mail", PermissionModule.Communication),
             ("admin", "Insights", "Email Templates", "/admin/email-templates", "FileText", PermissionModule.Communication),
+            ("admin", "Insights", "Progress Reports", "/admin/progress-reports", "ScrollText", PermissionModule.Communication),
             ("admin", "System", "Settings & Branding", "/admin/settings", "Settings", PermissionModule.Settings),
             ("teacher", null, "Dashboard", "/teacher", "LayoutDashboard", null),
             ("teacher", "Teaching", "My Classes", "/teacher/classes", "CalendarClock", PermissionModule.SessionCalendarManagement),
@@ -742,6 +745,63 @@ namespace iucs.readernest.api.Data
                 SortOrder = (bulkEmail?.SortOrder ?? 0) + 1,
                 IsActive = true,
                 RequiredModule = PermissionModule.Communication,
+            });
+        }
+
+        /// <summary>
+        /// Retrofits the "Progress Reports" admin menu item into a database that was seeded
+        /// before it existed (mirrors EnsureEmailTemplatesMenuAsync). Fresh databases already
+        /// get it from MenuSeedItems(); this only fires for pre-existing ones.
+        /// </summary>
+        private static async Task EnsureProgressReportsMenuAsync(ReaderNestDbContext context)
+        {
+            if (context.MenuItems.Local.Any(m => m.Portal == "admin" && m.Path == "/admin/progress-reports") ||
+                await context.MenuItems.AnyAsync(m => m.Portal == "admin" && m.Path == "/admin/progress-reports"))
+            {
+                return;
+            }
+
+            var emailTemplates = await context.MenuItems
+                .FirstOrDefaultAsync(m => m.Portal == "admin" && m.Path == "/admin/email-templates");
+
+            context.MenuItems.Add(new MenuItem
+            {
+                Portal = "admin",
+                Section = "Insights",
+                SectionOrder = emailTemplates?.SectionOrder ?? 4,
+                Label = "Progress Reports",
+                Path = "/admin/progress-reports",
+                Icon = "ScrollText",
+                SortOrder = (emailTemplates?.SortOrder ?? 0) + 1,
+                IsActive = true,
+                RequiredModule = PermissionModule.Communication,
+            });
+        }
+
+        /// <summary>
+        /// SeedEmailTemplatesAsync is insert-only, so a live DB that predates this template
+        /// never picks it up on its own — inserts just the "progress-report" row if missing.
+        /// </summary>
+        private static async Task EnsureProgressReportEmailTemplateAsync(ReaderNestDbContext context)
+        {
+            if (context.EmailTemplates.Local.Any(t => t.Key == "progress-report") ||
+                await context.EmailTemplates.AnyAsync(t => t.Key == "progress-report"))
+            {
+                return;
+            }
+
+            var seed = EmailTemplateSeedData.All.First(s => s.Key == "progress-report");
+            context.EmailTemplates.Add(new EmailTemplate
+            {
+                Key = seed.Key,
+                Name = seed.Name,
+                Description = seed.Description,
+                Category = seed.Category,
+                Subject = seed.Subject,
+                HtmlBody = seed.HtmlBody,
+                PlaceholdersJson = JsonSerializer.Serialize(seed.Placeholders),
+                IsActive = true,
+                IsSystem = true,
             });
         }
 

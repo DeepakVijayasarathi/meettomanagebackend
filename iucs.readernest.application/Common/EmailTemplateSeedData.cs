@@ -122,6 +122,15 @@ namespace iucs.readernest.application.Common
                     """,
                     "ChildName", "SessionDate", "Summary"),
 
+                New("progress-report", "Progress Report (Monthly)",
+                    "Sent to the parent when staff send a child's monthly progress report.",
+                    NotificationType.PerformanceSummary, "{{ChildFirstName}}'s progress report — {{Period}}",
+                    """
+                    <p>Here is {{ChildFirstName}}'s progress report for <strong>{{Period}}</strong>:</p>
+                    <p style="background:#F9FAFB;border-radius:6px;padding:16px;white-space:pre-wrap;">{{Content}}</p>
+                    """,
+                    "ChildFirstName", "Period", "Content"),
+
                 New("payout-statement", "Payout Statement (Finalized)",
                     "Sent to the teacher when their monthly payout is finalized.",
                     NotificationType.PayoutStatement, "Your payout statement for {{Period}}",

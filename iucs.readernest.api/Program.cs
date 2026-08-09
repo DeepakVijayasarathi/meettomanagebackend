@@ -85,6 +85,8 @@ builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ICrmNotifier, WebhookCrmNotifier>();
 // Automated reports: weekly KPI digest to admins
 builder.Services.AddHostedService<ReportsDigestBackgroundService>();
+// Progress reports: seeds an empty monthly draft per active child on the 1st
+builder.Services.AddHostedService<ProgressReportsBackgroundService>();
 
 // Authentication: JWT bearer
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));

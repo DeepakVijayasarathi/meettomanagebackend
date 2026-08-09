@@ -4,6 +4,7 @@ using iucs.readernest.application.Dto.Admission;
 using iucs.readernest.application.Dto.Auth;
 using iucs.readernest.application.Dto.Batches;
 using iucs.readernest.application.Dto.Billing;
+using iucs.readernest.application.Dto.Communication;
 using iucs.readernest.application.Dto.Courses;
 using iucs.readernest.application.Dto.Enrollment;
 using iucs.readernest.application.Dto.Payouts;
@@ -14,6 +15,7 @@ using iucs.readernest.application.Services;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Admission;
 using iucs.readernest.domain.Entities.Billing;
+using iucs.readernest.domain.Entities.Communication;
 using iucs.readernest.domain.Entities.Payouts;
 using iucs.readernest.domain.Entities.Sessions;
 using iucs.readernest.domain.Entities.Users;
@@ -54,6 +56,8 @@ namespace iucs.readernest.tests
         private BatchService CreateBatchService() => new(_db.UnitOfWork, _auditLog, _notifications);
 
         private PayoutService CreatePayoutService() => new(_db.UnitOfWork, _auditLog, _notifications);
+
+        private ProgressReportService CreateProgressReportService() => new(_db.UnitOfWork, _auditLog, _notifications);
 
         private SessionService CreateSessionService() => new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, new FakeJitsiTokenService());
 
@@ -1576,6 +1580,67 @@ namespace iucs.readernest.tests
             await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest { Approve = true, ChildFirstName = "New", ChildLastName = "Name" });
             await Assert.ThrowsAsync<ConflictException>(
                 () => service.UpdateFormDataAsync(formId, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Later\"}" }));
+        }
+
+        [Fact]
+        public async Task ProgressReport_SaveThenSend_LocksContentAndEmailsParent()
+        {
+            var parentUser = await _db.SeedUserAsync($"pr-parent-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var child = new Child { ParentProfile = parentProfile, FirstName = "Aarav", LastName = "Kid", IsActive = true };
+            _db.Context.AddRange(parentProfile, child);
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateProgressReportService();
+            var created = await service.EnsureMonthlyDraftsAsync(2026, 8);
+            Assert.Equal(1, created);
+
+            var draft = (await service.ListAsync(2026, 8, child.Id)).Single();
+            Assert.Equal(ProgressReportStatus.Draft, draft.Status);
+            Assert.Equal(string.Empty, draft.Content);
+
+            // Sending an empty draft is rejected — there's nothing for the parent to read yet.
+            await Assert.ThrowsAsync<DomainValidationException>(() => service.SendAsync(draft.Id));
+
+            var saved = await service.SaveContentAsync(draft.Id, new SaveProgressReportContentRequest
+            {
+                Content = "Aarav is making great progress with blending sounds this month.",
+            });
+            Assert.Equal(ProgressReportStatus.Draft, saved.Status);
+
+            var sent = await service.SendAsync(draft.Id);
+            Assert.Equal(ProgressReportStatus.Sent, sent.Status);
+            Assert.NotNull(sent.SentAtUtc);
+
+            var email = Assert.Single(_emailSender.Sent, e => e.To == parentUser.Email);
+            Assert.Contains("blending sounds", email.Body);
+
+            // A sent report is locked: no further content edits, no re-sending.
+            await Assert.ThrowsAsync<DomainValidationException>(
+                () => service.SaveContentAsync(draft.Id, new SaveProgressReportContentRequest { Content = "Edited after send" }));
+            await Assert.ThrowsAsync<DomainValidationException>(() => service.SendAsync(draft.Id));
+        }
+
+        [Fact]
+        public async Task ProgressReport_EnsureMonthlyDrafts_SkipsInactiveChildrenAndIsIdempotent()
+        {
+            var parentUser = await _db.SeedUserAsync($"pr-parent2-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var activeChild = new Child { ParentProfile = parentProfile, FirstName = "Active", LastName = "Kid", IsActive = true };
+            var inactiveChild = new Child { ParentProfile = parentProfile, FirstName = "Inactive", LastName = "Kid", IsActive = false };
+            _db.Context.AddRange(parentProfile, activeChild, inactiveChild);
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateProgressReportService();
+            var firstRun = await service.EnsureMonthlyDraftsAsync(2026, 9);
+            Assert.Equal(1, firstRun); // only the active child gets a draft
+
+            var secondRun = await service.EnsureMonthlyDraftsAsync(2026, 9);
+            Assert.Equal(0, secondRun); // already exists — no duplicate row for the same period
+
+            var reports = await service.ListAsync(2026, 9, null);
+            Assert.Single(reports);
+            Assert.Equal(activeChild.Id, reports[0].ChildId);
         }
 
         private static RecordEngagementRequest EngagementRequest() => new()

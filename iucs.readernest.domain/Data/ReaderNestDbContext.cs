@@ -78,6 +78,7 @@ namespace iucs.readernest.domain.Data
         // Communication & auditing
         public DbSet<Notification> Notifications => Set<Notification>();
         public DbSet<EmailTemplate> EmailTemplates => Set<EmailTemplate>();
+        public DbSet<ProgressReport> ProgressReports => Set<ProgressReport>();
         public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
         // Notes
