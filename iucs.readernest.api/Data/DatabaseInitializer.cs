@@ -85,12 +85,14 @@ namespace iucs.readernest.api.Data
         }
 
         /// <summary>
-        /// One-time migration for the PIN-login switch: a database seeded before this
-        /// change has the admin's PinHash still holding a hash of the OLD Seed:AdminPassword
-        /// value, which will never verify against any PIN. Detects exactly that state (the
-        /// hash still verifies against the old password) and resets it to Seed:AdminPin —
-        /// never touches an account whose credential has already been migrated or changed
-        /// since, so it's safe to leave running indefinitely.
+        /// Migration for the PIN-login switch: keeps the seeded admin account's PinHash
+        /// converged on Seed:AdminPin on every startup. Originally this only fired when the
+        /// hash still verified against the old Seed:AdminPassword (a stricter one-time
+        /// migration), but that requires this value to exactly match whatever the account
+        /// was actually last hashed from — unverifiable from here, and got the account
+        /// locked out in practice when it didn't line up. Unconditional convergence trades
+        /// away "never overwrites a PIN changed since" for "the documented seed PIN always
+        /// works," which matters more while there's no self-service PIN change yet.
         /// </summary>
         private static async Task EnsureAdminPinAsync(
             IServiceProvider services,
@@ -98,9 +100,8 @@ namespace iucs.readernest.api.Data
             IConfiguration configuration)
         {
             var email = configuration["Seed:AdminEmail"];
-            var oldPassword = configuration["Seed:AdminPassword"];
             var newPin = configuration["Seed:AdminPin"];
-            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(oldPassword) || string.IsNullOrWhiteSpace(newPin))
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(newPin))
             {
                 return;
             }
@@ -113,7 +114,7 @@ namespace iucs.readernest.api.Data
             }
 
             var hasher = services.GetRequiredService<IPasswordHasher>();
-            if (hasher.Verify(oldPassword, admin.PinHash))
+            if (!hasher.Verify(newPin, admin.PinHash))
             {
                 admin.PinHash = hasher.Hash(newPin);
             }
