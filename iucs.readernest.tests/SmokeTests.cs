@@ -1699,6 +1699,23 @@ namespace iucs.readernest.tests
             Assert.Equal(activeChild.Id, reports[0].ChildId);
         }
 
+        [Fact]
+        public void HtmlText_PlainTextFromHtml_StripsMarkupAndBrandChrome()
+        {
+            const string rendered =
+                "<div style=\"font-family:Arial,Helvetica,sans-serif;\"><div style=\"background:#4F46E5;\">" +
+                "<span style=\"color:#ffffff;\">The Reader Nest</span></div><div><p>Your child's class starts at " +
+                "<strong>Wed, 05 Aug 2026 3:30 PM (Asia/Kolkata)</strong>.</p><p><a href=\"https://meet.example.com/x\">" +
+                "Join Now</a></p></div><p>The Reader Nest &middot; Read &middot; Write &middot; Speak</p></div>";
+
+            var plain = iucs.readernest.application.Common.HtmlText.PlainTextFromHtml(rendered);
+
+            Assert.DoesNotContain('<', plain);
+            Assert.DoesNotContain('>', plain);
+            Assert.Contains("Your child's class starts at Wed, 05 Aug 2026 3:30 PM (Asia/Kolkata) . Join Now", plain);
+            Assert.DoesNotContain("The Reader Nest", plain); // header/footer chrome stripped, not just tags
+        }
+
         private static RecordEngagementRequest EngagementRequest() => new()
         {
             Events = [new EngagementEntryDto { ParticipantName = "Tester", Type = EngagementEventType.HandRaise }],

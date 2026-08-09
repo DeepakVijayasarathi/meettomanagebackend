@@ -53,6 +53,7 @@ namespace iucs.readernest.api.Data
             await EnsureProgressReportEmailTemplateAsync(context);
             await EnsureProgressReportsMenuAsync(context);
             await EnsureStoreInquiriesMenuAsync(context);
+            await BackfillPlainTextNotificationBodiesAsync(context);
 
             await context.SaveChangesAsync();
         }
@@ -921,6 +922,28 @@ namespace iucs.readernest.api.Data
                 existing.Subject = seed.Subject;
                 existing.HtmlBody = seed.HtmlBody;
                 existing.PlaceholdersJson = JsonSerializer.Serialize(seed.Placeholders);
+            }
+        }
+
+        /// <summary>
+        /// Notification.Body used to store the full rendered HTML email verbatim; the in-app
+        /// bell/feed rendered that raw markup as text (visible as literal "&lt;div style=..."
+        /// in the UI). NotificationService now strips it to plain text at write time via
+        /// <see cref="HtmlText.PlainTextFromHtml"/>, but that only fixed notifications created
+        /// after the change — rows written earlier still hold raw HTML. Runs every startup,
+        /// scoped to rows that still look like markup, so it's cheap once the backlog is clean
+        /// and never touches a row that's already plain text (including one that coincidentally
+        /// used "&lt;"/"&gt;" — re-stripping plain text is a no-op).
+        /// </summary>
+        private static async Task BackfillPlainTextNotificationBodiesAsync(ReaderNestDbContext context)
+        {
+            var stale = await context.Notifications
+                .Where(n => n.Body.Contains('<') && n.Body.Contains('>'))
+                .ToListAsync();
+
+            foreach (var notification in stale)
+            {
+                notification.Body = HtmlText.PlainTextFromHtml(notification.Body);
             }
         }
 
