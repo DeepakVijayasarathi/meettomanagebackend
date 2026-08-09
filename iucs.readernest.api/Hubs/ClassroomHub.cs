@@ -21,10 +21,12 @@ namespace iucs.readernest.api.Hubs
         private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, int>> Scores = new();
 
         private readonly ISessionService _sessionService;
+        private readonly IGamificationService _gamificationService;
 
-        public ClassroomHub(ISessionService sessionService)
+        public ClassroomHub(ISessionService sessionService, IGamificationService gamificationService)
         {
             _sessionService = sessionService;
+            _gamificationService = gamificationService;
         }
 
         public record ParticipantState(string Name, string Role, bool HandRaised);
@@ -89,9 +91,28 @@ namespace iucs.readernest.api.Hubs
             var name = string.IsNullOrWhiteSpace(displayName) ? UserName : displayName.Trim();
             var role = IsTeacher ? "teacher" : "student";
 
+            // A room that goes fully empty (everyone disconnects, even momentarily) has its
+            // in-memory Scores wiped in RemoveFromSessionAsync below — reseed from the durable
+            // leaderboard on the FIRST join of a fresh room so a rejoin never shows the class's
+            // already-earned stars resetting to zero (StudentAward rows are untouched either way;
+            // only this ephemeral cache was ever at risk of looking wrong).
+            var isNewRoom = !Rooms.ContainsKey(sessionId);
             var room = Rooms.GetOrAdd(sessionId, _ => new ConcurrentDictionary<string, ParticipantState>());
             room[Context.ConnectionId] = new ParticipantState(name, role, HandRaised: false);
             Context.Items["sessionId"] = sessionId;
+
+            if (isNewRoom)
+            {
+                var persisted = await _gamificationService.GetLeaderboardAsync(sessionGuid, top: 50, Context.ConnectionAborted);
+                if (persisted.Count > 0)
+                {
+                    var scores = Scores.GetOrAdd(sessionId, _ => new ConcurrentDictionary<string, int>());
+                    foreach (var entry in persisted)
+                    {
+                        scores[entry.ParticipantName] = entry.Stars;
+                    }
+                }
+            }
 
             await Groups.AddToGroupAsync(Context.ConnectionId, Group(sessionId));
             await BroadcastRosterAsync(sessionId);

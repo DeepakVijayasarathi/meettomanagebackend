@@ -28,6 +28,11 @@ namespace iucs.readernest.api.Middleware
             {
                 await WriteProblemAsync(context, ex.StatusCode, ex.Message);
             }
+            catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+            {
+                // Client disconnected before the request finished — not an application error,
+                // and there's no one left to write a response to.
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unhandled exception for {Method} {Path}", context.Request.Method, context.Request.Path);
