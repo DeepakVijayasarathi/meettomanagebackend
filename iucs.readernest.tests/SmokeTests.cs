@@ -22,6 +22,7 @@ using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -43,7 +44,8 @@ namespace iucs.readernest.tests
             _notifications = new NotificationService(_db.UnitOfWork, _emailSender, _emailTemplates, NullLogger<NotificationService>.Instance);
         }
 
-        private AuthService CreateAuthService() => new(_db.UnitOfWork, _hasher, new FakeTokenService(), _auditLog);
+        private AuthService CreateAuthService() =>
+            new(_db.UnitOfWork, _hasher, new FakeTokenService(), _auditLog, _notifications, new ConfigurationBuilder().Build());
 
         private readonly FakeWhatsAppSender _whatsAppSender = new();
 
@@ -59,7 +61,7 @@ namespace iucs.readernest.tests
 
         private ProgressReportService CreateProgressReportService() => new(_db.UnitOfWork, _auditLog, _notifications);
 
-        private StoreService CreateStoreService() => new(_db.UnitOfWork, _auditLog);
+        private StoreService CreateStoreService() => new(_db.UnitOfWork, _auditLog, CreateDemoBookingService());
 
         private SessionService CreateSessionService() => new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, new FakeJitsiTokenService());
 
@@ -478,6 +480,42 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task ListInvoiceTransactions_ReportsAlreadyRefundedAndExcludesRejected()
+        {
+            var parentUser = await _db.SeedUserAsync($"txn-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.AddRange(parentProfile,
+                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+            await _db.Context.SaveChangesAsync();
+            var billing = CreateBillingService();
+            var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+            await billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1000 });
+            var txn = await _db.Context.PaymentTransactions.FirstAsync();
+
+            // One rejected refund (must NOT count against the refundable balance) and one
+            // still-pending request (must count) against the same transaction.
+            var rejected = await billing.RequestRefundAsync(new RequestRefundRequest
+            {
+                PaymentTransactionId = txn.Id, Amount = 400, Reason = "Will be rejected",
+            });
+            await billing.ReviewRefundAsync(rejected.Id, new ReviewRefundRequest { Approve = false });
+            await billing.RequestRefundAsync(new RequestRefundRequest
+            {
+                PaymentTransactionId = txn.Id, Amount = 300, Reason = "Still pending",
+            });
+
+            var rows = await billing.ListInvoiceTransactionsAsync(invoice.Id);
+
+            var row = Assert.Single(rows);
+            Assert.Equal(1000, row.Amount);
+            Assert.Equal(300, row.AlreadyRefunded); // rejected 400 excluded, pending 300 included
+        }
+
+        [Fact]
         public async Task RenewSubscription_ReactivatesLapsedSubscription()
         {
             var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
@@ -709,6 +747,63 @@ namespace iucs.readernest.tests
 
             await Assert.ThrowsAsync<UnauthorizedException>(() =>
                 CreateAuthService().LoginAsync(new LoginRequest { Email = "gone@test.com", Pin = "4821" }));
+        }
+
+        [Fact]
+        public async Task RequestPinReset_ThenResetPin_ChangesPinAndBurnsToken()
+        {
+            var user = await _db.SeedUserAsync("reset@test.com", _hasher.Hash("1234"));
+            var auth = CreateAuthService();
+
+            await auth.RequestPinResetAsync(new ForgotPinRequest { Email = "reset@test.com" });
+
+            var token = await _db.Context.PinResetTokens.FirstAsync(t => t.UserId == user.Id);
+            Assert.Null(token.UsedAtUtc);
+            Assert.Single(_emailSender.Sent); // the reset link actually went out
+
+            await auth.ResetPinAsync(new ResetPinRequest { Token = token.Token, NewPin = "9999" });
+
+            var reloaded = await _db.Context.Users.FirstAsync(u => u.Id == user.Id);
+            Assert.True(_hasher.Verify("9999", reloaded.PinHash));
+            Assert.False(_hasher.Verify("1234", reloaded.PinHash)); // old PIN no longer works
+            var burnedToken = await _db.Context.PinResetTokens.FirstAsync(t => t.Id == token.Id);
+            Assert.NotNull(burnedToken.UsedAtUtc);
+
+            // Single-use: redeeming the same token again must fail, not silently reset again.
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                auth.ResetPinAsync(new ResetPinRequest { Token = token.Token, NewPin = "0000" }));
+        }
+
+        [Fact]
+        public async Task RequestPinReset_UnknownEmail_DoesNothingAndNeverThrows()
+        {
+            var auth = CreateAuthService();
+
+            // No account with this email exists — must complete quietly (no enumeration signal),
+            // never throw NotFoundException or anything else the caller could distinguish.
+            await auth.RequestPinResetAsync(new ForgotPinRequest { Email = "nobody@test.com" });
+
+            Assert.Empty(await _db.Context.PinResetTokens.ToListAsync());
+            Assert.Empty(_emailSender.Sent);
+        }
+
+        [Fact]
+        public async Task ResetPin_ExpiredToken_ThrowsAndLeavesPinUnchanged()
+        {
+            var user = await _db.SeedUserAsync("expired@test.com", _hasher.Hash("1234"));
+            _db.Context.PinResetTokens.Add(new PinResetToken
+            {
+                UserId = user.Id,
+                Token = "expired-token-value",
+                ExpiresAtUtc = DateTime.UtcNow.AddMinutes(-5), // already expired
+            });
+            await _db.Context.SaveChangesAsync();
+
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                CreateAuthService().ResetPinAsync(new ResetPinRequest { Token = "expired-token-value", NewPin = "5555" }));
+
+            var reloaded = await _db.Context.Users.FirstAsync(u => u.Id == user.Id);
+            Assert.True(_hasher.Verify("1234", reloaded.PinHash)); // unchanged
         }
 
         [Fact]
@@ -1636,6 +1731,50 @@ namespace iucs.readernest.tests
             Assert.Equal(StoreInquiryStatus.Contacted, updated.Status);
 
             Assert.Empty(await service.ListInquiriesAsync(StoreInquiryStatus.New));
+        }
+
+        [Fact]
+        public async Task Store_BookDemo_AutoAssignsTeacher_AndCreatesSession()
+        {
+            var teacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            _db.Context.TeacherProfiles.Add(new TeacherProfile { UserId = teacherUser.Id });
+            await _db.Context.SaveChangesAsync();
+
+            var confirmation = await CreateStoreService().BookDemoAsync(new CreateStoreDemoBookingRequest
+            {
+                ParentName = "Visitor Parent",
+                ParentEmail = "visitor@example.com",
+                ParentPhone = "9876500000",
+                ChildName = "Kid",
+                ChildAge = 7,
+                PreferredStartAtUtc = DateTime.UtcNow.AddDays(1),
+            });
+
+            Assert.Equal(30, (confirmation.ScheduledEndAtUtc - confirmation.ScheduledStartAtUtc).TotalMinutes);
+            var booking = await _db.Context.DemoBookings.FirstAsync(b => b.Id == confirmation.Id);
+            Assert.NotNull(booking.ClassSessionId);
+            var session = await _db.Context.ClassSessions.FirstAsync(s => s.Id == booking.ClassSessionId!.Value);
+            Assert.Equal(SessionType.Demo, session.Type);
+            Assert.NotEqual(Guid.Empty, session.TeacherProfileId); // auto-assigned, never left blank
+        }
+
+        [Fact]
+        public async Task Store_BookDemo_RejectsTooSoonAndTooFarOut()
+        {
+            var service = CreateStoreService();
+            var request = new CreateStoreDemoBookingRequest
+            {
+                ParentName = "Visitor Parent",
+                ParentEmail = "visitor2@example.com",
+                ParentPhone = "9876500001",
+                ChildName = "Kid",
+                PreferredStartAtUtc = DateTime.UtcNow.AddMinutes(30), // under the 2-hour lead time
+            };
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => service.BookDemoAsync(request));
+
+            request.PreferredStartAtUtc = DateTime.UtcNow.AddDays(90); // past the 30-day window
+            await Assert.ThrowsAsync<DomainValidationException>(() => service.BookDemoAsync(request));
         }
 
         [Fact]

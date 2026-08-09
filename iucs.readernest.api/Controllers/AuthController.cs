@@ -33,5 +33,27 @@ namespace iucs.readernest.api.Controllers
             var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
             return Ok(await _authService.GetCurrentUserAsync(userId, cancellationToken));
         }
+
+        /// <summary>
+        /// Always responds the same way whether or not the address has an account — the
+        /// frontend shows one fixed "if that email exists, we've sent a link" message either way.
+        /// </summary>
+        [HttpPost("forgot-pin")]
+        [AllowAnonymous]
+        [EnableRateLimiting("pin-reset")]
+        public async Task<IActionResult> ForgotPin(ForgotPinRequest request, CancellationToken cancellationToken)
+        {
+            await _authService.RequestPinResetAsync(request, cancellationToken);
+            return NoContent();
+        }
+
+        [HttpPost("reset-pin")]
+        [AllowAnonymous]
+        [EnableRateLimiting("pin-reset")]
+        public async Task<IActionResult> ResetPin(ResetPinRequest request, CancellationToken cancellationToken)
+        {
+            await _authService.ResetPinAsync(request, cancellationToken);
+            return NoContent();
+        }
     }
 }

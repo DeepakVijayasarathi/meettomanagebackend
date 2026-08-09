@@ -1030,6 +1030,37 @@ namespace iucs.readernest.application.Services
             return ToDto(saved);
         }
 
+        public async Task<IReadOnlyList<PaymentTransactionDto>> ListInvoiceTransactionsAsync(Guid invoiceId, CancellationToken cancellationToken = default)
+        {
+            var transactions = await _unitOfWork.Repository<PaymentTransaction>().Query()
+                .Where(t => t.InvoiceId == invoiceId && t.Status == TransactionStatus.Success)
+                .OrderByDescending(t => t.PaidAtUtc)
+                .ToListAsync(cancellationToken);
+
+            if (transactions.Count == 0)
+            {
+                return [];
+            }
+
+            var transactionIds = transactions.Select(t => t.Id).ToList();
+            var refundedByTransaction = await _unitOfWork.Repository<Refund>().Query()
+                .Where(r => transactionIds.Contains(r.PaymentTransactionId) && r.Status != RefundStatus.Rejected)
+                .GroupBy(r => r.PaymentTransactionId)
+                .Select(g => new { TransactionId = g.Key, Total = g.Sum(r => r.Amount) })
+                .ToDictionaryAsync(g => g.TransactionId, g => g.Total, cancellationToken);
+
+            return transactions.Select(t => new PaymentTransactionDto
+            {
+                Id = t.Id,
+                Amount = t.Amount,
+                Status = t.Status.ToString(),
+                Method = t.Method?.ToString(),
+                PaidAtUtc = t.PaidAtUtc,
+                ReceiptNumber = t.ReceiptNumber,
+                AlreadyRefunded = refundedByTransaction.GetValueOrDefault(t.Id),
+            }).ToList();
+        }
+
         public async Task<IReadOnlyList<RefundDto>> ListRefundsAsync(CancellationToken cancellationToken = default)
         {
             var refunds = await _unitOfWork.Repository<Refund>().Query()

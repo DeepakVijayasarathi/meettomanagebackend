@@ -171,6 +171,25 @@ namespace iucs.readernest.application.Dto.Billing
         public bool AutoRestored { get; set; }
     }
 
+    /// <summary>One payment attempt against an invoice — the unit a refund is requested against.</summary>
+    public class PaymentTransactionDto
+    {
+        public Guid Id { get; set; }
+
+        public decimal Amount { get; set; }
+
+        public string Status { get; set; } = null!;
+
+        public string? Method { get; set; }
+
+        public DateTime? PaidAtUtc { get; set; }
+
+        public string? ReceiptNumber { get; set; }
+
+        /// <summary>Sum of this transaction's non-rejected refunds — how much of it is already spoken for.</summary>
+        public decimal AlreadyRefunded { get; set; }
+    }
+
     public class RefundDto
     {
         public Guid Id { get; set; }

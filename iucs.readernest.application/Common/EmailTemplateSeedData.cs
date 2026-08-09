@@ -57,6 +57,17 @@ namespace iucs.readernest.application.Common
                     """,
                     "FirstName", "Email", "TemporaryPin"),
 
+                New("pin-reset", "Self-Service PIN Reset",
+                    "Sent when someone requests a PIN reset from the login page's \"Forgot your PIN\" link.",
+                    NotificationType.General, "Reset your Reader Nest PIN",
+                    """
+                    <p>Hello {{FirstName}},</p>
+                    <p>We received a request to reset the PIN for your Reader Nest account ({{Email}}).</p>
+                    <p><a href="{{ResetUrl}}" style="display:inline-block;padding:10px 18px;background:#4F46E5;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600;">Set a new PIN</a></p>
+                    <p style="font-size:12px;color:#6b7280;">This link expires in {{ExpiryMinutes}} minutes and can only be used once. If you didn't request this, you can ignore this email — your PIN stays unchanged.</p>
+                    """,
+                    "FirstName", "Email", "ResetUrl", "ExpiryMinutes"),
+
                 New("class-scheduled", "Class Scheduled (Teacher)",
                     "Sent to the teacher when a new session is scheduled for them.",
                     NotificationType.BookingConfirmation, "New class scheduled: {{SessionType}}",

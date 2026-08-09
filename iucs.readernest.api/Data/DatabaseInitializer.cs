@@ -51,6 +51,7 @@ namespace iucs.readernest.api.Data
             await ReconcileWelcomeCredentialsPinTemplateAsync(context);
             await EnsureEmailTemplatesMenuAsync(context);
             await EnsureProgressReportEmailTemplateAsync(context);
+            await EnsurePinResetEmailTemplateAsync(context);
             await EnsureProgressReportsMenuAsync(context);
             await EnsureStoreInquiriesMenuAsync(context);
             await BackfillPlainTextNotificationBodiesAsync(context);
@@ -862,6 +863,34 @@ namespace iucs.readernest.api.Data
             }
 
             var seed = EmailTemplateSeedData.All.First(s => s.Key == "progress-report");
+            context.EmailTemplates.Add(new EmailTemplate
+            {
+                Key = seed.Key,
+                Name = seed.Name,
+                Description = seed.Description,
+                Category = seed.Category,
+                Subject = seed.Subject,
+                HtmlBody = seed.HtmlBody,
+                PlaceholdersJson = JsonSerializer.Serialize(seed.Placeholders),
+                IsActive = true,
+                IsSystem = true,
+            });
+        }
+
+        /// <summary>
+        /// SeedEmailTemplatesAsync is insert-only, so a live DB that predates the self-service
+        /// PIN reset feature never picks it up on its own — inserts just the "pin-reset" row
+        /// if missing, mirroring EnsureProgressReportEmailTemplateAsync.
+        /// </summary>
+        private static async Task EnsurePinResetEmailTemplateAsync(ReaderNestDbContext context)
+        {
+            if (context.EmailTemplates.Local.Any(t => t.Key == "pin-reset") ||
+                await context.EmailTemplates.AnyAsync(t => t.Key == "pin-reset"))
+            {
+                return;
+            }
+
+            var seed = EmailTemplateSeedData.All.First(s => s.Key == "pin-reset");
             context.EmailTemplates.Add(new EmailTemplate
             {
                 Key = seed.Key,

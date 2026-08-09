@@ -151,6 +151,9 @@ namespace iucs.readernest.application.Services
         /// <summary>Manual admin restoration; automatic restoration happens on full payment.</summary>
         Task<FeeSuspensionDto> LiftSuspensionAsync(Guid id, CancellationToken cancellationToken = default);
 
+        /// <summary>Successful payment transactions for one invoice — what a refund can be requested against.</summary>
+        Task<IReadOnlyList<PaymentTransactionDto>> ListInvoiceTransactionsAsync(Guid invoiceId, CancellationToken cancellationToken = default);
+
         // Refund request & tracking workflow
         Task<IReadOnlyList<RefundDto>> ListRefundsAsync(CancellationToken cancellationToken = default);
 

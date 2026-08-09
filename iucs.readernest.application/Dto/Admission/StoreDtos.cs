@@ -80,4 +80,44 @@ namespace iucs.readernest.application.Dto.Admission
         [Required]
         public StoreInquiryStatus Status { get; set; }
     }
+
+    /// <summary>Public "Book a free demo" submission — no account, no login, no teacher choice.</summary>
+    public class CreateStoreDemoBookingRequest
+    {
+        [Required]
+        [MaxLength(150)]
+        public string ParentName { get; set; } = null!;
+
+        [Required]
+        [EmailAddress]
+        [MaxLength(256)]
+        public string ParentEmail { get; set; } = null!;
+
+        [Required]
+        [MaxLength(20)]
+        public string ParentPhone { get; set; } = null!;
+
+        [Required]
+        [MaxLength(150)]
+        public string ChildName { get; set; } = null!;
+
+        [Range(1, 25)]
+        public int? ChildAge { get; set; }
+
+        public Department? Department { get; set; }
+
+        /// <summary>The slot the visitor picked; the service fills in a fixed 30-minute end time.</summary>
+        [Required]
+        public DateTime PreferredStartAtUtc { get; set; }
+    }
+
+    /// <summary>Deliberately minimal — a public caller only needs to know it worked and when.</summary>
+    public class StoreDemoBookingConfirmationDto
+    {
+        public Guid Id { get; set; }
+
+        public DateTime ScheduledStartAtUtc { get; set; }
+
+        public DateTime ScheduledEndAtUtc { get; set; }
+    }
 }

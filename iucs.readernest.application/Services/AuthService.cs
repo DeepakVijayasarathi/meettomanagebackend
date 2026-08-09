@@ -1,31 +1,42 @@
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Dto.Auth;
+using iucs.readernest.application.Helper;
 using iucs.readernest.application.Mappings;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace iucs.readernest.application.Services
 {
     public class AuthService : IAuthService
     {
+        // How long a self-service PIN reset link stays valid after it's emailed.
+        private const int ResetTokenExpiryMinutes = 30;
+
         private readonly IUnitOfWork _unitOfWork;
         private readonly IPasswordHasher _passwordHasher;
         private readonly ITokenService _tokenService;
         private readonly IAuditLogService _auditLog;
+        private readonly INotificationService _notificationService;
+        private readonly IConfiguration _configuration;
 
         public AuthService(
             IUnitOfWork unitOfWork,
             IPasswordHasher passwordHasher,
             ITokenService tokenService,
-            IAuditLogService auditLog)
+            IAuditLogService auditLog,
+            INotificationService notificationService,
+            IConfiguration configuration)
         {
             _unitOfWork = unitOfWork;
             _passwordHasher = passwordHasher;
             _tokenService = tokenService;
             _auditLog = auditLog;
+            _notificationService = notificationService;
+            _configuration = configuration;
         }
 
         public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -69,6 +80,68 @@ namespace iucs.readernest.application.Services
 
             // No new token on refresh-of-self; caller keeps using its current one.
             return BuildResponse(user, permissions, null, defaultRoute);
+        }
+
+        public async Task RequestPinResetAsync(ForgotPinRequest request, CancellationToken cancellationToken = default)
+        {
+            var email = request.Email.Trim().ToLowerInvariant();
+            var user = await _unitOfWork.Repository<User>()
+                .FirstOrDefaultAsync(u => u.Email == email, cancellationToken);
+
+            // Deliberately silent on "no such account" / inactive — an anonymous caller must
+            // never be able to use this endpoint to discover which emails have accounts here.
+            if (user is null || user.Status == UserStatus.Inactive)
+            {
+                return;
+            }
+
+            var token = SecureTokenGenerator.Generate();
+            await _unitOfWork.Repository<PinResetToken>().AddAsync(
+                new PinResetToken
+                {
+                    UserId = user.Id,
+                    Token = token,
+                    ExpiresAtUtc = DateTime.UtcNow.AddMinutes(ResetTokenExpiryMinutes),
+                },
+                cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            var frontendBaseUrl = (_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173").TrimEnd('/');
+            var resetUrl = $"{frontendBaseUrl}/reset-pin?token={Uri.EscapeDataString(token)}";
+
+            await _notificationService.SendTemplatedEmailAsync(
+                user.Id,
+                user.Email,
+                NotificationType.General,
+                "pin-reset",
+                new Dictionary<string, string>
+                {
+                    ["FirstName"] = user.FirstName,
+                    ["Email"] = user.Email,
+                    ["ResetUrl"] = resetUrl,
+                    ["ExpiryMinutes"] = ResetTokenExpiryMinutes.ToString(),
+                },
+                cancellationToken);
+        }
+
+        public async Task ResetPinAsync(ResetPinRequest request, CancellationToken cancellationToken = default)
+        {
+            var resetToken = await _unitOfWork.Repository<PinResetToken>()
+                .FirstOrDefaultAsync(t => t.Token == request.Token, cancellationToken);
+
+            if (resetToken is null || resetToken.UsedAtUtc is not null || resetToken.ExpiresAtUtc < DateTime.UtcNow)
+            {
+                throw new DomainValidationException("This reset link is invalid or has expired. Request a new one.");
+            }
+
+            var user = await _unitOfWork.Repository<User>().GetByIdAsync(resetToken.UserId, cancellationToken)
+                ?? throw new NotFoundException(nameof(User), resetToken.UserId);
+
+            user.PinHash = _passwordHasher.Hash(request.NewPin);
+            resetToken.UsedAtUtc = DateTime.UtcNow;
+
+            await _auditLog.StageAsync(AuditAction.Update, nameof(User), user.Id.ToString(), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
         /// <summary>

@@ -34,6 +34,7 @@ namespace iucs.readernest.domain.Data
         public DbSet<SubAdminPermission> SubAdminPermissions => Set<SubAdminPermission>();
         public DbSet<RoleDefinition> RoleDefinitions => Set<RoleDefinition>();
         public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
+        public DbSet<PinResetToken> PinResetTokens => Set<PinResetToken>();
 
         // Academics
         public DbSet<CourseCategory> CourseCategories => Set<CourseCategory>();

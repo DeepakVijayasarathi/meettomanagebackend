@@ -39,6 +39,17 @@ namespace iucs.readernest.api.Controllers
             var inquiry = await _storeService.CreateInquiryAsync(request, cancellationToken);
             return CreatedAtAction(nameof(Plans), null, inquiry);
         }
+
+        /// <summary>Public "Book a free demo" — no account needed; a teacher is always auto-assigned.</summary>
+        [HttpPost("demo-bookings")]
+        [EnableRateLimiting("store-inquiry")]
+        public async Task<ActionResult<StoreDemoBookingConfirmationDto>> BookDemo(
+            CreateStoreDemoBookingRequest request,
+            CancellationToken cancellationToken)
+        {
+            var confirmation = await _storeService.BookDemoAsync(request, cancellationToken);
+            return CreatedAtAction(nameof(Plans), null, confirmation);
+        }
     }
 
     /// <summary>Admission-team follow-up queue for public store inquiries.</summary>

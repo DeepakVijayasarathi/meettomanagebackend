@@ -54,6 +54,14 @@ namespace iucs.readernest.api.Controllers
             return Ok(await _billingService.RecordPaymentAsync(id, request, cancellationToken));
         }
 
+        /// <summary>Successful payments on this invoice — what a refund can be requested against.</summary>
+        [HttpGet("{id:guid}/transactions")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.View)]
+        public async Task<ActionResult<IReadOnlyList<PaymentTransactionDto>>> ListInvoiceTransactions(Guid id, CancellationToken cancellationToken)
+        {
+            return Ok(await _billingService.ListInvoiceTransactionsAsync(id, cancellationToken));
+        }
+
         /// <summary>Shareable Pay Now link, routed through the invoice's department gateway account.</summary>
         [HttpPost("{id:guid}/payment-link")]
         [HasPermission(PermissionModule.BillingFinance, PermissionAction.Edit)]

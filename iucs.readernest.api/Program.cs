@@ -192,6 +192,18 @@ builder.Services.AddRateLimiter(options =>
                 Window = TimeSpan.FromMinutes(10),
                 QueueLimit = 0,
             }));
+    // Self-service PIN reset (forgot-pin/reset-pin): anonymous and email-enumeration-adjacent
+    // like "login", so it gets the same brute-force-defense shape rather than the looser
+    // "store-inquiry" one.
+    options.AddPolicy("pin-reset", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+            }));
 });
 
 // Authorization: module/action permission policies (Admin passes implicitly)

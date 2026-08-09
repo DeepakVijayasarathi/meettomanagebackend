@@ -11,6 +11,9 @@ namespace iucs.readernest.application.Services
 
         Task<StoreInquiryDto> CreateInquiryAsync(CreateStoreInquiryRequest request, CancellationToken cancellationToken = default);
 
+        /// <summary>Public self-booking: always auto-assigns a teacher, fixed 30-minute slot, no login.</summary>
+        Task<StoreDemoBookingConfirmationDto> BookDemoAsync(CreateStoreDemoBookingRequest request, CancellationToken cancellationToken = default);
+
         Task<IReadOnlyList<StoreInquiryDto>> ListInquiriesAsync(StoreInquiryStatus? status, CancellationToken cancellationToken = default);
 
         Task<StoreInquiryDto> UpdateInquiryStatusAsync(
