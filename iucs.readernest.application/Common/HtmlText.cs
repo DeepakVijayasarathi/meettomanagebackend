@@ -35,9 +35,5 @@ namespace iucs.readernest.application.Common
 
             return text;
         }
-
-        /// <summary>Cheap check for whether a string still contains raw markup worth stripping.</summary>
-        public static bool LooksLikeHtml(string text) =>
-            !string.IsNullOrEmpty(text) && text.Contains('<') && text.Contains('>');
     }
 }

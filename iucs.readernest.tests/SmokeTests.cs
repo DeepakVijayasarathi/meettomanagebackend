@@ -1716,6 +1716,46 @@ namespace iucs.readernest.tests
             Assert.DoesNotContain("The Reader Nest", plain); // header/footer chrome stripped, not just tags
         }
 
+        /// <summary>
+        /// Regression test: the DatabaseInitializer backfill filters Notification.Body with
+        /// `.Contains('<')` (char overload) which Npgsql can't translate to SQL and crashes the
+        /// whole app at startup — caught only by actually running the query through a real EF
+        /// provider, not by unit-testing HtmlText in isolation. Mirrors the exact predicate shape
+        /// used there so a future regression to the char overload fails here too.
+        /// </summary>
+        [Fact]
+        public async Task NotificationQuery_ContainsStringPredicate_TranslatesAndFiltersCorrectly()
+        {
+            var user = await _db.SeedUserAsync($"notif-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var staleHtml = new Notification
+            {
+                RecipientUserId = user.Id,
+                Type = NotificationType.SessionReminder,
+                Channel = NotificationChannel.Email,
+                Subject = "Class starts in 1 hour",
+                Body = "<div style=\"padding:28px;\"><p>Your child's class starts soon.</p></div>",
+                Status = NotificationStatus.Sent,
+            };
+            var alreadyPlain = new Notification
+            {
+                RecipientUserId = user.Id,
+                Type = NotificationType.SessionReminder,
+                Channel = NotificationChannel.Email,
+                Subject = "Class starts in 1 hour",
+                Body = "Your child's class starts at Sat, 08 Aug 2026 3:30 PM. Join Now",
+                Status = NotificationStatus.Sent,
+            };
+            _db.Context.AddRange(staleHtml, alreadyPlain);
+            await _db.Context.SaveChangesAsync();
+
+            var matched = await _db.Context.Notifications
+                .Where(n => n.Body.Contains("<") && n.Body.Contains(">"))
+                .ToListAsync();
+
+            Assert.Contains(matched, n => n.Id == staleHtml.Id);
+            Assert.DoesNotContain(matched, n => n.Id == alreadyPlain.Id);
+        }
+
         private static RecordEngagementRequest EngagementRequest() => new()
         {
             Events = [new EngagementEntryDto { ParticipantName = "Tester", Type = EngagementEventType.HandRaise }],

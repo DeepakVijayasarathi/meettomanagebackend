@@ -938,7 +938,7 @@ namespace iucs.readernest.api.Data
         private static async Task BackfillPlainTextNotificationBodiesAsync(ReaderNestDbContext context)
         {
             var stale = await context.Notifications
-                .Where(n => n.Body.Contains('<') && n.Body.Contains('>'))
+                .Where(n => n.Body.Contains("<") && n.Body.Contains(">"))
                 .ToListAsync();
 
             foreach (var notification in stale)
