@@ -189,7 +189,28 @@ namespace iucs.readernest.application.Services
             return await GetAsync(booking.Id, cancellationToken);
         }
 
-        /// <summary>Auto-assign: the department-matched active teacher who is free at the slot with the lightest day.</summary>
+        /// <summary>
+        /// Auto-assign: the department-matched active teacher who is free at the slot with the lightest day.
+        /// </summary>
+        /// <remarks>
+        /// KNOWN RACE (found during a 2026-08-09 QA pass, not yet fixed): this reads "is
+        /// anyone busy at this slot" and the caller inserts the new session afterward, with
+        /// no locking or transaction isolation between the two — under Postgres's default
+        /// READ COMMITTED isolation, two concurrent requests for the same slot (now directly
+        /// reachable by any anonymous visitor via POST /api/store/demo-bookings, not just
+        /// staff) can both read "teacher free" before either commits, double-booking the
+        /// same teacher into overlapping demos. Confirmed real by code inspection; NOT
+        /// reproducible in the SQLite test suite (a single ADO.NET connection serializes
+        /// command execution regardless of app-level protection, so SQLite can't exhibit
+        /// this class of race — see the scope note on
+        /// Store_BookDemo_ConcurrentRequestsForSameSlot_MustNotDoubleBookTheOnlyTeacher).
+        /// Left unfixed rather than auto-fixed because the correct fix — either a Postgres
+        /// exclusion constraint on (TeacherProfileId, time range) or wrapping this in a
+        /// SERIALIZABLE transaction with retry-on-conflict — requires extending the shared
+        /// IUnitOfWork abstraction (~20 dependent services) or a Postgres-specific migration,
+        /// and this environment has no Postgres available to verify either against a real
+        /// concurrent-writer scenario before shipping it.
+        /// </remarks>
         private async Task<Guid> AutoAssignTeacherAsync(CreateDemoBookingRequest request, CancellationToken cancellationToken)
         {
             IQueryable<TeacherProfile> teachers = _unitOfWork.Repository<TeacherProfile>().Query()

@@ -480,6 +480,80 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task Refund_ReviewedConcurrently_MustNotDoubleProcessTheSameRefund()
+        {
+            // IMPORTANT SCOPE NOTE: same caveat as Store_BookDemo_ConcurrentRequestsForSameSlot_
+            // MustNotDoubleBookTheOnlyTeacher — both DbContexts here share one SqliteConnection,
+            // which serializes command execution at the ADO.NET level regardless of what (if
+            // any) protection ReviewRefundAsync's check-then-mutate has. A pass here is NOT
+            // proof the real, two-connection Postgres race is safe; see ReviewRefundAsync's
+            // doc comment and the QA report for the reasoning and the recommended (unimplemented)
+            // fix. What this test DOES prove: the gateway-call side effect is idempotent w.r.t.
+            // a single logical approval under this harness, and a genuine double-approval (if it
+            // ever slips through) fails loudly here instead of silently double-refunding money.
+            var parentUser = await _db.SeedUserAsync($"ref-race-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.AddRange(parentProfile,
+                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+            await _db.Context.SaveChangesAsync();
+
+            var gateway = new FakePaymentGateway();
+            var billing1 = CreateBillingService(gateway);
+            var invoice = await billing1.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+            await billing1.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1000 });
+            var txn = await _db.Context.PaymentTransactions.FirstAsync();
+            var refund = await billing1.RequestRefundAsync(new RequestRefundRequest
+            {
+                PaymentTransactionId = txn.Id, Amount = 250, Reason = "Race test",
+            });
+
+            // Two independent service graphs on two independent DbContexts sharing the same
+            // underlying SQLite connection — the same shape as two concurrent HTTP requests
+            // (e.g. an accidental admin double-click, or two admins reviewing the same queue)
+            // each getting their own scoped DbContext in ASP.NET Core. Both approve the SAME
+            // refund; the same shared FakePaymentGateway lets us catch a double-disbursement
+            // even if both writers somehow "succeed" at the DB layer.
+            var (context2, uow2) = _db.CreateConcurrentSession();
+            var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
+            var billing2 = new BillingService(uow2, auditLog2, gateway, _notifications);
+
+            var task1 = billing1.ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = true });
+            var task2 = billing2.ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = true });
+
+            Exception? failure = null;
+            try
+            {
+                await Task.WhenAll(task1, task2);
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+
+            if (gateway.RefundCallCount > 1)
+            {
+                Assert.Fail(
+                    $"Double-refund race confirmed: the payment gateway was asked to refund the same " +
+                    $"transaction {gateway.RefundCallCount} times from two concurrent approvals, with no " +
+                    $"rejection. (Task fault, if any: {failure?.Message ?? "none — both requests succeeded"})");
+            }
+
+            Assert.Equal(1, gateway.RefundCallCount);
+            Assert.NotNull(failure);
+            Assert.Contains("already", failure!.InnerException?.Message ?? failure.Message);
+
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            Assert.Equal(RefundStatus.Processed, (await verifyContext.Refunds.FirstAsync(r => r.Id == refund.Id)).Status);
+
+            context2.Dispose();
+            verifyContext.Dispose();
+        }
+
+        [Fact]
         public async Task ListInvoiceTransactions_ReportsAlreadyRefundedAndExcludesRejected()
         {
             var parentUser = await _db.SeedUserAsync($"txn-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
@@ -1756,6 +1830,86 @@ namespace iucs.readernest.tests
             var session = await _db.Context.ClassSessions.FirstAsync(s => s.Id == booking.ClassSessionId!.Value);
             Assert.Equal(SessionType.Demo, session.Type);
             Assert.NotEqual(Guid.Empty, session.TeacherProfileId); // auto-assigned, never left blank
+        }
+
+        [Fact]
+        public async Task Store_BookDemo_ConcurrentRequestsForSameSlot_MustNotDoubleBookTheOnlyTeacher()
+        {
+            // IMPORTANT SCOPE NOTE: this guards against a *gross* regression (e.g. the
+            // busy-check being deleted outright) — it is NOT proof that the underlying
+            // check-then-insert is safe under genuine concurrent writers. Both DbContexts
+            // here share one SqliteConnection, and a single ADO.NET connection object only
+            // ever runs one command at a time, so this harness can't reproduce the real
+            // race: two separate requests, each on Postgres's default READ COMMITTED
+            // isolation, can both read "teacher free" before either has inserted its
+            // session. That race is real in production and is NOT fixed by this test
+            // passing — see DemoBookingService.AutoAssignTeacherAsync's doc comment and
+            // the QA report for the reasoning and the recommended (unimplemented) fix.
+            var teacherUser = await _db.SeedUserAsync($"race-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            _db.Context.TeacherProfiles.Add(new TeacherProfile { UserId = teacherUser.Id });
+            await _db.Context.SaveChangesAsync();
+
+            var start = DateTime.UtcNow.AddDays(1);
+
+            // Two independent service graphs on two independent DbContexts sharing the same
+            // underlying SQLite connection — the same shape as two concurrent HTTP requests
+            // each getting their own scoped DbContext in ASP.NET Core.
+            var (context2, uow2) = _db.CreateConcurrentSession();
+            var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
+            var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
+            var service1 = CreateStoreService();
+            var service2 = new StoreService(
+                uow2, auditLog2,
+                new DemoBookingService(uow2, auditLog2, _emailSender, emailTemplates2, new FakeCrmNotifier(), new FakeJitsiTokenService()));
+
+            var request1 = new CreateStoreDemoBookingRequest
+            {
+                ParentName = "Parent One", ParentEmail = "race1@test.com", ParentPhone = "9000000001",
+                ChildName = "Kid One", PreferredStartAtUtc = start,
+            };
+            var request2 = new CreateStoreDemoBookingRequest
+            {
+                ParentName = "Parent Two", ParentEmail = "race2@test.com", ParentPhone = "9000000002",
+                ChildName = "Kid Two", PreferredStartAtUtc = start, // identical, fully-overlapping slot
+            };
+
+            var task1 = service1.BookDemoAsync(request1);
+            var task2 = service2.BookDemoAsync(request2);
+
+            Exception? failure = null;
+            try
+            {
+                await Task.WhenAll(task1, task2);
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+            }
+
+            // Ground truth: how many demo sessions actually landed on the single teacher
+            // for this exact slot, read fresh from a third, independent context.
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            var overlapping = await verifyContext.ClassSessions
+                .Where(s => s.Type == SessionType.Demo && s.ScheduledStartAtUtc == start)
+                .CountAsync();
+
+            if (overlapping > 1)
+            {
+                Assert.Fail(
+                    $"Double-booking race confirmed: {overlapping} overlapping demo sessions were created for the " +
+                    "same teacher and time slot from two concurrent requests, with no rejection. " +
+                    $"(Task fault, if any: {failure?.Message ?? "none — both requests succeeded"})");
+            }
+
+            // If it didn't double-book, exactly one request must have succeeded and the
+            // other must have failed with the expected "no teacher available" message —
+            // a silent no-op or a mismatched error would itself be a bug.
+            Assert.Equal(1, overlapping);
+            Assert.NotNull(failure);
+            Assert.Contains("No teacher is available", failure!.InnerException?.Message ?? failure.Message);
+
+            context2.Dispose();
+            verifyContext.Dispose();
         }
 
         [Fact]

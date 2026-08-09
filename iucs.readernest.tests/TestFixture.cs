@@ -68,6 +68,9 @@ namespace iucs.readernest.tests
         /// <summary>References set here report Paid on the next status poll (drives reconcile tests).</summary>
         public HashSet<string> PaidReferences { get; } = new();
 
+        /// <summary>Lets concurrency tests prove (or disprove) a double-disbursement, not just a double DB row.</summary>
+        public int RefundCallCount { get; private set; }
+
         public Task<PaymentLinkResult> CreatePaymentLinkAsync(
             Invoice invoice,
             PaymentAccount account,
@@ -87,6 +90,7 @@ namespace iucs.readernest.tests
             decimal amount,
             CancellationToken cancellationToken = default)
         {
+            RefundCallCount++;
             return Task.FromResult(new RefundResult { GatewayRefundId = $"TEST-REFUND-{transaction.Id}" });
         }
 
@@ -195,6 +199,22 @@ namespace iucs.readernest.tests
         public ReaderNestDbContext Context { get; }
 
         public IUnitOfWork UnitOfWork { get; }
+
+        /// <summary>
+        /// A second, independent DbContext/UnitOfWork on the same underlying SQLite
+        /// connection — simulates the second scoped DbContext ASP.NET Core would hand a
+        /// concurrent HTTP request, for tests that need to prove (or disprove) a
+        /// time-of-check-to-time-of-use race between two "simultaneous" requests.
+        /// </summary>
+        public (ReaderNestDbContext Context, IUnitOfWork UnitOfWork) CreateConcurrentSession()
+        {
+            var options = new DbContextOptionsBuilder<ReaderNestDbContext>()
+                .UseSqlite(_connection)
+                .AddInterceptors(new AuditableEntityInterceptor(CurrentUser))
+                .Options;
+            var context = new ReaderNestDbContext(options);
+            return (context, new UnitOfWork(context));
+        }
 
         public async Task<User> SeedUserAsync(
             string email,

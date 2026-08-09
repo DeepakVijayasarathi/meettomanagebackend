@@ -1104,6 +1104,29 @@ namespace iucs.readernest.application.Services
             return ToDto(saved);
         }
 
+        /// <remarks>
+        /// KNOWN RACE (found during a 2026-08-09 QA pass, not yet fixed): this reads the
+        /// refund's Status, checks it's still Requested, and mutates it afterward, with no
+        /// locking or transaction isolation between the two — under Postgres's default READ
+        /// COMMITTED isolation, two concurrent approvals of the SAME refund (an admin
+        /// double-click, or two admins working the same queue) can both read "still
+        /// Requested" before either commits. For a gateway-settled transaction this doesn't
+        /// just double-write a DB row: it calls _paymentGateway.RefundAsync twice, i.e. a
+        /// real, user-visible double refund of actual money. Same root cause and same shape
+        /// as DemoBookingService.AutoAssignTeacherAsync's known race (see its remarks) —
+        /// confirmed real by code inspection; NOT reproducible in the SQLite test suite (a
+        /// single ADO.NET connection serializes command execution regardless of app-level
+        /// protection — see the scope note on
+        /// Refund_ReviewedConcurrently_MustNotDoubleProcessTheSameRefund). Left unfixed
+        /// rather than auto-fixed for the identical reason: the correct fix (a SERIALIZABLE
+        /// transaction with retry-on-conflict, or a DB-level guard such as an optimistic
+        /// concurrency token on Refund.Status) requires extending the shared IUnitOfWork
+        /// abstraction (~20 dependent services) or a Postgres-specific change, and this
+        /// environment has no Postgres available to verify either against a real
+        /// concurrent-writer scenario before shipping it. Of the two known instances this is
+        /// the higher-severity one — it moves real money — so if only one gets fixed, fix
+        /// this one first.
+        /// </remarks>
         public async Task<RefundDto> ReviewRefundAsync(Guid id, ReviewRefundRequest request, CancellationToken cancellationToken = default)
         {
             // Load tracked (Query() is AsNoTracking; mutating that never persists).
