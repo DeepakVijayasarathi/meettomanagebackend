@@ -34,5 +34,7 @@ namespace iucs.readernest.application.Services
         Task<Resource> GetForTeacherDownloadAsync(Guid userId, Guid id, CancellationToken cancellationToken = default);
 
         Task GrantAccessAsync(Guid resourceId, GrantResourceAccessRequest request, CancellationToken cancellationToken = default);
+
+        Task<ResourceDto> UpdateAsync(Guid id, UpdateResourceRequest request, CancellationToken cancellationToken = default);
     }
 }

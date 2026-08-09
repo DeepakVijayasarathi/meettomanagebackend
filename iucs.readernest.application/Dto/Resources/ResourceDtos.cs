@@ -56,6 +56,12 @@ namespace iucs.readernest.application.Dto.Resources
         public string? Description { get; set; }
     }
 
+    public class UpdateResourceRequest
+    {
+        /// <summary>Business rule: only worksheets can be downloadable; reading books stay view-only regardless.</summary>
+        public bool IsDownloadable { get; set; }
+    }
+
     public class GrantResourceAccessRequest
     {
         [Required]

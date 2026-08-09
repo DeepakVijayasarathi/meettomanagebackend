@@ -183,7 +183,7 @@ namespace iucs.readernest.api.Hubs
         }
 
         /// <summary>Student answer: correct answers score a star; the leaderboard broadcasts live.</summary>
-        public async Task AnswerQuiz(string sessionId, int questionIndex, bool correct)
+        public async Task AnswerQuiz(string sessionId, int questionIndex, int selectedIndex, bool correct)
         {
             if (!IsJoined(sessionId))
             {
@@ -197,7 +197,7 @@ namespace iucs.readernest.api.Hubs
                 scores.AddOrUpdate(name, 1, (_, current) => current + 1);
             }
 
-            await Clients.Group(Group(sessionId)).SendAsync("QuizAnswer", name, questionIndex, correct);
+            await Clients.Group(Group(sessionId)).SendAsync("QuizAnswer", name, questionIndex, selectedIndex, correct);
             await SendLeaderboardAsync(sessionId);
         }
 

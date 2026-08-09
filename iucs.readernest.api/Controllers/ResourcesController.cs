@@ -135,6 +135,17 @@ namespace iucs.readernest.api.Controllers
             return PhysicalFile(absolutePath, mimeType, $"{resource.Title}{Path.GetExtension(resource.FileUrl)}");
         }
 
+        [HttpPut("{id:guid}")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
+        [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Edit)]
+        public async Task<ActionResult<ResourceDto>> Update(
+            Guid id,
+            UpdateResourceRequest request,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await _resourceService.UpdateAsync(id, request, cancellationToken));
+        }
+
         [HttpPost("{id:guid}/grants")]
         [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
         [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Edit)]

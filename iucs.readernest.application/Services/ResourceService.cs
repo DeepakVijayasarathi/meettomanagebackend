@@ -249,5 +249,22 @@ namespace iucs.readernest.application.Services
             await _auditLog.StageAsync(AuditAction.Update, nameof(ResourceAccess), resourceId.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
+
+        public async Task<ResourceDto> UpdateAsync(
+            Guid id,
+            UpdateResourceRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var resource = await _unitOfWork.Repository<Resource>().GetByIdAsync(id, cancellationToken)
+                ?? throw new NotFoundException(nameof(Resource), id);
+
+            // Same rule CreateAsync enforces: reading books never become downloadable.
+            resource.IsDownloadable = resource.Type == ResourceType.ReadingBook ? false : request.IsDownloadable;
+
+            await _auditLog.StageAsync(AuditAction.Update, nameof(Resource), resource.Id.ToString(), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            return resource.ToDto();
+        }
     }
 }
