@@ -146,11 +146,11 @@ namespace iucs.readernest.application.Services
                     ?? throw new NotFoundException(nameof(RoleDefinition), request.RoleDefinitionId.Value);
             }
 
-            var temporaryPassword = TemporaryPasswordGenerator.Generate();
+            var temporaryPin = TemporaryPinGenerator.Generate();
             var user = new User
             {
                 Email = email,
-                PasswordHash = _passwordHasher.Hash(temporaryPassword),
+                PinHash = _passwordHasher.Hash(temporaryPin),
                 FirstName = request.FirstName.Trim(),
                 LastName = request.LastName?.Trim() ?? string.Empty,
                 Phone = request.Phone,
@@ -193,7 +193,7 @@ namespace iucs.readernest.application.Services
             }
 
             // Requirement: the account holder receives login credentials on creation.
-            // The plain-text temp password lives only in this email, never in the database.
+            // The plain-text temp PIN lives only in this email, never in the database.
             await _notifications.SendTemplatedEmailAsync(
                 user.Id,
                 user.Email,
@@ -203,7 +203,7 @@ namespace iucs.readernest.application.Services
                 {
                     ["FirstName"] = user.FirstName,
                     ["Email"] = user.Email,
-                    ["TemporaryPassword"] = temporaryPassword,
+                    ["TemporaryPin"] = temporaryPin,
                 },
                 cancellationToken);
 
@@ -444,7 +444,7 @@ namespace iucs.readernest.application.Services
                 ?? throw new NotFoundException(nameof(User), userId);
 
             // Gate on the channel's integration being switched on (is_enabled). Do this
-            // before regenerating the password so a disabled channel changes nothing.
+            // before regenerating the PIN so a disabled channel changes nothing.
             var channelKey = channel switch
             {
                 CredentialChannel.WhatsApp => "whatsapp",
@@ -457,23 +457,23 @@ namespace iucs.readernest.application.Services
                     $"{channel} delivery is turned off. Enable it in Settings → Integrations first.");
             }
 
-            var temporaryPassword = TemporaryPasswordGenerator.Generate();
+            var temporaryPin = TemporaryPinGenerator.Generate();
             var welcomeTokens = new Dictionary<string, string>
             {
                 ["FirstName"] = user.FirstName,
                 ["Email"] = user.Email,
-                ["TemporaryPassword"] = temporaryPassword,
+                ["TemporaryPin"] = temporaryPin,
             };
             // WhatsApp/SMS are plain-text transports, not part of the Email Template Master.
             var plainBody =
                 $"Hello {user.FirstName},\n\nYour Reader Nest account is ready.\n\n" +
-                $"Login: {user.Email}\nTemporary password: {temporaryPassword}\n\n" +
-                "Please sign in and change your password.";
+                $"Login: {user.Email}\nTemporary PIN: {temporaryPin}\n\n" +
+                "Please sign in with this PIN. Contact your admin if you need it changed.";
             var (subject, emailHtmlBody) = await _emailTemplateService.RenderAsync(
                 "welcome-credentials", welcomeTokens, cancellationToken);
 
-            // Deliver BEFORE resetting the password: if the send fails we must not
-            // leave the account with a new password nobody received. The senders
+            // Deliver BEFORE resetting the PIN: if the send fails we must not
+            // leave the account with a new PIN nobody received. The senders
             // throw on failure so the admin gets a clear reason.
             var notificationChannel = NotificationChannel.Email;
             try
@@ -514,7 +514,7 @@ namespace iucs.readernest.application.Services
                 throw new DomainValidationException($"Could not send the {channel} message: {ex.Message}");
             }
 
-            user.PasswordHash = _passwordHasher.Hash(temporaryPassword);
+            user.PinHash = _passwordHasher.Hash(temporaryPin);
             _unitOfWork.Repository<User>().Update(user);
 
             await _unitOfWork.Repository<Notification>().AddAsync(

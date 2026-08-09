@@ -682,31 +682,31 @@ namespace iucs.readernest.tests
         [Fact]
         public async Task Login_Succeeds_WithValidCredentials()
         {
-            await _db.SeedUserAsync("admin@test.com", _hasher.Hash("Secret@123"), UserRole.Admin);
+            await _db.SeedUserAsync("admin@test.com", _hasher.Hash("4821"), UserRole.Admin);
 
             var response = await CreateAuthService().LoginAsync(
-                new LoginRequest { Email = "admin@test.com", Password = "Secret@123" });
+                new LoginRequest { Email = "admin@test.com", Pin = "4821" });
 
             Assert.Equal("test-token", response.AccessToken);
             Assert.Equal(UserRole.Admin, response.User.Role);
         }
 
         [Fact]
-        public async Task Login_Fails_WithWrongPassword()
+        public async Task Login_Fails_WithWrongPin()
         {
-            await _db.SeedUserAsync("admin@test.com", _hasher.Hash("Secret@123"), UserRole.Admin);
+            await _db.SeedUserAsync("admin@test.com", _hasher.Hash("4821"), UserRole.Admin);
 
             await Assert.ThrowsAsync<UnauthorizedException>(() =>
-                CreateAuthService().LoginAsync(new LoginRequest { Email = "admin@test.com", Password = "nope" }));
+                CreateAuthService().LoginAsync(new LoginRequest { Email = "admin@test.com", Pin = "0000" }));
         }
 
         [Fact]
         public async Task Login_Blocks_InactiveUser()
         {
-            await _db.SeedUserAsync("gone@test.com", _hasher.Hash("Secret@123"), status: UserStatus.Inactive);
+            await _db.SeedUserAsync("gone@test.com", _hasher.Hash("4821"), status: UserStatus.Inactive);
 
             await Assert.ThrowsAsync<UnauthorizedException>(() =>
-                CreateAuthService().LoginAsync(new LoginRequest { Email = "gone@test.com", Password = "Secret@123" }));
+                CreateAuthService().LoginAsync(new LoginRequest { Email = "gone@test.com", Pin = "4821" }));
         }
 
         [Fact]
@@ -723,7 +723,7 @@ namespace iucs.readernest.tests
             Assert.Equal("parent@example.com", dto.Email);
             Assert.Single(_db.Context.ParentProfiles);
             var email = Assert.Single(_emailSender.Sent);
-            Assert.Contains("Temporary password", email.Body);
+            Assert.Contains("PIN", email.Body);
         }
 
         [Fact]

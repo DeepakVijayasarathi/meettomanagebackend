@@ -10,7 +10,7 @@ namespace iucs.readernest.application.Dto.Auth
         public string Email { get; set; } = null!;
 
         [Required]
-        [MaxLength(128)]
-        public string Password { get; set; } = null!;
+        [RegularExpression(@"^\d{4}$", ErrorMessage = "PIN must be exactly 4 digits.")]
+        public string Pin { get; set; } = null!;
     }
 }

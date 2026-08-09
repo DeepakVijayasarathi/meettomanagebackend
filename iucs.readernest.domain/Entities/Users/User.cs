@@ -15,8 +15,9 @@ namespace iucs.readernest.domain.Entities.Users
         [MaxLength(256)]
         public string Email { get; set; } = null!;
 
+        /// <summary>Bcrypt hash of the account's numeric login PIN.</summary>
         [MaxLength(512)]
-        public string PasswordHash { get; set; } = null!;
+        public string PinHash { get; set; } = null!;
 
         [MaxLength(100)]
         public string FirstName { get; set; } = null!;

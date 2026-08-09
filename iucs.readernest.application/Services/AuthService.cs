@@ -34,9 +34,9 @@ namespace iucs.readernest.application.Services
             var user = await _unitOfWork.Repository<User>()
                 .FirstOrDefaultAsync(u => u.Email == email, cancellationToken);
 
-            if (user is null || !_passwordHasher.Verify(request.Password, user.PasswordHash))
+            if (user is null || !_passwordHasher.Verify(request.Pin, user.PinHash))
             {
-                throw new UnauthorizedException("Invalid email or password.");
+                throw new UnauthorizedException("Invalid email or PIN.");
             }
 
             if (user.Status == UserStatus.Inactive)
