@@ -59,6 +59,8 @@ namespace iucs.readernest.tests
 
         private ProgressReportService CreateProgressReportService() => new(_db.UnitOfWork, _auditLog, _notifications);
 
+        private StoreService CreateStoreService() => new(_db.UnitOfWork, _auditLog);
+
         private SessionService CreateSessionService() => new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, new FakeJitsiTokenService());
 
         private BillingService CreateBillingService() => new(_db.UnitOfWork, _auditLog, new FakePaymentGateway(), _notifications);
@@ -682,31 +684,31 @@ namespace iucs.readernest.tests
         [Fact]
         public async Task Login_Succeeds_WithValidCredentials()
         {
-            await _db.SeedUserAsync("admin@test.com", _hasher.Hash("Secret@123"), UserRole.Admin);
+            await _db.SeedUserAsync("admin@test.com", _hasher.Hash("4821"), UserRole.Admin);
 
             var response = await CreateAuthService().LoginAsync(
-                new LoginRequest { Email = "admin@test.com", Password = "Secret@123" });
+                new LoginRequest { Email = "admin@test.com", Pin = "4821" });
 
             Assert.Equal("test-token", response.AccessToken);
             Assert.Equal(UserRole.Admin, response.User.Role);
         }
 
         [Fact]
-        public async Task Login_Fails_WithWrongPassword()
+        public async Task Login_Fails_WithWrongPin()
         {
-            await _db.SeedUserAsync("admin@test.com", _hasher.Hash("Secret@123"), UserRole.Admin);
+            await _db.SeedUserAsync("admin@test.com", _hasher.Hash("4821"), UserRole.Admin);
 
             await Assert.ThrowsAsync<UnauthorizedException>(() =>
-                CreateAuthService().LoginAsync(new LoginRequest { Email = "admin@test.com", Password = "nope" }));
+                CreateAuthService().LoginAsync(new LoginRequest { Email = "admin@test.com", Pin = "0000" }));
         }
 
         [Fact]
         public async Task Login_Blocks_InactiveUser()
         {
-            await _db.SeedUserAsync("gone@test.com", _hasher.Hash("Secret@123"), status: UserStatus.Inactive);
+            await _db.SeedUserAsync("gone@test.com", _hasher.Hash("4821"), status: UserStatus.Inactive);
 
             await Assert.ThrowsAsync<UnauthorizedException>(() =>
-                CreateAuthService().LoginAsync(new LoginRequest { Email = "gone@test.com", Password = "Secret@123" }));
+                CreateAuthService().LoginAsync(new LoginRequest { Email = "gone@test.com", Pin = "4821" }));
         }
 
         [Fact]
@@ -723,7 +725,7 @@ namespace iucs.readernest.tests
             Assert.Equal("parent@example.com", dto.Email);
             Assert.Single(_db.Context.ParentProfiles);
             var email = Assert.Single(_emailSender.Sent);
-            Assert.Contains("Temporary password", email.Body);
+            Assert.Contains("PIN", email.Body);
         }
 
         [Fact]
@@ -1580,6 +1582,60 @@ namespace iucs.readernest.tests
             await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest { Approve = true, ChildFirstName = "New", ChildLastName = "Name" });
             await Assert.ThrowsAsync<ConflictException>(
                 () => service.UpdateFormDataAsync(formId, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Later\"}" }));
+        }
+
+        [Fact]
+        public async Task Store_PublicPlans_OnlyListsActivePlans()
+        {
+            var active = new PackagePlan { Name = "Active Plan", BillingType = BillingType.Subscription, BillingCycle = BillingCycle.Monthly, Price = 1500, IsActive = true };
+            var inactive = new PackagePlan { Name = "Retired Plan", BillingType = BillingType.Subscription, BillingCycle = BillingCycle.Monthly, Price = 1200, IsActive = false };
+            _db.Context.AddRange(active, inactive);
+            await _db.Context.SaveChangesAsync();
+
+            var plans = await CreateStoreService().ListPublicPlansAsync();
+
+            Assert.Contains(plans, p => p.Id == active.Id);
+            Assert.DoesNotContain(plans, p => p.Id == inactive.Id);
+        }
+
+        [Fact]
+        public async Task Store_CreateInquiry_RejectsInactivePlan_AndAdminCanTransitionStatus()
+        {
+            var plan = new PackagePlan { Name = "Phonics Trial", BillingType = BillingType.Subscription, BillingCycle = BillingCycle.Monthly, Price = 1800, IsActive = true };
+            var retired = new PackagePlan { Name = "Old Plan", BillingType = BillingType.Subscription, BillingCycle = BillingCycle.Monthly, Price = 900, IsActive = false };
+            _db.Context.AddRange(plan, retired);
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateStoreService();
+
+            await Assert.ThrowsAsync<NotFoundException>(() => service.CreateInquiryAsync(new CreateStoreInquiryRequest
+            {
+                PackagePlanId = retired.Id,
+                ParentName = "Rohit Kapoor",
+                ParentEmail = "rohit@example.com",
+                ParentPhone = "9876543210",
+                ChildName = "Aarav",
+            }));
+
+            var inquiry = await service.CreateInquiryAsync(new CreateStoreInquiryRequest
+            {
+                PackagePlanId = plan.Id,
+                ParentName = "Rohit Kapoor",
+                ParentEmail = "Rohit@Example.com",
+                ParentPhone = "9876543210",
+                ChildName = "Aarav",
+                ChildAge = 6,
+            });
+            Assert.Equal(StoreInquiryStatus.New, inquiry.Status);
+            Assert.Equal("rohit@example.com", inquiry.ParentEmail); // normalized lowercase
+
+            var listed = await service.ListInquiriesAsync(StoreInquiryStatus.New);
+            Assert.Single(listed);
+
+            var updated = await service.UpdateInquiryStatusAsync(inquiry.Id, new UpdateStoreInquiryStatusRequest { Status = StoreInquiryStatus.Contacted });
+            Assert.Equal(StoreInquiryStatus.Contacted, updated.Status);
+
+            Assert.Empty(await service.ListInquiriesAsync(StoreInquiryStatus.New));
         }
 
         [Fact]

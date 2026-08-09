@@ -51,11 +51,11 @@ namespace iucs.readernest.application.Common
                     <p>Your Reader Nest account is ready.</p>
                     <table style="width:100%;background:#F9FAFB;border-radius:6px;margin:16px 0;">
                       <tr><td style="padding:12px 16px;color:#6B7280;">Login</td><td style="padding:12px 16px;font-weight:600;">{{Email}}</td></tr>
-                      <tr><td style="padding:12px 16px;color:#6B7280;">Temporary password</td><td style="padding:12px 16px;font-weight:600;">{{TemporaryPassword}}</td></tr>
+                      <tr><td style="padding:12px 16px;color:#6B7280;">PIN</td><td style="padding:12px 16px;font-weight:600;">{{TemporaryPin}}</td></tr>
                     </table>
-                    <p>Please sign in and change your password.</p>
+                    <p>Please sign in with this PIN. Contact your admin if you need it changed.</p>
                     """,
-                    "FirstName", "Email", "TemporaryPassword"),
+                    "FirstName", "Email", "TemporaryPin"),
 
                 New("class-scheduled", "Class Scheduled (Teacher)",
                     "Sent to the teacher when a new session is scheduled for them.",

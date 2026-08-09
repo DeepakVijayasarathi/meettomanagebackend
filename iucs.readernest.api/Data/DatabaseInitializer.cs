@@ -32,6 +32,7 @@ namespace iucs.readernest.api.Data
             }
 
             await SeedAdminAsync(scope.ServiceProvider, context, configuration);
+            await EnsureAdminPinAsync(scope.ServiceProvider, context, configuration);
             await SeedPaymentAccountsAsync(context);
             await SeedSettingsAsync(context);
             await SeedRolesAsync(context);
@@ -47,9 +48,11 @@ namespace iucs.readernest.api.Data
             await EnsureJitsiAutoRecordConfigAsync(context);
             await SeedEmailTemplatesAsync(context);
             await ReconcileJoinLinkEmailTemplatesAsync(context);
+            await ReconcileWelcomeCredentialsPinTemplateAsync(context);
             await EnsureEmailTemplatesMenuAsync(context);
             await EnsureProgressReportEmailTemplateAsync(context);
             await EnsureProgressReportsMenuAsync(context);
+            await EnsureStoreInquiriesMenuAsync(context);
 
             await context.SaveChangesAsync();
         }
@@ -60,8 +63,8 @@ namespace iucs.readernest.api.Data
             IConfiguration configuration)
         {
             var email = configuration["Seed:AdminEmail"];
-            var password = configuration["Seed:AdminPassword"];
-            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+            var pin = configuration["Seed:AdminPin"];
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(pin))
             {
                 return;
             }
@@ -75,11 +78,47 @@ namespace iucs.readernest.api.Data
             context.Users.Add(new User
             {
                 Email = email.Trim().ToLowerInvariant(),
-                PasswordHash = hasher.Hash(password),
+                PinHash = hasher.Hash(pin),
                 FirstName = configuration["Seed:AdminFirstName"] ?? "Reader Nest",
                 LastName = configuration["Seed:AdminLastName"] ?? "Admin",
                 Role = UserRole.Admin,
             });
+        }
+
+        /// <summary>
+        /// Migration for the PIN-login switch: keeps the seeded admin account's PinHash
+        /// converged on Seed:AdminPin on every startup. Originally this only fired when the
+        /// hash still verified against the old Seed:AdminPassword (a stricter one-time
+        /// migration), but that requires this value to exactly match whatever the account
+        /// was actually last hashed from — unverifiable from here, and got the account
+        /// locked out in practice when it didn't line up. Unconditional convergence trades
+        /// away "never overwrites a PIN changed since" for "the documented seed PIN always
+        /// works," which matters more while there's no self-service PIN change yet.
+        /// </summary>
+        private static async Task EnsureAdminPinAsync(
+            IServiceProvider services,
+            ReaderNestDbContext context,
+            IConfiguration configuration)
+        {
+            var email = configuration["Seed:AdminEmail"];
+            var newPin = configuration["Seed:AdminPin"];
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(newPin))
+            {
+                return;
+            }
+
+            var admin = context.Users.Local.FirstOrDefault(u => u.Email == email.Trim().ToLowerInvariant() && u.Role == UserRole.Admin)
+                ?? await context.Users.FirstOrDefaultAsync(u => u.Email == email.Trim().ToLowerInvariant() && u.Role == UserRole.Admin);
+            if (admin is null)
+            {
+                return;
+            }
+
+            var hasher = services.GetRequiredService<IPasswordHasher>();
+            if (!hasher.Verify(newPin, admin.PinHash))
+            {
+                admin.PinHash = hasher.Hash(newPin);
+            }
         }
 
         private static async Task SeedPaymentAccountsAsync(ReaderNestDbContext context)
@@ -339,6 +378,7 @@ namespace iucs.readernest.api.Data
             ("admin", "People", "Users", "/admin/users", "Users", PermissionModule.UserManagement),
             ("admin", "People", "Roles & Permissions", "/admin/permissions", "ShieldCheck", PermissionModule.UserManagement),
             ("admin", "People", "Enrollment Review", "/admin/enrollments", "ClipboardCheck", PermissionModule.Admission),
+            ("admin", "People", "Store Inquiries", "/admin/store-inquiries", "ShoppingBag", PermissionModule.Admission),
             ("admin", "Content", "Content & Resources", "/admin/resources", "FolderOpen", PermissionModule.ContentAccessManagement),
             ("admin", "Finance", "Billing & Finance", "/admin/billing", "Receipt", PermissionModule.BillingFinance),
             ("admin", "Finance", "Packages & Subscriptions", "/admin/packages", "CreditCard", PermissionModule.BillingFinance),
@@ -779,6 +819,36 @@ namespace iucs.readernest.api.Data
         }
 
         /// <summary>
+        /// Retrofits the "Store Inquiries" admin menu item into a database that was seeded
+        /// before it existed (mirrors EnsureProgressReportsMenuAsync). Fresh databases already
+        /// get it from MenuSeedItems(); this only fires for pre-existing ones.
+        /// </summary>
+        private static async Task EnsureStoreInquiriesMenuAsync(ReaderNestDbContext context)
+        {
+            if (context.MenuItems.Local.Any(m => m.Portal == "admin" && m.Path == "/admin/store-inquiries") ||
+                await context.MenuItems.AnyAsync(m => m.Portal == "admin" && m.Path == "/admin/store-inquiries"))
+            {
+                return;
+            }
+
+            var enrollmentReview = await context.MenuItems
+                .FirstOrDefaultAsync(m => m.Portal == "admin" && m.Path == "/admin/enrollments");
+
+            context.MenuItems.Add(new MenuItem
+            {
+                Portal = "admin",
+                Section = "People",
+                SectionOrder = enrollmentReview?.SectionOrder ?? 2,
+                Label = "Store Inquiries",
+                Path = "/admin/store-inquiries",
+                Icon = "ShoppingBag",
+                SortOrder = (enrollmentReview?.SortOrder ?? 0) + 1,
+                IsActive = true,
+                RequiredModule = PermissionModule.Admission,
+            });
+        }
+
+        /// <summary>
         /// SeedEmailTemplatesAsync is insert-only, so a live DB that predates this template
         /// never picks it up on its own — inserts just the "progress-report" row if missing.
         /// </summary>
@@ -852,6 +922,28 @@ namespace iucs.readernest.api.Data
                 existing.HtmlBody = seed.HtmlBody;
                 existing.PlaceholdersJson = JsonSerializer.Serialize(seed.Placeholders);
             }
+        }
+
+        /// <summary>
+        /// SeedEmailTemplatesAsync is insert-only, so a live DB seeded before the PIN-login
+        /// switch still has "welcome-credentials" rendering {{TemporaryPassword}} — a token
+        /// UserService no longer supplies (it now sends TemporaryPin), so that row would
+        /// render blank. Reconciles it to the new copy/token, unless it's already been
+        /// updated (or an admin edited it since — same accepted trade-off as
+        /// ReconcileJoinLinkEmailTemplatesAsync above).
+        /// </summary>
+        private static async Task ReconcileWelcomeCredentialsPinTemplateAsync(ReaderNestDbContext context)
+        {
+            var seed = EmailTemplateSeedData.All.First(s => s.Key == "welcome-credentials");
+            var existing = await context.EmailTemplates.FirstOrDefaultAsync(t => t.Key == seed.Key);
+            if (existing is null || existing.HtmlBody.Contains("{{TemporaryPin}}"))
+            {
+                return;
+            }
+
+            existing.Subject = seed.Subject;
+            existing.HtmlBody = seed.HtmlBody;
+            existing.PlaceholdersJson = JsonSerializer.Serialize(seed.Placeholders);
         }
     }
 }

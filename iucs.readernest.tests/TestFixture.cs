@@ -198,14 +198,14 @@ namespace iucs.readernest.tests
 
         public async Task<User> SeedUserAsync(
             string email,
-            string passwordHash,
+            string pinHash,
             UserRole role = UserRole.Parent,
             UserStatus status = UserStatus.Active)
         {
             var user = new User
             {
                 Email = email,
-                PasswordHash = passwordHash,
+                PinHash = pinHash,
                 FirstName = "Test",
                 LastName = "User",
                 Role = role,

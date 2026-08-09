@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using iucs.readernest.domain.Data;
@@ -11,9 +12,11 @@ using iucs.readernest.domain.Data;
 namespace iucs.readernest.domain.Migrations
 {
     [DbContext(typeof(ReaderNestDbContext))]
-    partial class ReaderNestDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260809044740_RenamePasswordHashToPinHash")]
+    partial class RenamePasswordHashToPinHash
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -768,89 +771,6 @@ namespace iucs.readernest.domain.Migrations
                         .HasDatabaseName("ix_demo_participants_demo_booking_id");
 
                     b.ToTable("demo_participants");
-                });
-
-            modelBuilder.Entity("iucs.readernest.domain.Entities.Admission.StoreInquiry", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<int?>("ChildAge")
-                        .HasColumnType("integer")
-                        .HasColumnName("child_age");
-
-                    b.Property<string>("ChildName")
-                        .IsRequired()
-                        .HasMaxLength(150)
-                        .HasColumnType("character varying(150)")
-                        .HasColumnName("child_name");
-
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at_utc");
-
-                    b.Property<Guid?>("CreatedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("created_by");
-
-                    b.Property<DateTime?>("DeletedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("deleted_at_utc");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean")
-                        .HasColumnName("is_deleted");
-
-                    b.Property<string>("Notes")
-                        .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)")
-                        .HasColumnName("notes");
-
-                    b.Property<Guid>("PackagePlanId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("package_plan_id");
-
-                    b.Property<string>("ParentEmail")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)")
-                        .HasColumnName("parent_email");
-
-                    b.Property<string>("ParentName")
-                        .IsRequired()
-                        .HasMaxLength(150)
-                        .HasColumnType("character varying(150)")
-                        .HasColumnName("parent_name");
-
-                    b.Property<string>("ParentPhone")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("character varying(20)")
-                        .HasColumnName("parent_phone");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
-                        .HasColumnName("status");
-
-                    b.Property<DateTime?>("UpdatedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at_utc");
-
-                    b.Property<Guid?>("UpdatedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("updated_by");
-
-                    b.HasKey("Id")
-                        .HasName("pk_store_inquiries");
-
-                    b.HasIndex("PackagePlanId")
-                        .HasDatabaseName("ix_store_inquiries_package_plan_id");
-
-                    b.ToTable("store_inquiries");
                 });
 
             modelBuilder.Entity("iucs.readernest.domain.Entities.Auditing.AuditLog", b =>
@@ -3453,18 +3373,6 @@ namespace iucs.readernest.domain.Migrations
                         .HasConstraintName("fk_demo_participants_demo_bookings_demo_booking_id");
 
                     b.Navigation("DemoBooking");
-                });
-
-            modelBuilder.Entity("iucs.readernest.domain.Entities.Admission.StoreInquiry", b =>
-                {
-                    b.HasOne("iucs.readernest.domain.Entities.Billing.PackagePlan", "PackagePlan")
-                        .WithMany()
-                        .HasForeignKey("PackagePlanId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_store_inquiries_package_plans_package_plan_id");
-
-                    b.Navigation("PackagePlan");
                 });
 
             modelBuilder.Entity("iucs.readernest.domain.Entities.Billing.FeeSuspension", b =>
