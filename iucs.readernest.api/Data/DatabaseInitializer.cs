@@ -52,6 +52,7 @@ namespace iucs.readernest.api.Data
             await EnsureEmailTemplatesMenuAsync(context);
             await EnsureProgressReportEmailTemplateAsync(context);
             await EnsureProgressReportsMenuAsync(context);
+            await EnsureStoreInquiriesMenuAsync(context);
 
             await context.SaveChangesAsync();
         }
@@ -377,6 +378,7 @@ namespace iucs.readernest.api.Data
             ("admin", "People", "Users", "/admin/users", "Users", PermissionModule.UserManagement),
             ("admin", "People", "Roles & Permissions", "/admin/permissions", "ShieldCheck", PermissionModule.UserManagement),
             ("admin", "People", "Enrollment Review", "/admin/enrollments", "ClipboardCheck", PermissionModule.Admission),
+            ("admin", "People", "Store Inquiries", "/admin/store-inquiries", "ShoppingBag", PermissionModule.Admission),
             ("admin", "Content", "Content & Resources", "/admin/resources", "FolderOpen", PermissionModule.ContentAccessManagement),
             ("admin", "Finance", "Billing & Finance", "/admin/billing", "Receipt", PermissionModule.BillingFinance),
             ("admin", "Finance", "Packages & Subscriptions", "/admin/packages", "CreditCard", PermissionModule.BillingFinance),
@@ -813,6 +815,36 @@ namespace iucs.readernest.api.Data
                 SortOrder = (emailTemplates?.SortOrder ?? 0) + 1,
                 IsActive = true,
                 RequiredModule = PermissionModule.Communication,
+            });
+        }
+
+        /// <summary>
+        /// Retrofits the "Store Inquiries" admin menu item into a database that was seeded
+        /// before it existed (mirrors EnsureProgressReportsMenuAsync). Fresh databases already
+        /// get it from MenuSeedItems(); this only fires for pre-existing ones.
+        /// </summary>
+        private static async Task EnsureStoreInquiriesMenuAsync(ReaderNestDbContext context)
+        {
+            if (context.MenuItems.Local.Any(m => m.Portal == "admin" && m.Path == "/admin/store-inquiries") ||
+                await context.MenuItems.AnyAsync(m => m.Portal == "admin" && m.Path == "/admin/store-inquiries"))
+            {
+                return;
+            }
+
+            var enrollmentReview = await context.MenuItems
+                .FirstOrDefaultAsync(m => m.Portal == "admin" && m.Path == "/admin/enrollments");
+
+            context.MenuItems.Add(new MenuItem
+            {
+                Portal = "admin",
+                Section = "People",
+                SectionOrder = enrollmentReview?.SectionOrder ?? 2,
+                Label = "Store Inquiries",
+                Path = "/admin/store-inquiries",
+                Icon = "ShoppingBag",
+                SortOrder = (enrollmentReview?.SortOrder ?? 0) + 1,
+                IsActive = true,
+                RequiredModule = PermissionModule.Admission,
             });
         }
 

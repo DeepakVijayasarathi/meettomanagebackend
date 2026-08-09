@@ -55,6 +55,7 @@ namespace iucs.readernest.domain.Data
         public DbSet<DemoBooking> DemoBookings => Set<DemoBooking>();
         public DbSet<DemoParticipant> DemoParticipants => Set<DemoParticipant>();
         public DbSet<DemoFeedback> DemoFeedbacks => Set<DemoFeedback>();
+        public DbSet<StoreInquiry> StoreInquiries => Set<StoreInquiry>();
 
         // Billing
         public DbSet<PaymentAccount> PaymentAccounts => Set<PaymentAccount>();
