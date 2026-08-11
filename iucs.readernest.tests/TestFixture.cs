@@ -1,3 +1,4 @@
+using System.Data.Common;
 using System.Text.Json;
 using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Interfaces;
@@ -71,6 +72,13 @@ namespace iucs.readernest.tests
         /// <summary>Lets concurrency tests prove (or disprove) a double-disbursement, not just a double DB row.</summary>
         public int RefundCallCount { get; private set; }
 
+        /// <summary>
+        /// Set to make RefundAsync throw, standing in for a gateway that errors or times out —
+        /// the case where the disbursement's outcome is unknown and the refund must therefore
+        /// NOT become approvable again.
+        /// </summary>
+        public Exception? RefundFailure { get; set; }
+
         public Task<PaymentLinkResult> CreatePaymentLinkAsync(
             Invoice invoice,
             PaymentAccount account,
@@ -91,6 +99,11 @@ namespace iucs.readernest.tests
             CancellationToken cancellationToken = default)
         {
             RefundCallCount++;
+            if (RefundFailure is not null)
+            {
+                throw RefundFailure;
+            }
+
             return Task.FromResult(new RefundResult { GatewayRefundId = $"TEST-REFUND-{transaction.Id}" });
         }
 
@@ -132,6 +145,22 @@ namespace iucs.readernest.tests
         {
             return Task.FromResult(signature == "valid");
         }
+    }
+
+    /// <summary>
+    /// Stands in for PostgreSQL aborting a SERIALIZABLE transaction it could not serialize
+    /// (SQLSTATE 40001). SQLite never raises one, and UnitOfWork deliberately recognises the
+    /// condition by SQLSTATE on the provider-neutral DbException rather than by Npgsql's
+    /// exception type, so a fake carrying that state is a faithful trigger for the retry path.
+    /// </summary>
+    public sealed class FakeSerializationFailure : DbException
+    {
+        public FakeSerializationFailure()
+            : base("could not serialize access due to read/write dependencies among transactions")
+        {
+        }
+
+        public override string SqlState => "40001";
     }
 
     public class FakeTokenService : ITokenService

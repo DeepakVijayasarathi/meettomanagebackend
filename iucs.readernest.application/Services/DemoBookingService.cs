@@ -69,66 +69,78 @@ namespace iucs.readernest.application.Services
                 throw new DomainValidationException("Demo end time must be after the start time.");
             }
 
-            Guid teacherProfileId;
-            if (request.TeacherProfileId.HasValue)
+            // Picking a free teacher and booking them into the slot is one indivisible decision:
+            // the "nobody overlaps this slot" read is only worth anything if no one else can
+            // slip a conflicting session in before this one is committed. There is no single
+            // row to lock (the conflict is a range overlap across rows, not a duplicate key),
+            // so this runs SERIALIZABLE and lets PostgreSQL's SSI arbitrate, retrying from the
+            // top on a serialization failure. Nothing irreversible — emails, the CRM push —
+            // happens inside; a retry must be free to redo the whole thing.
+            var (session, booking) = await _unitOfWork.ExecuteInSerializableTransactionAsync(async ct =>
             {
-                var teacherExists = await _unitOfWork.Repository<TeacherProfile>()
-                    .ExistsAsync(t => t.Id == request.TeacherProfileId.Value, cancellationToken);
-                if (!teacherExists)
+                Guid teacherProfileId;
+                if (request.TeacherProfileId.HasValue)
                 {
-                    throw new NotFoundException(nameof(TeacherProfile), request.TeacherProfileId.Value);
+                    var teacherExists = await _unitOfWork.Repository<TeacherProfile>()
+                        .ExistsAsync(t => t.Id == request.TeacherProfileId.Value, ct);
+                    if (!teacherExists)
+                    {
+                        throw new NotFoundException(nameof(TeacherProfile), request.TeacherProfileId.Value);
+                    }
+
+                    teacherProfileId = request.TeacherProfileId.Value;
+                }
+                else
+                {
+                    teacherProfileId = await AutoAssignTeacherAsync(request, ct);
                 }
 
-                teacherProfileId = request.TeacherProfileId.Value;
-            }
-            else
-            {
-                teacherProfileId = await AutoAssignTeacherAsync(request, cancellationToken);
-            }
+                // Demos are always one-time sessions, never recurring, and have no batch
+                var newSession = new ClassSession
+                {
+                    TeacherProfileId = teacherProfileId,
+                    Type = SessionType.Demo,
+                    ScheduledStartAtUtc = request.ScheduledStartAtUtc,
+                    ScheduledEndAtUtc = request.ScheduledEndAtUtc,
+                    MeetingRoomId = $"trn-demo-{Guid.NewGuid():N}",
+                };
+                await _unitOfWork.Repository<ClassSession>().AddAsync(newSession, ct);
 
-            // Demos are always one-time sessions, never recurring, and have no batch
-            var session = new ClassSession
-            {
-                TeacherProfileId = teacherProfileId,
-                Type = SessionType.Demo,
-                ScheduledStartAtUtc = request.ScheduledStartAtUtc,
-                ScheduledEndAtUtc = request.ScheduledEndAtUtc,
-                MeetingRoomId = $"trn-demo-{Guid.NewGuid():N}",
-            };
-            await _unitOfWork.Repository<ClassSession>().AddAsync(session, cancellationToken);
-
-            var booking = new DemoBooking
-            {
-                ClassSession = session,
-                ParentName = request.ParentName.Trim(),
-                ParentEmail = request.ParentEmail.Trim().ToLowerInvariant(),
-                ParentPhone = request.ParentPhone,
-                ChildName = request.ChildName.Trim(),
-                ChildAge = request.ChildAge,
-                Department = request.Department,
-                Participants = request.Participants
-                    .Select(p =>
-                    {
-                        // Adults need an email for the confirmation; children carry none.
-                        if (!p.IsChild && string.IsNullOrWhiteSpace(p.Email))
+                var newBooking = new DemoBooking
+                {
+                    ClassSession = newSession,
+                    ParentName = request.ParentName.Trim(),
+                    ParentEmail = request.ParentEmail.Trim().ToLowerInvariant(),
+                    ParentPhone = request.ParentPhone,
+                    ChildName = request.ChildName.Trim(),
+                    ChildAge = request.ChildAge,
+                    Department = request.Department,
+                    Participants = request.Participants
+                        .Select(p =>
                         {
-                            throw new DomainValidationException($"Participant '{p.Name}' needs an email address (children don't).");
-                        }
+                            // Adults need an email for the confirmation; children carry none.
+                            if (!p.IsChild && string.IsNullOrWhiteSpace(p.Email))
+                            {
+                                throw new DomainValidationException($"Participant '{p.Name}' needs an email address (children don't).");
+                            }
 
-                        return new DemoParticipant
-                        {
-                            Name = p.Name.Trim(),
-                            Email = string.IsNullOrWhiteSpace(p.Email) ? null : p.Email.Trim().ToLowerInvariant(),
-                            Phone = p.Phone,
-                            IsChild = p.IsChild,
-                        };
-                    })
-                    .ToList(),
-            };
-            await _unitOfWork.Repository<DemoBooking>().AddAsync(booking, cancellationToken);
+                            return new DemoParticipant
+                            {
+                                Name = p.Name.Trim(),
+                                Email = string.IsNullOrWhiteSpace(p.Email) ? null : p.Email.Trim().ToLowerInvariant(),
+                                Phone = p.Phone,
+                                IsChild = p.IsChild,
+                            };
+                        })
+                        .ToList(),
+                };
+                await _unitOfWork.Repository<DemoBooking>().AddAsync(newBooking, ct);
 
-            await _auditLog.StageAsync(AuditAction.Create, nameof(DemoBooking), booking.Id.ToString(), cancellationToken: cancellationToken);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
+                await _auditLog.StageAsync(AuditAction.Create, nameof(DemoBooking), newBooking.Id.ToString(), cancellationToken: ct);
+                await _unitOfWork.SaveChangesAsync(ct);
+
+                return (Session: newSession, Booking: newBooking);
+            }, cancellationToken);
 
             // Booking confirmation to the parent and every extra invitee (they may not
             // have accounts yet, so this bypasses the user-bound notification log)
@@ -193,23 +205,32 @@ namespace iucs.readernest.application.Services
         /// Auto-assign: the department-matched active teacher who is free at the slot with the lightest day.
         /// </summary>
         /// <remarks>
-        /// KNOWN RACE (found during a 2026-08-09 QA pass, not yet fixed): this reads "is
-        /// anyone busy at this slot" and the caller inserts the new session afterward, with
-        /// no locking or transaction isolation between the two — under Postgres's default
-        /// READ COMMITTED isolation, two concurrent requests for the same slot (now directly
-        /// reachable by any anonymous visitor via POST /api/store/demo-bookings, not just
-        /// staff) can both read "teacher free" before either commits, double-booking the
-        /// same teacher into overlapping demos. Confirmed real by code inspection; NOT
-        /// reproducible in the SQLite test suite (a single ADO.NET connection serializes
-        /// command execution regardless of app-level protection, so SQLite can't exhibit
-        /// this class of race — see the scope note on
-        /// Store_BookDemo_ConcurrentRequestsForSameSlot_MustNotDoubleBookTheOnlyTeacher).
-        /// Left unfixed rather than auto-fixed because the correct fix — either a Postgres
-        /// exclusion constraint on (TeacherProfileId, time range) or wrapping this in a
-        /// SERIALIZABLE transaction with retry-on-conflict — requires extending the shared
-        /// IUnitOfWork abstraction (~20 dependent services) or a Postgres-specific migration,
-        /// and this environment has no Postgres available to verify either against a real
-        /// concurrent-writer scenario before shipping it.
+        /// RACE FIXED (found 2026-08-09, fixed 2026-08-10) — but only because of where this is
+        /// called from, so do not lift it out of that context. This reads "is anyone busy at
+        /// this slot" and its caller inserts the session afterwards; under READ COMMITTED two
+        /// concurrent requests for the same slot (reachable by any anonymous visitor via
+        /// POST /api/store/demo-bookings) could both read "teacher free" and double-book the
+        /// same teacher. There is no unique key to lean on here — the conflict is an overlap
+        /// between arbitrary time ranges across rows, not a duplicate value — so the fix is at
+        /// the isolation level: CreateAsync now runs this read and the matching insert inside
+        /// one IUnitOfWork.ExecuteInSerializableTransactionAsync, where PostgreSQL's SSI tracks
+        /// the predicate this query reads, spots the concurrent insert that invalidates it,
+        /// aborts one side with SQLSTATE 40001, and the unit of work transparently retries it
+        /// against the now-committed state (where this query correctly reports the teacher
+        /// busy). Any future caller MUST keep this read and its insert inside the same
+        /// serializable transaction; reading here and writing outside it silently restores the
+        /// original bug.
+        /// <para>
+        /// Two honest limits on that guarantee. (1) SSI only sees other SERIALIZABLE
+        /// transactions: a regular (non-demo) ClassSession committed concurrently by a code
+        /// path that does not use ExecuteInSerializableTransactionAsync is not detected, so
+        /// demo-vs-demo is now safe while demo-vs-concurrently-created-regular-session is not.
+        /// (2) SQLite cannot reproduce the original race (one ADO.NET connection serializes
+        /// every command) and this environment has no PostgreSQL, so the fix rests on SSI's
+        /// documented semantics rather than on an observed concurrent run — see the scope note
+        /// on Store_BookDemo_ConcurrentRequestsForSameSlot_MustNotDoubleBookTheOnlyTeacher for
+        /// exactly what the tests do and do not prove.
+        /// </para>
         /// </remarks>
         private async Task<Guid> AutoAssignTeacherAsync(CreateDemoBookingRequest request, CancellationToken cancellationToken)
         {

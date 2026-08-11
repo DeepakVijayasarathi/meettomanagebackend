@@ -3,6 +3,7 @@ using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Dto.Billing;
 using iucs.readernest.application.Mappings;
+using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Entities.Users;
@@ -19,16 +20,21 @@ namespace iucs.readernest.application.Services
         private readonly IPaymentGateway _paymentGateway;
         private readonly INotificationService _notificationService;
 
+        /// <summary>Only for hand-stamping UpdatedBy on writes that bypass the audit interceptor.</summary>
+        private readonly ICurrentUserService _currentUser;
+
         public BillingService(
             IUnitOfWork unitOfWork,
             IAuditLogService auditLog,
             IPaymentGateway paymentGateway,
-            INotificationService notificationService)
+            INotificationService notificationService,
+            ICurrentUserService currentUser)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _paymentGateway = paymentGateway;
             _notificationService = notificationService;
+            _currentUser = currentUser;
         }
 
         public async Task<IReadOnlyList<PackagePlanDto>> ListPlansAsync(CancellationToken cancellationToken = default)
@@ -1105,41 +1111,85 @@ namespace iucs.readernest.application.Services
         }
 
         /// <remarks>
-        /// KNOWN RACE (found during a 2026-08-09 QA pass, not yet fixed): this reads the
-        /// refund's Status, checks it's still Requested, and mutates it afterward, with no
-        /// locking or transaction isolation between the two — under Postgres's default READ
-        /// COMMITTED isolation, two concurrent approvals of the SAME refund (an admin
-        /// double-click, or two admins working the same queue) can both read "still
-        /// Requested" before either commits. For a gateway-settled transaction this doesn't
-        /// just double-write a DB row: it calls _paymentGateway.RefundAsync twice, i.e. a
-        /// real, user-visible double refund of actual money. Same root cause and same shape
-        /// as DemoBookingService.AutoAssignTeacherAsync's known race (see its remarks) —
-        /// confirmed real by code inspection; NOT reproducible in the SQLite test suite (a
-        /// single ADO.NET connection serializes command execution regardless of app-level
-        /// protection — see the scope note on
-        /// Refund_ReviewedConcurrently_MustNotDoubleProcessTheSameRefund). Left unfixed
-        /// rather than auto-fixed for the identical reason: the correct fix (a SERIALIZABLE
-        /// transaction with retry-on-conflict, or a DB-level guard such as an optimistic
-        /// concurrency token on Refund.Status) requires extending the shared IUnitOfWork
-        /// abstraction (~20 dependent services) or a Postgres-specific change, and this
-        /// environment has no Postgres available to verify either against a real
-        /// concurrent-writer scenario before shipping it. Of the two known instances this is
-        /// the higher-severity one — it moves real money — so if only one gets fixed, fix
-        /// this one first.
+        /// RACE FIXED (found 2026-08-09, fixed 2026-08-10). This used to read the refund's
+        /// Status, check it was still Requested, and mutate it afterwards with nothing in
+        /// between — so under READ COMMITTED two concurrent approvals of the SAME refund (an
+        /// admin double-click, or two admins working the same queue) could both read "still
+        /// Requested" and both reach _paymentGateway.RefundAsync, refunding real money twice.
+        /// <para>
+        /// The status transition is now a single conditional UPDATE
+        /// (<c>SET status = ... WHERE id = @id AND status = 'Requested'</c>) issued through
+        /// IRepository.ExecuteUpdateAsync, and the gateway is only called by whoever that
+        /// UPDATE reports as having won. That is atomic without any isolation-level change:
+        /// the second approver's UPDATE blocks on the row's write lock until the first commits,
+        /// then re-reads the row, no longer matches <c>status = 'Requested'</c>, and affects 0
+        /// rows — which this method turns into a ConflictException instead of a second
+        /// disbursement. The in-memory check above it is kept only as a cheap, friendlier error
+        /// for the ordinary already-reviewed case; it is not what makes this safe.
+        /// </para>
+        /// <para>
+        /// Approval claims the row as Approved BEFORE the gateway call and only marks it
+        /// Processed once the gateway has confirmed, so the window during which money is in
+        /// flight is a distinct, already-non-Requested state. That is deliberately fail-closed:
+        /// if the gateway call throws (including an ambiguous timeout that may in fact have
+        /// disbursed), the refund is left Approved rather than released back to Requested, so no
+        /// retry can double-pay it — an operator reconciles it against the gateway and finishes
+        /// or rejects it by hand. Releasing the claim automatically would re-open exactly the
+        /// double-refund hole this fixes.
+        /// </para>
         /// </remarks>
         public async Task<RefundDto> ReviewRefundAsync(Guid id, ReviewRefundRequest request, CancellationToken cancellationToken = default)
         {
+            var refunds = _unitOfWork.Repository<Refund>();
+
             // Load tracked (Query() is AsNoTracking; mutating that never persists).
-            var refund = await _unitOfWork.Repository<Refund>().GetByIdAsync(id, cancellationToken)
+            var refund = await refunds.GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(Refund), id);
 
+            // Cheap, friendly rejection of the ordinary "someone already dealt with this"
+            // case. This read can be stale by the time it is acted on — the conditional
+            // UPDATE below is the guard that actually decides who wins.
             if (refund.Status != RefundStatus.Requested)
             {
                 throw new DomainValidationException($"This refund is already {refund.Status}.");
             }
 
-            if (request.Approve)
+            // ExecuteUpdateAsync bypasses the change tracker, so the audit interceptor never
+            // sees these writes — stamp what it would have stamped by hand.
+            var reviewedAtUtc = DateTime.UtcNow;
+            var reviewedBy = _currentUser.UserId;
+
+            if (!request.Approve)
             {
+                var rejected = await refunds.ExecuteUpdateAsync(
+                    r => r.Id == id && r.Status == RefundStatus.Requested,
+                    setters => setters
+                        .SetProperty(r => r.Status, RefundStatus.Rejected)
+                        .SetProperty(r => r.UpdatedAtUtc, reviewedAtUtc)
+                        .SetProperty(r => r.UpdatedBy, reviewedBy),
+                    cancellationToken);
+                if (rejected == 0)
+                {
+                    throw new ConflictException("This refund was already reviewed by another request; nothing was changed.");
+                }
+            }
+            else
+            {
+                // Claim the refund before spending any money on it. Winning this UPDATE is what
+                // grants the right to call the gateway; losing it (0 rows) means another request
+                // already owns this refund, so we must not disburse.
+                var claimed = await refunds.ExecuteUpdateAsync(
+                    r => r.Id == id && r.Status == RefundStatus.Requested,
+                    setters => setters
+                        .SetProperty(r => r.Status, RefundStatus.Approved)
+                        .SetProperty(r => r.UpdatedAtUtc, reviewedAtUtc)
+                        .SetProperty(r => r.UpdatedBy, reviewedBy),
+                    cancellationToken);
+                if (claimed == 0)
+                {
+                    throw new ConflictException("This refund was already reviewed by another request; it has not been refunded twice.");
+                }
+
                 // Cash has nothing to call a gateway for — the money was handed back at the
                 // centre. A gateway-settled transaction gets disbursed for real through the
                 // same department account (and gateway) the original payment used.
@@ -1152,16 +1202,18 @@ namespace iucs.readernest.application.Services
                     var account = await _unitOfWork.Repository<PaymentAccount>()
                         .GetByIdAsync(transaction.PaymentAccountId, cancellationToken)
                         ?? throw new NotFoundException(nameof(PaymentAccount), transaction.PaymentAccountId);
+
+                    // Anything thrown here leaves the refund parked in Approved on purpose: the
+                    // disbursement's outcome is unknown, so it must not become approvable again.
                     var result = await _paymentGateway.RefundAsync(transaction, account, refund.Amount, cancellationToken);
                     refund.GatewayRefundId = result.GatewayRefundId;
                 }
 
+                // Money is out; close the claim. The tracked entity still believes it is
+                // Requested (it was loaded before the claim UPDATE), which is harmless — EF
+                // writes the new value either way, and the DTO below is re-read from the row.
                 refund.Status = RefundStatus.Processed;
                 refund.ProcessedAtUtc = DateTime.UtcNow;
-            }
-            else
-            {
-                refund.Status = RefundStatus.Rejected;
             }
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(Refund), refund.Id.ToString(), cancellationToken: cancellationToken);

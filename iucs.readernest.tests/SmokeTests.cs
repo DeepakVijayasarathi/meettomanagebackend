@@ -65,9 +65,9 @@ namespace iucs.readernest.tests
 
         private SessionService CreateSessionService() => new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, new FakeJitsiTokenService());
 
-        private BillingService CreateBillingService() => new(_db.UnitOfWork, _auditLog, new FakePaymentGateway(), _notifications);
+        private BillingService CreateBillingService() => new(_db.UnitOfWork, _auditLog, new FakePaymentGateway(), _notifications, _db.CurrentUser);
 
-        private BillingService CreateBillingService(FakePaymentGateway gateway) => new(_db.UnitOfWork, _auditLog, gateway, _notifications);
+        private BillingService CreateBillingService(FakePaymentGateway gateway) => new(_db.UnitOfWork, _auditLog, gateway, _notifications, _db.CurrentUser);
 
         private EnrollmentService CreateEnrollmentService() => new(_db.UnitOfWork, _auditLog, CreateBillingService());
 
@@ -479,77 +479,151 @@ namespace iucs.readernest.tests
             Assert.Equal(RefundStatus.Processed, (await _db.Context.Refunds.FirstAsync(r => r.Id == refund.Id)).Status);
         }
 
-        [Fact]
-        public async Task Refund_ReviewedConcurrently_MustNotDoubleProcessTheSameRefund()
+        /// <summary>A paid invoice with a Requested refund on its transaction, ready to review.</summary>
+        private async Task<RefundDto> SeedRequestedRefundAsync(FakePaymentGateway gateway)
         {
-            // IMPORTANT SCOPE NOTE: same caveat as Store_BookDemo_ConcurrentRequestsForSameSlot_
-            // MustNotDoubleBookTheOnlyTeacher — both DbContexts here share one SqliteConnection,
-            // which serializes command execution at the ADO.NET level regardless of what (if
-            // any) protection ReviewRefundAsync's check-then-mutate has. A pass here is NOT
-            // proof the real, two-connection Postgres race is safe; see ReviewRefundAsync's
-            // doc comment and the QA report for the reasoning and the recommended (unimplemented)
-            // fix. What this test DOES prove: the gateway-call side effect is idempotent w.r.t.
-            // a single logical approval under this harness, and a genuine double-approval (if it
-            // ever slips through) fails loudly here instead of silently double-refunding money.
             var parentUser = await _db.SeedUserAsync($"ref-race-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             _db.Context.AddRange(parentProfile,
                 new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
             await _db.Context.SaveChangesAsync();
 
-            var gateway = new FakePaymentGateway();
-            var billing1 = CreateBillingService(gateway);
-            var invoice = await billing1.CreateInvoiceAsync(new CreateInvoiceRequest
+            var billing = CreateBillingService(gateway);
+            var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
                 ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
-            await billing1.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1000 });
-            var txn = await _db.Context.PaymentTransactions.FirstAsync();
-            var refund = await billing1.RequestRefundAsync(new RequestRefundRequest
+            await billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1000 });
+            var txn = await _db.Context.PaymentTransactions.FirstAsync(t => t.InvoiceId == invoice.Id);
+            return await billing.RequestRefundAsync(new RequestRefundRequest
             {
                 PaymentTransactionId = txn.Id, Amount = 250, Reason = "Race test",
             });
+        }
 
-            // Two independent service graphs on two independent DbContexts sharing the same
-            // underlying SQLite connection — the same shape as two concurrent HTTP requests
-            // (e.g. an accidental admin double-click, or two admins reviewing the same queue)
-            // each getting their own scoped DbContext in ASP.NET Core. Both approve the SAME
-            // refund; the same shared FakePaymentGateway lets us catch a double-disbursement
-            // even if both writers somehow "succeed" at the DB layer.
+        [Fact]
+        public async Task Refund_ReviewedConcurrently_MustNotDoubleProcessTheSameRefund()
+        {
+            // SCOPE NOTE: SQLite cannot run two writers at once — both DbContexts here share one
+            // SqliteConnection, which serializes command execution at the ADO.NET level — so this
+            // test does not race anything. It instead *stages* the exact interleaving the race
+            // depends on (request 2 reads "still Requested" before request 1 commits) and asserts
+            // the fix rejects it. That is the whole substance of the bug: on Postgres the two
+            // requests reach this state by timing, here they reach it by construction, and from
+            // that state onwards the code path is identical. Against the pre-fix code this test
+            // fails — request 2 would call the gateway a second time and refund the money twice.
+            var gateway = new FakePaymentGateway();
+            var refund = await SeedRequestedRefundAsync(gateway);
+
+            // Request 2's own service graph on its own DbContext, exactly as ASP.NET Core would
+            // hand a second concurrent caller (an admin double-click, or two admins working the
+            // same queue). The shared FakePaymentGateway counts disbursements across both.
             var (context2, uow2) = _db.CreateConcurrentSession();
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
-            var billing2 = new BillingService(uow2, auditLog2, gateway, _notifications);
+            var billing2 = new BillingService(uow2, auditLog2, gateway, _notifications, _db.CurrentUser);
 
-            var task1 = billing1.ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = true });
-            var task2 = billing2.ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = true });
+            // Request 2 reads the refund while it is genuinely still Requested. EF returns this
+            // same tracked instance from any later lookup on context2 rather than refreshing it,
+            // so when ReviewRefundAsync runs below it sees precisely the stale "still Requested"
+            // view a Postgres READ COMMITTED snapshot would have given it mid-race — sailing past
+            // the in-memory status check and leaving the conditional UPDATE as the only guard.
+            var staleRead = await uow2.Repository<Refund>().GetByIdAsync(refund.Id);
+            Assert.Equal(RefundStatus.Requested, staleRead!.Status);
 
-            Exception? failure = null;
-            try
-            {
-                await Task.WhenAll(task1, task2);
-            }
-            catch (Exception ex)
-            {
-                failure = ex;
-            }
-
-            if (gateway.RefundCallCount > 1)
-            {
-                Assert.Fail(
-                    $"Double-refund race confirmed: the payment gateway was asked to refund the same " +
-                    $"transaction {gateway.RefundCallCount} times from two concurrent approvals, with no " +
-                    $"rejection. (Task fault, if any: {failure?.Message ?? "none — both requests succeeded"})");
-            }
-
+            // Request 1 wins the race and disburses.
+            var reviewed = await CreateBillingService(gateway)
+                .ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = true });
+            Assert.Equal(RefundStatus.Processed, reviewed.Status);
             Assert.Equal(1, gateway.RefundCallCount);
-            Assert.NotNull(failure);
-            Assert.Contains("already", failure!.InnerException?.Message ?? failure.Message);
+
+            // Request 2 now acts on its stale view. The UPDATE's WHERE clause no longer matches
+            // (the row left Requested), so it affects 0 rows and the approval is refused before
+            // the gateway is touched.
+            var conflict = await Assert.ThrowsAsync<ConflictException>(
+                () => billing2.ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = true }));
+            Assert.Equal(409, conflict.StatusCode);
+            Assert.Equal(RefundStatus.Requested, staleRead.Status); // it really was working off the stale read
+
+            Assert.Equal(1, gateway.RefundCallCount); // the money moved exactly once
 
             var (verifyContext, _) = _db.CreateConcurrentSession();
-            Assert.Equal(RefundStatus.Processed, (await verifyContext.Refunds.FirstAsync(r => r.Id == refund.Id)).Status);
+            var stored = await verifyContext.Refunds.FirstAsync(r => r.Id == refund.Id);
+            Assert.Equal(RefundStatus.Processed, stored.Status);
+            Assert.NotNull(stored.GatewayRefundId);
 
             context2.Dispose();
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task Refund_ApprovalFailingAtTheGateway_StaysClaimed_AndIsNotApprovableAgain()
+        {
+            // Fail-closed by design: the refund is claimed out of Requested BEFORE the gateway is
+            // called, so a gateway error or timeout — where the disbursement may or may not have
+            // actually happened — leaves the refund parked in Approved for an operator to
+            // reconcile, never back in Requested where a retry could pay it a second time.
+            var gateway = new FakePaymentGateway { RefundFailure = new TimeoutException("gateway timed out") };
+            var refund = await SeedRequestedRefundAsync(gateway);
+
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => CreateBillingService(gateway).ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = true }));
+
+            var (verifyContext, verifyUow) = _db.CreateConcurrentSession();
+            var claimed = await verifyContext.Refunds.FirstAsync(r => r.Id == refund.Id);
+            Assert.Equal(RefundStatus.Approved, claimed.Status); // claimed, not rolled back to Requested
+            Assert.Null(claimed.GatewayRefundId);
+            Assert.Null(claimed.ProcessedAtUtc);
+            Assert.NotNull(claimed.UpdatedAtUtc); // ExecuteUpdate bypasses the interceptor — stamped by hand
+
+            // A second approver (fresh context, so it reads the claimed row) is turned away
+            // without the gateway being asked to refund again.
+            gateway.RefundFailure = null;
+            var auditLog2 = new AuditLogService(verifyUow, _db.CurrentUser);
+            var billing2 = new BillingService(verifyUow, auditLog2, gateway, _notifications, _db.CurrentUser);
+            var rejected = await Assert.ThrowsAsync<DomainValidationException>(
+                () => billing2.ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = true }));
+            Assert.Contains("already Approved", rejected.Message);
+            Assert.Equal(1, gateway.RefundCallCount);
+
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task Repository_ExecuteUpdate_MatchesOnlyRowsStillInTheExpectedState_AndStampsAuditFieldsByHand()
+        {
+            // The primitive the refund fix is built on, tested directly: the guard lives in the
+            // UPDATE's WHERE clause, so a row that has already left the expected state matches 0
+            // rows instead of being overwritten. Also pins the audit stamping, which the
+            // SaveChanges interceptor cannot do for a change-tracker-bypassing bulk update.
+            var actor = Guid.NewGuid();
+            _db.CurrentUser.UserId = actor;
+            var refund = await SeedRequestedRefundAsync(new FakePaymentGateway());
+            var refunds = _db.UnitOfWork.Repository<Refund>();
+            var stampedAt = new DateTime(2026, 8, 10, 12, 0, 0, DateTimeKind.Utc);
+
+            var won = await refunds.ExecuteUpdateAsync(
+                r => r.Id == refund.Id && r.Status == RefundStatus.Requested,
+                setters => setters
+                    .SetProperty(r => r.Status, RefundStatus.Approved)
+                    .SetProperty(r => r.UpdatedAtUtc, stampedAt)
+                    .SetProperty(r => r.UpdatedBy, actor));
+            Assert.Equal(1, won);
+
+            // Same statement again: the row is no longer Requested, so nobody wins it twice.
+            var lost = await refunds.ExecuteUpdateAsync(
+                r => r.Id == refund.Id && r.Status == RefundStatus.Requested,
+                setters => setters
+                    .SetProperty(r => r.Status, RefundStatus.Rejected)
+                    .SetProperty(r => r.UpdatedAtUtc, DateTime.UtcNow)
+                    .SetProperty(r => r.UpdatedBy, actor));
+            Assert.Equal(0, lost);
+
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            var stored = await verifyContext.Refunds.FirstAsync(r => r.Id == refund.Id);
+            Assert.Equal(RefundStatus.Approved, stored.Status); // the loser changed nothing
+            Assert.Equal(stampedAt, stored.UpdatedAtUtc);
+            Assert.Equal(actor, stored.UpdatedBy);
             verifyContext.Dispose();
         }
 
@@ -1835,16 +1909,20 @@ namespace iucs.readernest.tests
         [Fact]
         public async Task Store_BookDemo_ConcurrentRequestsForSameSlot_MustNotDoubleBookTheOnlyTeacher()
         {
-            // IMPORTANT SCOPE NOTE: this guards against a *gross* regression (e.g. the
-            // busy-check being deleted outright) — it is NOT proof that the underlying
-            // check-then-insert is safe under genuine concurrent writers. Both DbContexts
-            // here share one SqliteConnection, and a single ADO.NET connection object only
-            // ever runs one command at a time, so this harness can't reproduce the real
-            // race: two separate requests, each on Postgres's default READ COMMITTED
-            // isolation, can both read "teacher free" before either has inserted its
-            // session. That race is real in production and is NOT fixed by this test
-            // passing — see DemoBookingService.AutoAssignTeacherAsync's doc comment and
-            // the QA report for the reasoning and the recommended (unimplemented) fix.
+            // IMPORTANT SCOPE NOTE — what this does and does not prove. It proves the
+            // serialized case: once one booking is committed, a second request for the same
+            // slot is refused rather than double-booking the teacher, and the whole flow still
+            // works now that it runs inside a SERIALIZABLE transaction. It does NOT prove the
+            // genuinely concurrent case, because it cannot: both DbContexts here share one
+            // SqliteConnection and a single ADO.NET connection runs one command at a time, so
+            // the two requests below execute back to back, never overlapping. The concurrent
+            // guarantee comes from where this now runs — CreateAsync wraps the busy-check and
+            // the insert in one IUnitOfWork.ExecuteInSerializableTransactionAsync, so on
+            // Postgres SSI aborts one of two truly overlapping bookings with SQLSTATE 40001 and
+            // the unit of work retries it against the committed state (see that method's docs,
+            // and UnitOfWork_SerializableTransaction_* for the retry machinery itself). With no
+            // Postgres in this environment that half rests on SSI's documented semantics, not
+            // on an observed run.
             var teacherUser = await _db.SeedUserAsync($"race-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
             _db.Context.TeacherProfiles.Add(new TeacherProfile { UserId = teacherUser.Id });
             await _db.Context.SaveChangesAsync();
@@ -1896,19 +1974,80 @@ namespace iucs.readernest.tests
             if (overlapping > 1)
             {
                 Assert.Fail(
-                    $"Double-booking race confirmed: {overlapping} overlapping demo sessions were created for the " +
-                    "same teacher and time slot from two concurrent requests, with no rejection. " +
+                    $"Double-booking confirmed: {overlapping} overlapping demo sessions were created for the " +
+                    "same teacher and time slot, with no rejection. " +
                     $"(Task fault, if any: {failure?.Message ?? "none — both requests succeeded"})");
             }
 
-            // If it didn't double-book, exactly one request must have succeeded and the
-            // other must have failed with the expected "no teacher available" message —
-            // a silent no-op or a mismatched error would itself be a bug.
+            // Exactly one request must have succeeded and the other must have been refused with
+            // the expected "no teacher available" message — a silent no-op, a mismatched error,
+            // or a transaction-plumbing failure (e.g. an unsupported isolation level surfacing
+            // as an InvalidOperationException) would all be bugs this catches.
             Assert.Equal(1, overlapping);
-            Assert.NotNull(failure);
-            Assert.Contains("No teacher is available", failure!.InnerException?.Message ?? failure.Message);
+            var refusal = failure is AggregateException aggregate ? aggregate.InnerExceptions[0] : failure;
+            Assert.IsType<DomainValidationException>(refusal);
+            Assert.Contains("No teacher is available", refusal!.Message);
+
+            // The losing request must leave nothing behind: its rolled-back transaction means no
+            // orphan DemoBooking for the parent whose session was never created.
+            Assert.Equal(1, await verifyContext.DemoBookings.CountAsync(b => b.ChildName == "Kid One" || b.ChildName == "Kid Two"));
 
             context2.Dispose();
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task UnitOfWork_SerializableTransaction_RetriesOnSerializationFailure_AndDiscardsTheFailedAttemptsWrites()
+        {
+            // The retry machinery the demo-booking fix depends on. SQLite never raises SQLSTATE
+            // 40001, so the abort is injected in the shape SSI actually delivers it: the INSERT
+            // itself is the statement that loses, so attempt 1 dies with its entity staged but
+            // not yet persisted. Those entities stay in the change tracker in the Added state
+            // across the rollback, so unless the unit of work forgets them, the retry's
+            // SaveChanges inserts BOTH the abandoned entity and the fresh one — which, Name
+            // being uniquely indexed, blows up rather than quietly duplicating.
+            var attempts = 0;
+            var result = await _db.UnitOfWork.ExecuteInSerializableTransactionAsync(async ct =>
+            {
+                attempts++;
+                await _db.UnitOfWork.Repository<CourseCategory>().AddAsync(
+                    new CourseCategory { Name = "Retry Category", Department = Department.Phonics }, ct);
+
+                if (attempts == 1)
+                {
+                    throw new FakeSerializationFailure();
+                }
+
+                await _db.UnitOfWork.SaveChangesAsync(ct);
+                return attempts;
+            });
+
+            Assert.Equal(2, result); // retried exactly once, and the retry is what succeeded
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            Assert.Equal(1, await verifyContext.CourseCategories.CountAsync(c => c.Name == "Retry Category"));
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task UnitOfWork_SerializableTransaction_DoesNotRetryOrdinaryFailures_AndRollsThemBack()
+        {
+            // Only a serialization failure is safe to redo blindly. A business failure must
+            // surface once, unchanged, with everything the attempt wrote rolled back — otherwise
+            // "no teacher available" would be retried three more times to the same conclusion.
+            var attempts = 0;
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                _db.UnitOfWork.ExecuteInSerializableTransactionAsync<int>(async ct =>
+                {
+                    attempts++;
+                    await _db.UnitOfWork.Repository<CourseCategory>().AddAsync(
+                        new CourseCategory { Name = "Doomed Category", Department = Department.Phonics }, ct);
+                    await _db.UnitOfWork.SaveChangesAsync(ct);
+                    throw new DomainValidationException("business rule said no");
+                }));
+
+            Assert.Equal(1, attempts);
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            Assert.Equal(0, await verifyContext.CourseCategories.CountAsync(c => c.Name == "Doomed Category"));
             verifyContext.Dispose();
         }
 

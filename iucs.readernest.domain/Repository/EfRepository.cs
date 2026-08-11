@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using iucs.readernest.domain.Data;
 using iucs.readernest.domain.Entities.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Query;
 
 namespace iucs.readernest.domain.Repository
 {
@@ -71,6 +72,19 @@ namespace iucs.readernest.domain.Repository
         public IQueryable<TEntity> TrackedQuery()
         {
             return _dbSet;
+        }
+
+        /// <inheritdoc />
+        public Task<int> ExecuteUpdateAsync(
+            Expression<Func<TEntity, bool>> predicate,
+            Expression<Func<SetPropertyCalls<TEntity>, SetPropertyCalls<TEntity>>> setters,
+            CancellationToken cancellationToken = default)
+        {
+            // Deliberately NOT .IgnoreQueryFilters(): a soft-deleted row must stay unmatchable
+            // here exactly as it is everywhere else. Runs as its own statement (its own implicit
+            // transaction unless the caller opened one), which is what makes the WHERE clause a
+            // real lock-arbitrated guard rather than an advisory in-memory check.
+            return _dbSet.Where(predicate).ExecuteUpdateAsync(setters, cancellationToken);
         }
     }
 }
