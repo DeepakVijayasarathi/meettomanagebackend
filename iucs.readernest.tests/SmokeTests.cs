@@ -2188,6 +2188,131 @@ namespace iucs.readernest.tests
             Assert.DoesNotContain(matched, n => n.Id == alreadyPlain.Id);
         }
 
+        [Fact]
+        public async Task ParentDashboard_AggregatesPerChild_WithoutCrossContamination()
+        {
+            var parentUser = await _db.SeedUserAsync($"dash-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.ParentProfiles.Add(parentProfile);
+            await _db.Context.SaveChangesAsync();
+
+            var (batchA, _, _) = await SeedBatchWithSessionAsync(10, includeSession: false);
+            var (batchB, _, _) = await SeedBatchWithSessionAsync(10, includeSession: false);
+
+            // Alice sits in batch A, Bob in batch B, so a per-child aggregate that leaked
+            // across siblings (or across batches) shows up as the wrong count below.
+            var alice = new Child { ParentProfileId = parentProfile.Id, FirstName = "Alice", LastName = "A", IsActive = true };
+            var bob = new Child { ParentProfileId = parentProfile.Id, FirstName = "Bob", LastName = "B", IsActive = true };
+            _db.Context.AddRange(alice, bob);
+            await _db.Context.SaveChangesAsync();
+
+            _db.Context.AddRange(
+                new BatchEnrollment { BatchId = batchA.Id, ChildId = alice.Id, Status = EnrollmentStatus.Active },
+                new BatchEnrollment { BatchId = batchB.Id, ChildId = bob.Id, Status = EnrollmentStatus.Active });
+
+            ClassSession SessionIn(Batch batch, SessionStatus status) => new()
+            {
+                BatchId = batch.Id,
+                TeacherProfileId = batch.TeacherProfileId,
+                Status = status,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(1),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(1).AddMinutes(45),
+            };
+
+            // Batch A: 2 completed + 1 scheduled. Batch B: 1 completed only.
+            var aliceCompleted = SessionIn(batchA, SessionStatus.Completed);
+            _db.Context.AddRange(
+                aliceCompleted,
+                SessionIn(batchA, SessionStatus.Completed),
+                SessionIn(batchA, SessionStatus.Scheduled),
+                SessionIn(batchB, SessionStatus.Completed));
+            await _db.Context.SaveChangesAsync();
+
+            // Alice: 1 of 2 attended → 50%. Bob has no attendance rows → defaults to 100%.
+            _db.Context.AddRange(
+                new SessionAttendance
+                {
+                    ClassSessionId = aliceCompleted.Id,
+                    ChildId = alice.Id,
+                    ParticipantType = ParticipantType.Student,
+                    Status = AttendanceStatus.Present,
+                },
+                new SessionAttendance
+                {
+                    ClassSessionId = aliceCompleted.Id,
+                    ChildId = bob.Id,
+                    ParticipantType = ParticipantType.Student,
+                    Status = AttendanceStatus.Present,
+                });
+            await _db.Context.SaveChangesAsync();
+
+            // Bob's single row is Absent, so his percentage must differ from Alice's.
+            var bobRow = await _db.Context.SessionAttendances.FirstAsync(a => a.ChildId == bob.Id);
+            bobRow.Status = AttendanceStatus.Absent;
+            await _db.Context.SaveChangesAsync();
+            _db.Context.ChangeTracker.Clear();
+
+            var dashboard = await new ParentPortalService(_db.UnitOfWork).GetDashboardAsync(parentUser.Id);
+
+            var aliceDto = dashboard.Children.Single(c => c.ChildId == alice.Id);
+            Assert.Equal(2, aliceDto.ClassesCompleted);
+            Assert.Equal(1, aliceDto.ClassesRemaining);
+            Assert.Equal(100, aliceDto.AttendancePercent);
+
+            var bobDto = dashboard.Children.Single(c => c.ChildId == bob.Id);
+            Assert.Equal(1, bobDto.ClassesCompleted);
+            Assert.Equal(0, bobDto.ClassesRemaining);
+            Assert.Equal(0, bobDto.AttendancePercent);
+        }
+
+        [Fact]
+        public async Task MarkAllRead_StampsEveryUnreadRow_AndLeavesOtherRecipientsAlone()
+        {
+            var user = await _db.SeedUserAsync($"notif-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var otherUser = await _db.SeedUserAsync($"notif-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+
+            Notification Unread(Guid recipientId) => new()
+            {
+                RecipientUserId = recipientId,
+                Type = NotificationType.SessionReminder,
+                Channel = NotificationChannel.InApp,
+                Subject = "Class starts in 1 hour",
+                Body = "Your child's class starts soon.",
+                Status = NotificationStatus.Sent,
+            };
+
+            var alreadyRead = Unread(user.Id);
+            alreadyRead.ReadAtUtc = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+            var mine = new[] { Unread(user.Id), Unread(user.Id) };
+            var theirs = Unread(otherUser.Id);
+            _db.Context.AddRange([.. mine, alreadyRead, theirs]);
+            await _db.Context.SaveChangesAsync();
+
+            // MarkAllReadAsync is a single ExecuteUpdate, which bypasses the change tracker —
+            // so this also pins that the audit interceptor's UpdatedAtUtc stamp is applied by
+            // hand, and that the conditional WHERE really is scoped to one recipient's unread.
+            var marked = await _notifications.MarkAllReadAsync(user.Id);
+            Assert.Equal(mine.Length, marked);
+
+            _db.Context.ChangeTracker.Clear();
+            var rows = await _db.Context.Notifications.ToListAsync();
+
+            foreach (var expected in mine)
+            {
+                var row = rows.Single(n => n.Id == expected.Id);
+                Assert.NotNull(row.ReadAtUtc);
+                Assert.NotNull(row.UpdatedAtUtc);
+            }
+
+            // An already-read row keeps its original timestamp, and another user's is untouched.
+            Assert.Equal(alreadyRead.ReadAtUtc, rows.Single(n => n.Id == alreadyRead.Id).ReadAtUtc);
+            Assert.Null(rows.Single(n => n.Id == theirs.Id).ReadAtUtc);
+
+            // Second call has nothing left to do.
+            Assert.Equal(0, await _notifications.MarkAllReadAsync(user.Id));
+        }
+
         private static RecordEngagementRequest EngagementRequest() => new()
         {
             Events = [new EngagementEntryDto { ParticipantName = "Tester", Type = EngagementEventType.HandRaise }],

@@ -145,23 +145,20 @@ namespace iucs.readernest.application.Services
         public async Task<int> MarkAllReadAsync(Guid userId, CancellationToken cancellationToken = default)
         {
             var repository = _unitOfWork.Repository<Notification>();
-            var unread = await repository.Query()
-                .Where(n => n.RecipientUserId == userId && n.ReadAtUtc == null)
-                .ToListAsync(cancellationToken);
 
+            // A single conditional UPDATE, not "SELECT every unread row, then one UPDATE
+            // statement each". A long-lived account's unread backlog is unbounded, and the
+            // old shape materialised all of it just to stamp one column. ExecuteUpdateAsync
+            // bypasses the change tracker, so the audit interceptor never sees these writes —
+            // stamp UpdatedAtUtc by hand the way it would have (Notification is a plain
+            // BaseEntity, so there is no UpdatedBy to set).
             var now = DateTime.UtcNow;
-            foreach (var notification in unread)
-            {
-                notification.ReadAtUtc = now;
-                repository.Update(notification);
-            }
-
-            if (unread.Count > 0)
-            {
-                await _unitOfWork.SaveChangesAsync(cancellationToken);
-            }
-
-            return unread.Count;
+            return await repository.ExecuteUpdateAsync(
+                n => n.RecipientUserId == userId && n.ReadAtUtc == null,
+                setters => setters
+                    .SetProperty(n => n.ReadAtUtc, now)
+                    .SetProperty(n => n.UpdatedAtUtc, now),
+                cancellationToken);
         }
     }
 }

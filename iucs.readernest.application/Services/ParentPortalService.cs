@@ -45,29 +45,70 @@ namespace iucs.readernest.application.Services
                 .OrderBy(c => c.FirstName)
                 .ToListAsync(cancellationToken);
 
+            // Three set-based queries for the whole sibling group, instead of four per child.
+            // The per-child version issued 4N round trips (enrollments, completed count,
+            // upcoming count, attendance rows) and pulled every attendance row a child has
+            // ever had into memory just to average it — the counting now happens in SQL.
+            var childIds = children.Select(c => c.Id).ToList();
+
+            var enrollments = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                .Where(e => childIds.Contains(e.ChildId) && e.Status == EnrollmentStatus.Active)
+                .Select(e => new { e.ChildId, e.BatchId })
+                .ToListAsync(cancellationToken);
+            var batchIdsByChild = enrollments
+                .GroupBy(e => e.ChildId)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.BatchId).ToList());
+            var allBatchIds = enrollments.Select(e => e.BatchId).Distinct().ToList();
+
+            // Counted per batch, then summed across each child's batches — identical to the
+            // per-child "sessions whose BatchId is in this child's batches" count before.
+            var sessionCountsByBatch = await _unitOfWork.Repository<ClassSession>().Query()
+                .Where(s => s.BatchId != null && allBatchIds.Contains(s.BatchId.Value)
+                            && (s.Status == SessionStatus.Completed
+                                || s.Status == SessionStatus.Scheduled
+                                || s.Status == SessionStatus.CarriedForward))
+                .GroupBy(s => s.BatchId!.Value)
+                .Select(g => new
+                {
+                    BatchId = g.Key,
+                    Completed = g.Count(s => s.Status == SessionStatus.Completed),
+                    Upcoming = g.Count(s => s.Status == SessionStatus.Scheduled
+                                            || s.Status == SessionStatus.CarriedForward),
+                })
+                .ToDictionaryAsync(x => x.BatchId, cancellationToken);
+
+            var attendanceByChild = await _unitOfWork.Repository<SessionAttendance>().Query()
+                .Where(a => a.ChildId != null && childIds.Contains(a.ChildId.Value))
+                .GroupBy(a => a.ChildId!.Value)
+                .Select(g => new
+                {
+                    ChildId = g.Key,
+                    Total = g.Count(),
+                    Present = g.Count(a => a.Status != AttendanceStatus.Absent),
+                })
+                .ToDictionaryAsync(x => x.ChildId, cancellationToken);
+
             var summaries = new List<ParentChildSummaryDto>(children.Count);
             foreach (var child in children)
             {
-                var batchIds = await _unitOfWork.Repository<BatchEnrollment>().Query()
-                    .Where(e => e.ChildId == child.Id && e.Status == EnrollmentStatus.Active)
-                    .Select(e => e.BatchId)
-                    .ToListAsync(cancellationToken);
+                var completed = 0;
+                var upcoming = 0;
+                if (batchIdsByChild.TryGetValue(child.Id, out var childBatchIds))
+                {
+                    foreach (var batchId in childBatchIds)
+                    {
+                        if (sessionCountsByBatch.TryGetValue(batchId, out var counts))
+                        {
+                            completed += counts.Completed;
+                            upcoming += counts.Upcoming;
+                        }
+                    }
+                }
 
-                var completed = await _unitOfWork.Repository<ClassSession>().Query()
-                    .CountAsync(s => s.BatchId != null && batchIds.Contains(s.BatchId.Value)
-                                     && s.Status == SessionStatus.Completed, cancellationToken);
-                var upcoming = await _unitOfWork.Repository<ClassSession>().Query()
-                    .CountAsync(s => s.BatchId != null && batchIds.Contains(s.BatchId.Value)
-                                     && (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward),
-                        cancellationToken);
-
-                var attendanceRows = await _unitOfWork.Repository<SessionAttendance>().Query()
-                    .Where(a => a.ChildId == child.Id)
-                    .Select(a => a.Status)
-                    .ToListAsync(cancellationToken);
-                var attendancePercent = attendanceRows.Count == 0
+                attendanceByChild.TryGetValue(child.Id, out var attendance);
+                var attendancePercent = attendance is null || attendance.Total == 0
                     ? 100
-                    : Math.Round(100.0 * attendanceRows.Count(s => s != AttendanceStatus.Absent) / attendanceRows.Count, 1);
+                    : Math.Round(100.0 * attendance.Present / attendance.Total, 1);
 
                 summaries.Add(new ParentChildSummaryDto
                 {

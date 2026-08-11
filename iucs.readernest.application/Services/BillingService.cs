@@ -200,16 +200,27 @@ namespace iucs.readernest.application.Services
             return plan.ToDto();
         }
 
+        /// <summary>
+        /// The navigation properties <see cref="BillingMappings.ToDto(Invoice)"/> reads.
+        /// Lazy loading is not enabled on this context, so an invoice fetched without these
+        /// does not lazy-load them and does not throw either — the mapping is null-safe, so
+        /// it silently returns an InvoiceDto with ChildName/CourseName/ParentName/ParentEmail
+        /// all null. Routing every invoice-to-DTO read through this keeps the payload the
+        /// same shape no matter which endpoint produced it.
+        /// </summary>
+        private static IQueryable<Invoice> WithDtoIncludes(IQueryable<Invoice> query) =>
+            query
+                .Include(i => i.Child)
+                .Include(i => i.Course)
+                .Include(i => i.ParentProfile).ThenInclude(p => p.User)
+                .Include(i => i.Subscription).ThenInclude(s => s!.PackagePlan).ThenInclude(p => p.Course);
+
         public async Task<IReadOnlyList<InvoiceDto>> ListInvoicesAsync(
             InvoiceStatus? status,
             Guid? parentProfileId,
             CancellationToken cancellationToken = default)
         {
-            IQueryable<Invoice> query = _unitOfWork.Repository<Invoice>().Query()
-                .Include(i => i.Child)
-                .Include(i => i.Course)
-                .Include(i => i.ParentProfile).ThenInclude(p => p.User)
-                .Include(i => i.Subscription).ThenInclude(s => s!.PackagePlan).ThenInclude(p => p.Course);
+            var query = WithDtoIncludes(_unitOfWork.Repository<Invoice>().Query());
             if (status.HasValue)
             {
                 query = query.Where(i => i.Status == status.Value);
@@ -685,7 +696,7 @@ namespace iucs.readernest.application.Services
 
             await SettleGatewayTransactionAsync(request.OrderId, succeeded: true, request.PaymentId, null, cancellationToken);
 
-            var refreshed = await _unitOfWork.Repository<Invoice>().Query()
+            var refreshed = await WithDtoIncludes(_unitOfWork.Repository<Invoice>().Query())
                 .FirstOrDefaultAsync(i => i.Id == invoice.Id, cancellationToken) ?? invoice;
             return refreshed.ToDto();
         }
@@ -952,7 +963,7 @@ namespace iucs.readernest.application.Services
                 .FirstOrDefaultAsync(p => p.UserId == parentUserId, cancellationToken)
                 ?? throw new NotFoundException("No parent profile is linked to the current account.");
 
-            var invoice = await _unitOfWork.Repository<Invoice>().Query()
+            var invoice = await WithDtoIncludes(_unitOfWork.Repository<Invoice>().Query())
                 .FirstOrDefaultAsync(i => i.Id == invoiceId && i.ParentProfileId == parent.Id, cancellationToken)
                 ?? throw new NotFoundException(nameof(Invoice), invoiceId);
 
@@ -989,7 +1000,7 @@ namespace iucs.readernest.application.Services
             }
 
             // Re-read so the returned status reflects any settlement just applied.
-            var refreshed = await _unitOfWork.Repository<Invoice>().Query()
+            var refreshed = await WithDtoIncludes(_unitOfWork.Repository<Invoice>().Query())
                 .FirstOrDefaultAsync(i => i.Id == invoiceId, cancellationToken)
                 ?? invoice;
             return refreshed.ToDto();

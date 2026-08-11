@@ -6,7 +6,12 @@ using Microsoft.EntityFrameworkCore;
 namespace iucs.readernest.domain.Entities.Billing
 {
     /// <summary>Recurring enrollment of a child onto a package plan; drives auto billing.</summary>
-    [Index(nameof(Status))]
+    // Composite rather than Status alone, mirroring Invoice's (Status, DueDate): the hourly
+    // billing sweep asks for "Active AND NextBillingAtUtc <= now", and a Status-only index
+    // matches every active subscription — i.e. almost the whole table once the product has
+    // traction — leaving the date to be checked row by row. Leading on Status keeps every
+    // status-only query (subscription list filters) covered by the same index.
+    [Index(nameof(Status), nameof(NextBillingAtUtc))]
     public class Subscription : AuditEntity
     {
         public Guid ParentProfileId { get; set; }

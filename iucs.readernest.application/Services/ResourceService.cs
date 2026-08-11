@@ -216,18 +216,30 @@ namespace iucs.readernest.application.Services
             }
 
             var accessRepository = _unitOfWork.Repository<ResourceAccess>();
-            foreach (var parentProfileId in request.ParentProfileIds.Distinct())
+            var parentProfileIds = request.ParentProfileIds.Distinct().ToList();
+
+            // Two set-based lookups for the whole grant instead of two per parent id:
+            // which of the requested parents actually exist, and which already have a row
+            // for this resource. TrackedQuery so the existing rows below can be mutated
+            // in place and persisted by the single SaveChangesAsync at the end.
+            var knownParentIds = await _unitOfWork.Repository<ParentProfile>().Query()
+                .Where(p => parentProfileIds.Contains(p.Id))
+                .Select(p => p.Id)
+                .ToListAsync(cancellationToken);
+            var knownParentIdSet = knownParentIds.ToHashSet();
+
+            var existingByParentId = await accessRepository.TrackedQuery()
+                .Where(a => a.ResourceId == resourceId && parentProfileIds.Contains(a.ParentProfileId))
+                .ToDictionaryAsync(a => a.ParentProfileId, cancellationToken);
+
+            foreach (var parentProfileId in parentProfileIds)
             {
-                var parentExists = await _unitOfWork.Repository<ParentProfile>()
-                    .ExistsAsync(p => p.Id == parentProfileId, cancellationToken);
-                if (!parentExists)
+                if (!knownParentIdSet.Contains(parentProfileId))
                 {
                     throw new NotFoundException(nameof(ParentProfile), parentProfileId);
                 }
 
-                var existing = await accessRepository.FirstOrDefaultAsync(
-                    a => a.ResourceId == resourceId && a.ParentProfileId == parentProfileId,
-                    cancellationToken);
+                existingByParentId.TryGetValue(parentProfileId, out var existing);
 
                 if (existing is null)
                 {

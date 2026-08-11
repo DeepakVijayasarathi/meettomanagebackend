@@ -187,13 +187,20 @@ namespace iucs.readernest.api.Services.Payments
             string gatewayReference,
             CancellationToken cancellationToken = default)
         {
+            // Every adapter's integration row in one query rather than one lookup per adapter.
+            // The reconcile sweep calls this once per pending transaction, so the per-adapter
+            // query multiplied out across the whole pending book on every cycle.
+            var adapterKeys = _adapters.Select(a => a.IntegrationKey).ToList();
+            var configJsonByKey = await _unitOfWork.Repository<Integration>().Query()
+                .Where(i => adapterKeys.Contains(i.Key))
+                .ToDictionaryAsync(i => i.Key, i => i.ConfigJson, cancellationToken);
+
             // The pending transaction doesn't record which provider minted the reference, so
             // ask each configured adapter; each returns Unknown unless the reference is its own.
             foreach (var adapter in _adapters)
             {
-                var integration = await _unitOfWork.Repository<Integration>().Query()
-                    .FirstOrDefaultAsync(i => i.Key == adapter.IntegrationKey, cancellationToken);
-                var config = DecodeConfig(integration?.ConfigJson);
+                configJsonByKey.TryGetValue(adapter.IntegrationKey, out var configJson);
+                var config = DecodeConfig(configJson);
 
                 var status = await adapter.GetPaymentStatusAsync(gatewayReference, config, cancellationToken);
                 if (status.State != GatewayPaymentState.Unknown)

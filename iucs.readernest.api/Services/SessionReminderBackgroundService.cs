@@ -73,12 +73,40 @@ namespace iucs.readernest.api.Services
                 .ToListAsync(cancellationToken);
 
             string? jitsiConfigJson = null;
+            var demoBookingsBySessionId = new Dictionary<Guid, DemoBooking>();
+            var parentUsersByBatchId = new Dictionary<Guid, List<User>>();
             if (upcoming.Count > 0)
             {
                 jitsiConfigJson = await unitOfWork.Repository<Integration>().Query()
                     .Where(i => i.Key == "jitsi")
                     .Select(i => i.ConfigJson)
                     .FirstOrDefaultAsync(cancellationToken);
+
+                // Both recipient lookups are resolved for the whole window up front. Done
+                // inside the loop they cost one query per session, so a busy hour's reminder
+                // fan-out scaled its round trips with the number of classes starting at once.
+                var demoSessionIds = upcoming.Where(s => s.BatchId is null).Select(s => s.Id).ToList();
+                if (demoSessionIds.Count > 0)
+                {
+                    demoBookingsBySessionId = await unitOfWork.Repository<DemoBooking>().Query()
+                        .Where(b => b.ClassSessionId != null && demoSessionIds.Contains(b.ClassSessionId.Value))
+                        .ToDictionaryAsync(b => b.ClassSessionId!.Value, cancellationToken);
+                }
+
+                var batchIds = upcoming.Where(s => s.BatchId is not null)
+                    .Select(s => s.BatchId!.Value).Distinct().ToList();
+                if (batchIds.Count > 0)
+                {
+                    var enrolments = await unitOfWork.Repository<BatchEnrollment>().Query()
+                        .Where(e => batchIds.Contains(e.BatchId) && e.Status == EnrollmentStatus.Active)
+                        .Select(e => new { e.BatchId, User = e.Child.ParentProfile.User })
+                        .ToListAsync(cancellationToken);
+                    parentUsersByBatchId = enrolments
+                        .GroupBy(e => e.BatchId)
+                        .ToDictionary(
+                            g => g.Key,
+                            g => g.Select(e => e.User).DistinctBy(u => u.Id).ToList());
+                }
             }
 
             foreach (var session in upcoming)
@@ -112,8 +140,7 @@ namespace iucs.readernest.api.Services
                     // Demo sessions have no batch — the lead is tracked via DemoBooking.ParentEmail,
                     // which may not correspond to a real account yet, so this bypasses the
                     // user-bound notification log the same way the initial confirmation email does.
-                    var demoBooking = await unitOfWork.Repository<DemoBooking>().Query()
-                        .FirstOrDefaultAsync(b => b.ClassSessionId == session.Id, cancellationToken);
+                    demoBookingsBySessionId.TryGetValue(session.Id, out var demoBooking);
                     if (demoBooking is not null)
                     {
                         var (subject, body) = await emailTemplates.RenderAsync(
@@ -130,11 +157,11 @@ namespace iucs.readernest.api.Services
                     continue;
                 }
 
-                var parentUsers = await unitOfWork.Repository<BatchEnrollment>().Query()
-                    .Where(e => e.BatchId == session.BatchId && e.Status == EnrollmentStatus.Active)
-                    .Select(e => e.Child.ParentProfile.User)
-                    .Distinct()
-                    .ToListAsync(cancellationToken);
+                if (!parentUsersByBatchId.TryGetValue(session.BatchId.Value, out var parentUsers))
+                {
+                    continue;
+                }
+
                 foreach (var parent in parentUsers)
                 {
                     await notifications.SendTemplatedEmailAsync(

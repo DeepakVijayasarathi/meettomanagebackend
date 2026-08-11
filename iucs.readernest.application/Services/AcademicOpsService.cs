@@ -57,15 +57,24 @@ namespace iucs.readernest.application.Services
                             && s.ScheduledStartAtUtc < dayEnd)
                 .ToListAsync(cancellationToken);
 
+            // The next free same-weekday slot depends only on the holiday calendar, not on
+            // any individual session, so it is computed once here rather than re-derived
+            // inside the loop below — that probe was issuing a fresh ExistsAsync per session
+            // per candidate week while always arriving at the same answer.
+            var futureHolidayDates = (await _unitOfWork.Repository<Holiday>().Query()
+                    .Where(h => h.Date > request.Date)
+                    .Select(h => h.Date)
+                    .ToListAsync(cancellationToken))
+                .ToHashSet();
+
+            var offsetDays = 7;
+            while (futureHolidayDates.Contains(request.Date.AddDays(offsetDays)))
+            {
+                offsetDays += 7;
+            }
+
             foreach (var session in clashingSessions)
             {
-                var offsetDays = 7;
-                while (await _unitOfWork.Repository<Holiday>().ExistsAsync(
-                           h => h.Date == request.Date.AddDays(offsetDays), cancellationToken))
-                {
-                    offsetDays += 7;
-                }
-
                 await _unitOfWork.Repository<ClassSession>().AddAsync(
                     new ClassSession
                     {
@@ -350,6 +359,15 @@ namespace iucs.readernest.application.Services
             }
 
             var repository = _unitOfWork.Repository<SessionAttendance>();
+
+            // One tracked read of this session's attendance rows (bounded by class size),
+            // instead of a FirstOrDefaultAsync per submitted entry. The whole-session read
+            // is covered by the existing ClassSessionId index and lets the rejoin-updates-
+            // the-existing-row rule below be resolved in memory.
+            var existingRows = await repository.TrackedQuery()
+                .Where(a => a.ClassSessionId == sessionId)
+                .ToListAsync(cancellationToken);
+
             foreach (var entry in request.Entries)
             {
                 if ((entry.ChildId is null) == (entry.TeacherProfileId is null))
@@ -358,11 +376,8 @@ namespace iucs.readernest.application.Services
                 }
 
                 // Rejoin after a network drop updates the existing row, never duplicates it
-                var existing = await repository.FirstOrDefaultAsync(
-                    a => a.ClassSessionId == sessionId
-                         && a.ChildId == entry.ChildId
-                         && a.TeacherProfileId == entry.TeacherProfileId,
-                    cancellationToken);
+                var existing = existingRows.FirstOrDefault(
+                    a => a.ChildId == entry.ChildId && a.TeacherProfileId == entry.TeacherProfileId);
 
                 if (existing is null)
                 {

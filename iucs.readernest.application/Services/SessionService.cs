@@ -356,12 +356,21 @@ namespace iucs.readernest.application.Services
         /// <summary>Walks forward a day at a time (bounded) to the next date that isn't a holiday.</summary>
         private async Task<DateTime> NextNonHolidayDateAsync(DateTime candidateUtc, CancellationToken cancellationToken)
         {
+            // The whole 14-day window is fetched in one query rather than probed a day at a
+            // time — the walk itself is unchanged, but it no longer costs up to 14 sequential
+            // round trips (one per candidate day) to find a date that is usually the first one.
+            var windowStart = DateOnly.FromDateTime(candidateUtc);
+            var windowEnd = DateOnly.FromDateTime(candidateUtc.AddDays(13));
+            var holidayDates = (await _unitOfWork.Repository<Holiday>().Query()
+                    .Where(h => h.Date >= windowStart && h.Date <= windowEnd)
+                    .Select(h => h.Date)
+                    .ToListAsync(cancellationToken))
+                .ToHashSet();
+
             for (var i = 0; i < 14; i++)
             {
                 var candidate = candidateUtc.AddDays(i);
-                var isHoliday = await _unitOfWork.Repository<Holiday>()
-                    .ExistsAsync(h => h.Date == DateOnly.FromDateTime(candidate), cancellationToken);
-                if (!isHoliday)
+                if (!holidayDates.Contains(DateOnly.FromDateTime(candidate)))
                 {
                     return candidate;
                 }
