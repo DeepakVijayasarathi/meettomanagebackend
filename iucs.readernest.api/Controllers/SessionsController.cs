@@ -20,7 +20,12 @@ namespace iucs.readernest.api.Controllers
             _sessionService = sessionService;
         }
 
+        // Staff console only: Teacher and Parent also carry SessionCalendarManagement:View
+        // (they need it for their own scoped routes — /mine and the parent portal schedule),
+        // so HasPermission alone would hand either of them the whole institution's calendar,
+        // every teacher's classes included. The role check is what actually scopes this.
         [HttpGet]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
         [HasPermission(PermissionModule.SessionCalendarManagement, PermissionAction.View)]
         public async Task<ActionResult<IReadOnlyList<ClassSessionDto>>> List(
             [FromQuery] DateTime fromUtc,
@@ -44,7 +49,9 @@ namespace iucs.readernest.api.Controllers
             return Ok(await _sessionService.ListForTeacherUserAsync(userId, fromUtc, toUtc, cancellationToken));
         }
 
+        /// <summary>Any session by id — staff-scoped for the same reason as the list above.</summary>
         [HttpGet("{id:guid}")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
         [HasPermission(PermissionModule.SessionCalendarManagement, PermissionAction.View)]
         public async Task<ActionResult<ClassSessionDto>> Get(Guid id, CancellationToken cancellationToken)
         {
@@ -194,8 +201,13 @@ namespace iucs.readernest.api.Controllers
             return Ok(await academicOps.ListAttendanceAsync(id, cancellationToken));
         }
 
-        /// <summary>Calendar sync: iCalendar feed of scheduled sessions for external calendars.</summary>
+        /// <summary>
+        /// Calendar sync: iCalendar feed of scheduled sessions for external calendars.
+        /// Staff-scoped like the list it wraps; Teacher/Parent sync their own schedule
+        /// through calendar/mine.ics instead.
+        /// </summary>
         [HttpGet("calendar.ics")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
         [HasPermission(PermissionModule.SessionCalendarManagement, PermissionAction.View)]
         public async Task<IActionResult> CalendarFeed(
             [FromQuery] Guid? teacherProfileId,

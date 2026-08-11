@@ -217,6 +217,10 @@ namespace iucs.readernest.application.Services
             var session = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(ClassSession), id);
 
+            // Completing a class accrues that session's teacher payout, so being *a* teacher
+            // is not enough — the caller must be this session's own teacher (or an Admin).
+            await EnsureSessionParticipantAsync(session, cancellationToken);
+
             if (TerminalStatuses.Contains(session.Status))
             {
                 throw new DomainValidationException($"A session in status '{session.Status}' cannot be completed.");
@@ -289,6 +293,11 @@ namespace iucs.readernest.application.Services
         {
             var session = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(ClassSession), id);
+
+            // A teacher no-show is a payout deduction against this session's teacher — any
+            // teacher being able to file one on someone else's class is a direct financial
+            // attack on a colleague, so the caller must own this session (or be an Admin).
+            await EnsureSessionParticipantAsync(session, cancellationToken);
 
             if (TerminalStatuses.Contains(session.Status))
             {
@@ -385,12 +394,12 @@ namespace iucs.readernest.application.Services
             RegisterRecordingRequest request,
             CancellationToken cancellationToken = default)
         {
-            var sessionExists = await _unitOfWork.Repository<ClassSession>()
-                .ExistsAsync(s => s.Id == sessionId, cancellationToken);
-            if (!sessionExists)
-            {
-                throw new NotFoundException(nameof(ClassSession), sessionId);
-            }
+            var session = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(sessionId, cancellationToken)
+                ?? throw new NotFoundException(nameof(ClassSession), sessionId);
+
+            // A recording is served on to the batch's parents, so only this session's own
+            // teacher (or an Admin) may attach one — not any teacher who knows a session id.
+            await EnsureSessionParticipantAsync(session, cancellationToken);
 
             var recording = new SessionRecording
             {
@@ -411,6 +420,13 @@ namespace iucs.readernest.application.Services
             Guid sessionId,
             CancellationToken cancellationToken = default)
         {
+            var session = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(sessionId, cancellationToken)
+                ?? throw new NotFoundException(nameof(ClassSession), sessionId);
+
+            // Recordings show real children in a live class; scoping to this session's own
+            // participants keeps one teacher out of another teacher's classroom footage.
+            await EnsureSessionParticipantAsync(session, cancellationToken);
+
             var now = DateTime.UtcNow;
             var recordings = await _unitOfWork.Repository<SessionRecording>().Query()
                 .Where(r => r.ClassSessionId == sessionId && (r.ExpiresAtUtc == null || r.ExpiresAtUtc > now))
@@ -779,6 +795,13 @@ namespace iucs.readernest.application.Services
             Guid sessionId,
             CancellationToken cancellationToken = default)
         {
+            var session = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(sessionId, cancellationToken)
+                ?? throw new NotFoundException(nameof(ClassSession), sessionId);
+
+            // Per-child engagement scores are exactly the "how is this student doing" data
+            // the posting side (RecordEngagementAsync) already gates on participation.
+            await EnsureSessionParticipantAsync(session, cancellationToken);
+
             var events = await _unitOfWork.Repository<EngagementEvent>().Query()
                 .Where(e => e.ClassSessionId == sessionId)
                 .ToListAsync(cancellationToken);

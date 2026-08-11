@@ -1092,6 +1092,17 @@ namespace iucs.readernest.application.Services
             var transaction = await _unitOfWork.Repository<PaymentTransaction>().GetByIdAsync(request.PaymentTransactionId, cancellationToken)
                 ?? throw new NotFoundException(nameof(PaymentTransaction), request.PaymentTransactionId);
 
+            // Only money that actually arrived can be given back. A Pending intent (a cash
+            // declaration nobody has collected yet, or an abandoned checkout) and a Failed
+            // one both have a zero real balance, so approving a refund against either
+            // disburses funds the platform never received — the "cannot exceed the
+            // transaction amount" ceiling below is meaningless without this.
+            if (transaction.Status != TransactionStatus.Success)
+            {
+                throw new DomainValidationException(
+                    $"Only a successful payment can be refunded; this transaction is {transaction.Status}.");
+            }
+
             // Sum every refund not already rejected — a second request must not be able to
             // stack on top of one still pending review or one already paid out.
             var alreadyRefunded = await _unitOfWork.Repository<Refund>().Query()

@@ -1,6 +1,7 @@
 using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Academics;
+using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Sessions;
 using iucs.readernest.domain.Entities.Users;
@@ -17,12 +18,38 @@ namespace iucs.readernest.application.Services
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
         private readonly INotificationService _notificationService;
+        private readonly ICurrentUserService _currentUser;
+        private readonly ISessionService _sessionService;
 
-        public AcademicOpsService(IUnitOfWork unitOfWork, IAuditLogService auditLog, INotificationService notificationService)
+        public AcademicOpsService(
+            IUnitOfWork unitOfWork,
+            IAuditLogService auditLog,
+            INotificationService notificationService,
+            ICurrentUserService currentUser,
+            ISessionService sessionService)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _notificationService = notificationService;
+            _currentUser = currentUser;
+            _sessionService = sessionService;
+        }
+
+        /// <summary>
+        /// Attendance is written and read per session by "Admin or Teacher", but that role gate
+        /// alone lets any teacher touch any class they can name an id for. Same participation
+        /// rule the live classroom and engagement endpoints already use: Admin passes, a teacher
+        /// only for the session they are assigned to.
+        /// </summary>
+        private async Task EnsureSessionParticipantAsync(Guid sessionId, CancellationToken cancellationToken)
+        {
+            var userId = _currentUser.UserId
+                ?? throw new UnauthorizedException("Not signed in.");
+
+            if (!await _sessionService.IsSessionParticipantAsync(sessionId, userId, cancellationToken))
+            {
+                throw new ForbiddenException("You do not have access to this session.");
+            }
         }
 
         public async Task<IReadOnlyList<HolidayDto>> ListHolidaysAsync(CancellationToken cancellationToken = default)
@@ -351,6 +378,8 @@ namespace iucs.readernest.application.Services
                 .FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken)
                 ?? throw new NotFoundException(nameof(ClassSession), sessionId);
 
+            await EnsureSessionParticipantAsync(sessionId, cancellationToken);
+
             if (session.Status is SessionStatus.Cancelled or SessionStatus.Rescheduled
                 or SessionStatus.TeacherNoShow or SessionStatus.StudentNoShow)
             {
@@ -437,6 +466,8 @@ namespace iucs.readernest.application.Services
             Guid sessionId,
             CancellationToken cancellationToken = default)
         {
+            await EnsureSessionParticipantAsync(sessionId, cancellationToken);
+
             var rows = await _unitOfWork.Repository<SessionAttendance>().Query()
                 .Include(a => a.Child)
                 .Where(a => a.ClassSessionId == sessionId)

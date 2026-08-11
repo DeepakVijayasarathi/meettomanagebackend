@@ -73,7 +73,8 @@ namespace iucs.readernest.tests
 
         private MenuService CreateMenuService() => new(_db.UnitOfWork, _auditLog);
 
-        private AcademicOpsService CreateAcademicOpsService() => new(_db.UnitOfWork, _auditLog, _notifications);
+        private AcademicOpsService CreateAcademicOpsService() =>
+            new(_db.UnitOfWork, _auditLog, _notifications, _db.CurrentUser, CreateSessionService());
 
         private GamificationService CreateGamificationService() => new(_db.UnitOfWork, CreateSessionService());
 
@@ -1622,6 +1623,112 @@ namespace iucs.readernest.tests
                 () => CreateSessionService().RecordEngagementAsync(session.Id, EngagementRequest()));
         }
 
+        /// <summary>
+        /// Makes the acting user a Teacher with no connection to <paramref name="session"/> —
+        /// the "any teacher who knows a session id" attacker the session endpoints must reject.
+        /// </summary>
+        private async Task BecomeUnrelatedTeacherAsync()
+        {
+            var otherTeacherUser = await _db.SeedUserAsync($"t-other-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            _db.Context.TeacherProfiles.Add(new TeacherProfile { UserId = otherTeacherUser.Id });
+            await _db.Context.SaveChangesAsync();
+            _db.CurrentUser.UserId = otherTeacherUser.Id;
+        }
+
+        [Fact]
+        public async Task CompleteSession_Rejects_UnrelatedTeacher()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            await BecomeUnrelatedTeacherAsync();
+
+            // Completing accrues a payout against the session's OWN teacher, so an outsider
+            // must not be able to trigger it by naming a session id.
+            await Assert.ThrowsAsync<ForbiddenException>(() => CreateSessionService().CompleteAsync(session.Id));
+
+            var untouched = await _db.Context.ClassSessions.FindAsync(session.Id);
+            Assert.Equal(SessionStatus.Scheduled, untouched!.Status);
+            Assert.Empty(_db.Context.PayoutItems.ToList());
+        }
+
+        [Fact]
+        public async Task MarkNoShow_Rejects_UnrelatedTeacher()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            await BecomeUnrelatedTeacherAsync();
+
+            // A teacher no-show is a deduction on the assigned teacher's pay — one teacher
+            // filing it against another's class would be a direct financial attack.
+            await Assert.ThrowsAsync<ForbiddenException>(
+                () => CreateSessionService().MarkNoShowAsync(session.Id, new MarkNoShowRequest { Party = NoShowParty.Teacher }));
+
+            Assert.Empty(_db.Context.PayoutItems.ToList());
+            Assert.Equal(SessionStatus.Scheduled, (await _db.Context.ClassSessions.FindAsync(session.Id))!.Status);
+        }
+
+        [Fact]
+        public async Task SessionAttendance_Rejects_UnrelatedTeacher()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            await BecomeUnrelatedTeacherAsync();
+
+            // Attendance rows name real children; reading or writing another class's is
+            // neither the outsider's data nor their record to change.
+            await Assert.ThrowsAsync<ForbiddenException>(
+                () => CreateAcademicOpsService().ListAttendanceAsync(session.Id));
+            await Assert.ThrowsAsync<ForbiddenException>(
+                () => CreateAcademicOpsService().CaptureAttendanceAsync(session.Id, new CaptureAttendanceRequest
+                {
+                    Entries = [new AttendanceEntryDto { TeacherProfileId = session.TeacherProfileId, Status = AttendanceStatus.Present }],
+                }));
+            Assert.Empty(_db.Context.SessionAttendances.ToList());
+        }
+
+        [Fact]
+        public async Task SessionRecordings_Reject_UnrelatedTeacher()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            await BecomeUnrelatedTeacherAsync();
+
+            await Assert.ThrowsAsync<ForbiddenException>(
+                () => CreateSessionService().ListRecordingsAsync(session.Id));
+            await Assert.ThrowsAsync<ForbiddenException>(
+                () => CreateSessionService().AddRecordingAsync(session.Id, new RegisterRecordingRequest
+                {
+                    StorageUrl = "https://recordings.test/evil.mp4",
+                }));
+            Assert.Empty(_db.Context.SessionRecordings.ToList());
+        }
+
+        [Fact]
+        public async Task RequestRefund_Rejects_TransactionThatNeverSucceeded()
+        {
+            var parentUser = await _db.SeedUserAsync($"ref-pending-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.AddRange(parentProfile,
+                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+            await _db.Context.SaveChangesAsync();
+
+            var billing = CreateBillingService();
+            var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+
+            // A cash intent the parent declared but nobody has collected: Pending, so no
+            // money has actually reached the platform to give back.
+            await billing.InitiateParentPaymentAsync(parentUser.Id, invoice.Id, new InitiateParentPaymentRequest { MethodKey = "cash" });
+            var pending = await _db.Context.PaymentTransactions.FirstAsync(t => t.InvoiceId == invoice.Id);
+            Assert.Equal(TransactionStatus.Pending, pending.Status);
+
+            await Assert.ThrowsAsync<DomainValidationException>(
+                () => billing.RequestRefundAsync(new RequestRefundRequest
+                {
+                    PaymentTransactionId = pending.Id, Amount = 1000, Reason = "Refund of money never received",
+                }));
+            Assert.Empty(_db.Context.Refunds.ToList());
+        }
+
         [Fact]
         public async Task ApproveEnrollment_PersistsStatus_UnlocksParent_AndCreatesChild()
         {
@@ -2352,6 +2459,12 @@ namespace iucs.readernest.tests
             }
 
             await _db.Context.SaveChangesAsync();
+
+            // Session write/read paths (complete, no-show, attendance, recordings, engagement)
+            // are scoped to the session's own teacher, so the acting user defaults to exactly
+            // that teacher here — the realistic caller. Tests that need a different actor
+            // (an unrelated teacher, a parent) overwrite this after seeding.
+            _db.CurrentUser.UserId = teacherUser.Id;
             return (batch, course, session);
         }
 
