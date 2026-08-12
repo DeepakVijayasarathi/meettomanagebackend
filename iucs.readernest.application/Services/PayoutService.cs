@@ -51,6 +51,26 @@ namespace iucs.readernest.application.Services
                 throw new DomainValidationException("Duration must be 30, 45 or 60 minutes.");
             }
 
+            // A rate card drives real money with no downstream sanity check, so the bounds are
+            // enforced here rather than trusted from the DTO. A negative rate makes every
+            // completed class deduct from the teacher instead of paying them; a negative penalty
+            // percent inverts the sign of the no-show deduction (-(rate * -100 / 100) = +rate),
+            // silently turning a missed class into a bonus.
+            if (request.RatePerSession < 0)
+            {
+                throw new DomainValidationException("Rate per session cannot be negative.");
+            }
+
+            // Deliberately NOT capped at 100: deducting more than the missed session was worth
+            // is a supported policy (WBS p.31 "Penalty configuration" — centres can deduct less,
+            // exactly, or more). Only the sign is wrong on its face, plus an upper bound loose
+            // enough to allow any real policy while still catching a misplaced decimal point.
+            if (request.TeacherNoShowPenaltyPercent is < 0 or > 1000)
+            {
+                throw new DomainValidationException(
+                    "Teacher no-show penalty must be between 0 and 1000 percent of the session rate.");
+            }
+
             // Null teacher = the centre-wide default card; only concrete teachers need to exist.
             if (request.TeacherProfileId is { } teacherProfileId)
             {

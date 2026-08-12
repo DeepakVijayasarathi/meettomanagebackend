@@ -311,6 +311,22 @@ namespace iucs.readernest.application.Services
                 .FirstOrDefaultAsync(t => t.UserId == teacherUserId, cancellationToken)
                 ?? throw new NotFoundException("No teacher profile is linked to the current account.");
 
+            // Object-level authorization: being *a* teacher is not enough, this must be the
+            // teacher who actually ran the demo. The feedback is the permanent, admission-facing
+            // evaluation of a named child (it carries the recommended course and batch type and
+            // feeds the conversion pipeline), it is filed under the caller's own teacher profile,
+            // and the already-submitted guard below makes it one-shot — so without this check any
+            // teacher who knows a booking id could falsify another teacher's assessment of a child
+            // AND permanently lock the real teacher out of a mandatory step.
+            // Mirrors ListForTeacherUserAsync, which already scopes the read side this way.
+            var ownsDemo = booking.ClassSessionId is { } sessionId
+                && await _unitOfWork.Repository<ClassSession>()
+                    .ExistsAsync(s => s.Id == sessionId && s.TeacherProfileId == teacher.Id, cancellationToken);
+            if (!ownsDemo)
+            {
+                throw new ForbiddenException("You can only submit feedback for a demo you taught.");
+            }
+
             var alreadySubmitted = await _unitOfWork.Repository<DemoFeedback>()
                 .ExistsAsync(f => f.DemoBookingId == demoBookingId, cancellationToken);
             if (alreadySubmitted)

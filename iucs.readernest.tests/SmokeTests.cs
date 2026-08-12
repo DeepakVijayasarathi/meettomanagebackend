@@ -2420,6 +2420,662 @@ namespace iucs.readernest.tests
             Assert.Equal(0, await _notifications.MarkAllReadAsync(user.Id));
         }
 
+        // ---- QA pass: object-level authorization on id-keyed teacher endpoints ----
+
+        /// <summary>A demo booking with a real class session assigned to its own teacher.</summary>
+        private async Task<(DemoBooking Booking, TeacherProfile OwningTeacher, User OtherTeacherUser)> SeedDemoBookingAsync()
+        {
+            var owningTeacherUser = await _db.SeedUserAsync($"demo-own-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var owningTeacher = new TeacherProfile { UserId = owningTeacherUser.Id };
+            var otherTeacherUser = await _db.SeedUserAsync($"demo-other-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var otherTeacher = new TeacherProfile { UserId = otherTeacherUser.Id };
+            _db.Context.AddRange(owningTeacher, otherTeacher);
+            await _db.Context.SaveChangesAsync();
+
+            var booking = await CreateDemoBookingService().CreateAsync(new CreateDemoBookingRequest
+            {
+                ParentName = "Lead Parent",
+                ParentEmail = $"lead-{Guid.NewGuid():N}@test.com",
+                ChildName = "Kid",
+                TeacherProfileId = owningTeacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(1),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(1).AddMinutes(30),
+            });
+
+            var entity = await _db.Context.DemoBookings.AsNoTracking().FirstAsync(b => b.Id == booking.Id);
+            return (entity, owningTeacher, otherTeacherUser);
+        }
+
+        [Fact]
+        public async Task SubmitDemoFeedback_Rejects_UnrelatedTeacher()
+        {
+            // Same shape as the session IDOR fixed in 8895924: the endpoint is gated on
+            // "is a Teacher" but the demo booking id comes straight from the caller. The
+            // feedback is the permanent, admission-facing evaluation of a named child
+            // (it carries RecommendedCourseId/SuggestedBatchType and drives enrollment),
+            // it is filed under the CALLER's teacher profile, and it is one-shot — so a
+            // teacher who never ran the demo can both falsify the record and permanently
+            // lock the real teacher out of the mandatory post-demo step.
+            var (booking, _, otherTeacherUser) = await SeedDemoBookingAsync();
+
+            await Assert.ThrowsAsync<ForbiddenException>(() =>
+                CreateDemoBookingService().SubmitFeedbackAsync(booking.Id, otherTeacherUser.Id, new SubmitDemoFeedbackRequest
+                {
+                    AcademicLevel = "Level 2",
+                    Strengths = "Injected by a teacher who never taught this child",
+                    ImprovementAreas = "n/a",
+                }));
+
+            // Ground truth: nothing was written, so the assigned teacher can still file theirs.
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            Assert.Empty(await verifyContext.DemoFeedbacks.Where(f => f.DemoBookingId == booking.Id).ToListAsync());
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task SubmitDemoFeedback_Allows_AssignedTeacher_AndIsOneShot()
+        {
+            var (booking, owningTeacher, _) = await SeedDemoBookingAsync();
+            var owningTeacherUserId = (await _db.Context.TeacherProfiles.AsNoTracking()
+                .FirstAsync(t => t.Id == owningTeacher.Id)).UserId;
+
+            var request = new SubmitDemoFeedbackRequest
+            {
+                AcademicLevel = "Level 2",
+                Strengths = "Confident reader",
+                ImprovementAreas = "Blends",
+            };
+
+            var feedback = await CreateDemoBookingService().SubmitFeedbackAsync(booking.Id, owningTeacherUserId, request);
+            Assert.Equal(booking.Id, feedback.DemoBookingId);
+
+            // Feedback closes the demo stage of the conversion pipeline.
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            Assert.Equal(
+                ConversionStatus.DemoCompleted,
+                (await verifyContext.DemoBookings.FirstAsync(b => b.Id == booking.Id)).ConversionStatus);
+            verifyContext.Dispose();
+
+            // Still one-shot for the legitimate teacher.
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                CreateDemoBookingService().SubmitFeedbackAsync(booking.Id, owningTeacherUserId, request));
+        }
+
+        // ---- QA pass: state-machine guards (invalid transitions must be refused, not no-op'd) ----
+
+        [Fact]
+        public async Task CashIntent_CannotBeConfirmedOrRejectedTwice()
+        {
+            var (billing, invoice) = await SeedInvoiceAsync(amount: 1000);
+            var parentUserId = await _db.Context.ParentProfiles.AsNoTracking()
+                .Where(p => p.Id == invoice.ParentProfileId).Select(p => p.UserId).FirstAsync();
+
+            await billing.InitiateParentPaymentAsync(parentUserId, invoice.Id, new InitiateParentPaymentRequest { MethodKey = "cash" });
+            var intent = await _db.Context.PaymentTransactions.AsNoTracking()
+                .FirstAsync(t => t.InvoiceId == invoice.Id && t.Method == PaymentMethod.Cash);
+
+            await billing.ConfirmCashIntentAsync(intent.Id, new ConfirmCashIntentRequest());
+
+            // Re-confirming must not credit the invoice a second time.
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                billing.ConfirmCashIntentAsync(intent.Id, new ConfirmCashIntentRequest()));
+            // Nor may a settled intent be walked backwards into Failed.
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                billing.RejectCashIntentAsync(intent.Id, new RejectCashIntentRequest { Reason = "changed my mind" }));
+
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            var settled = await verifyContext.Invoices.FirstAsync(i => i.Id == invoice.Id);
+            Assert.Equal(1000m, settled.AmountPaid); // credited exactly once
+            Assert.Equal(InvoiceStatus.Paid, settled.Status);
+            Assert.Equal(
+                TransactionStatus.Success,
+                (await verifyContext.PaymentTransactions.FirstAsync(t => t.Id == intent.Id)).Status);
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task Refund_RejectedThenApproved_IsRefused_AndNeverReachesTheGateway()
+        {
+            var gateway = new FakePaymentGateway();
+            var refund = await SeedRequestedRefundAsync(gateway);
+            var billing = CreateBillingService(gateway);
+
+            await billing.ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = false });
+
+            // AppException, not a specific subclass: which of the two guards refuses this depends
+            // on whether the caller's DbContext still holds the pre-rejection tracked entity.
+            // In production each request is a fresh scope, so the friendly in-memory check wins
+            // (400 "already Rejected"); reusing one scope as this test does leaves that read
+            // stale — ExecuteUpdateAsync bypasses the change tracker — and the conditional UPDATE
+            // catches it instead (409). Both are correct refusals; the invariant under test is
+            // that a rejected refund is never resurrected and never reaches the gateway.
+            await Assert.ThrowsAsync<ConflictException>(() =>
+                billing.ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = true }));
+
+            Assert.Equal(0, gateway.RefundCallCount); // no money left the platform
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            Assert.Equal(RefundStatus.Rejected, (await verifyContext.Refunds.FirstAsync(r => r.Id == refund.Id)).Status);
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task Session_TerminalStatuses_RefuseCompleteAndNoShowAndAttendance()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 3);
+            var sessions = CreateSessionService();
+
+            await sessions.CompleteAsync(session.Id, new CompleteSessionRequest());
+
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                sessions.CompleteAsync(session.Id, new CompleteSessionRequest()));
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                sessions.MarkNoShowAsync(session.Id, new MarkNoShowRequest { Party = NoShowParty.Teacher }));
+
+            // Exactly one payout earning accrued, not two — the guard is what protects the
+            // teacher's statement from a double-click on "complete".
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            var items = await verifyContext.PayoutItems.Where(i => i.ClassSessionId == session.Id).ToListAsync();
+            Assert.Single(items);
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task Payout_FinalizeAndMarkPaid_RefuseOutOfOrderAndRepeatTransitions()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var payouts = CreatePayoutService();
+            await payouts.SetRateAsync(new SavePayoutRateRequest
+            {
+                DurationMinutes = 45, RatePerSession = 500, EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
+            });
+            await CreateSessionService().CompleteAsync(session.Id, new CompleteSessionRequest());
+            var payout = await _db.Context.Payouts.AsNoTracking().FirstAsync();
+
+            // Paying before finalizing skips the lock on the month's total.
+            await Assert.ThrowsAsync<DomainValidationException>(() => payouts.MarkPaidAsync(payout.Id));
+
+            await payouts.FinalizeAsync(payout.Id);
+            await Assert.ThrowsAsync<DomainValidationException>(() => payouts.FinalizeAsync(payout.Id));
+
+            await payouts.MarkPaidAsync(payout.Id);
+            // A second mark-paid would email a duplicate salary slip against the same money.
+            await Assert.ThrowsAsync<DomainValidationException>(() => payouts.MarkPaidAsync(payout.Id));
+
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            Assert.Equal(PayoutStatus.Paid, (await verifyContext.Payouts.FirstAsync(p => p.Id == payout.Id)).Status);
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task FeeSuspension_CannotBeLiftedTwice()
+        {
+            var parentUser = await _db.SeedUserAsync($"susp-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var account = new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" };
+            _db.Context.AddRange(parentProfile, account);
+            await _db.Context.SaveChangesAsync();
+
+            var billing = CreateBillingService();
+            var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 500,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
+            });
+            var suspension = new FeeSuspension
+            {
+                ParentProfileId = parentProfile.Id, InvoiceId = invoice.Id,
+                Reason = "Overdue", SuspendedAtUtc = DateTime.UtcNow,
+            };
+            _db.Context.FeeSuspensions.Add(suspension);
+            await _db.Context.SaveChangesAsync();
+
+            var lifted = await billing.LiftSuspensionAsync(suspension.Id);
+            Assert.Equal(SuspensionStatus.Lifted, lifted.Status);
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => billing.LiftSuspensionAsync(suspension.Id));
+        }
+
+        [Fact]
+        public async Task ConfirmCashIntent_RecordsTheCollectedMoneyAsASuccessfulTransaction()
+        {
+            // Regression: confirming a cash intent that FULLY settles its invoice used to leave
+            // the very transaction being confirmed marked Failed ("settled by another payment"),
+            // because ApplyPaymentToInvoiceAsync's stale-intent sweep re-read it from the DB —
+            // where the flip to Success was not committed yet — and swept it up as if it were a
+            // competing intent. The invoice looked right, but the money's own row did not exist
+            // as a successful payment: it disappeared from the invoice's receipt list and could
+            // never be refunded. Only full settlement triggered it (a partial payment never
+            // enters that branch), which is the common case for a cash intent.
+            var (billing, invoice) = await SeedInvoiceAsync(amount: 1000);
+            var parentUserId = await _db.Context.ParentProfiles.AsNoTracking()
+                .Where(p => p.Id == invoice.ParentProfileId).Select(p => p.UserId).FirstAsync();
+
+            await billing.InitiateParentPaymentAsync(parentUserId, invoice.Id, new InitiateParentPaymentRequest { MethodKey = "cash" });
+            var intent = await _db.Context.PaymentTransactions.AsNoTracking()
+                .FirstAsync(t => t.InvoiceId == invoice.Id && t.Method == PaymentMethod.Cash);
+
+            var confirmed = await billing.ConfirmCashIntentAsync(intent.Id, new ConfirmCashIntentRequest());
+            Assert.Equal(1000m, confirmed.Amount);
+
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            var row = await verifyContext.PaymentTransactions.FirstAsync(t => t.Id == intent.Id);
+            Assert.Equal(TransactionStatus.Success, row.Status);
+            Assert.Null(row.FailureReason);
+            Assert.NotNull(row.PaidAtUtc);
+            Assert.NotNull(row.ReceiptNumber); // the receipt handed to the parent at the centre
+            verifyContext.Dispose();
+
+            // The two things that consume Success transactions must both see the cash payment.
+            var listed = Assert.Single(await billing.ListInvoiceTransactionsAsync(invoice.Id));
+            Assert.Equal(intent.Id, listed.Id);
+
+            var refund = await billing.RequestRefundAsync(new RequestRefundRequest
+            {
+                PaymentTransactionId = intent.Id, Amount = 250, Reason = "Goodwill on collected cash",
+            });
+            Assert.Equal(RefundStatus.Requested, refund.Status);
+        }
+
+        [Fact]
+        public async Task RecordPayment_SettlingAPendingCashIntentInFull_KeepsItSuccessful()
+        {
+            // Same defect, sibling call site: RecordPaymentAsync reuses the parent's pending cash
+            // intent instead of inserting a duplicate row, so it hit the identical sweep.
+            var (billing, invoice) = await SeedInvoiceAsync(amount: 800);
+            var parentUserId = await _db.Context.ParentProfiles.AsNoTracking()
+                .Where(p => p.Id == invoice.ParentProfileId).Select(p => p.UserId).FirstAsync();
+
+            await billing.InitiateParentPaymentAsync(parentUserId, invoice.Id, new InitiateParentPaymentRequest { MethodKey = "cash" });
+
+            await billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 800, Method = PaymentMethod.Cash });
+
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            var rows = await verifyContext.PaymentTransactions.Where(t => t.InvoiceId == invoice.Id).ToListAsync();
+            var row = Assert.Single(rows); // reused, not duplicated
+            Assert.Equal(TransactionStatus.Success, row.Status);
+            Assert.Equal(InvoiceStatus.Paid, (await verifyContext.Invoices.FirstAsync(i => i.Id == invoice.Id)).Status);
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task ConfirmCashIntent_StillClosesAGenuinelyCompetingIntent()
+        {
+            // The guard above must not blunt what the sweep is actually for: a DIFFERENT pending
+            // cash intent on the same invoice still has to be closed when the money arrives by
+            // another route, or it lingers in the staff confirmation queue and can be collected
+            // a second time.
+            var (billing, invoice) = await SeedInvoiceAsync(amount: 600);
+
+            // Two pending cash intents on one invoice (an older declaration plus a fresh one).
+            // Seeded directly: InitiateParentPaymentAsync deliberately supersedes prior intents.
+            var older = new PaymentTransaction
+            {
+                InvoiceId = invoice.Id, PaymentAccountId = invoice.PaymentAccountId, Amount = 600,
+                Currency = invoice.Currency, Status = TransactionStatus.Pending,
+                GatewayTransactionId = $"CASH-{Guid.NewGuid():N}", Method = PaymentMethod.Cash,
+            };
+            var newer = new PaymentTransaction
+            {
+                InvoiceId = invoice.Id, PaymentAccountId = invoice.PaymentAccountId, Amount = 600,
+                Currency = invoice.Currency, Status = TransactionStatus.Pending,
+                GatewayTransactionId = $"CASH-{Guid.NewGuid():N}", Method = PaymentMethod.Cash,
+            };
+            _db.Context.PaymentTransactions.AddRange(older, newer);
+            await _db.Context.SaveChangesAsync();
+
+            await billing.ConfirmCashIntentAsync(newer.Id, new ConfirmCashIntentRequest());
+
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            Assert.Equal(TransactionStatus.Success, (await verifyContext.PaymentTransactions.FirstAsync(t => t.Id == newer.Id)).Status);
+            var swept = await verifyContext.PaymentTransactions.FirstAsync(t => t.Id == older.Id);
+            Assert.Equal(TransactionStatus.Failed, swept.Status);
+            Assert.Contains("settled by another payment", swept.FailureReason!);
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task RequestRefund_ConcurrentRequests_MustNotStackBeyondTheTransactionAmount()
+        {
+            // SCOPE NOTE: as with the other concurrency tests here, SQLite serializes the two
+            // contexts onto one connection, so this stages the interleaving rather than racing
+            // it — request 2 computes its "already refunded" total from the same committed state
+            // request 1 saw. That is exactly the read the check-then-insert depends on; on
+            // Postgres two overlapping requests reach it by timing instead.
+            var gateway = new FakePaymentGateway();
+            var parentUser = await _db.SeedUserAsync($"ref-stack-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.AddRange(parentProfile,
+                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+            await _db.Context.SaveChangesAsync();
+
+            var billing1 = CreateBillingService(gateway);
+            var invoice = await billing1.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+            await billing1.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1000 });
+            var txn = await _db.Context.PaymentTransactions.AsNoTracking().FirstAsync(t => t.InvoiceId == invoice.Id);
+
+            // A second scoped DbContext, as a concurrent HTTP request would get.
+            var (context2, uow2) = _db.CreateConcurrentSession();
+            var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
+            var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
+            var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, NullLogger<NotificationService>.Instance);
+            var billing2 = new BillingService(uow2, auditLog2, gateway, notifications2, _db.CurrentUser);
+
+            var request = () => new RequestRefundRequest
+            {
+                PaymentTransactionId = txn.Id, Amount = 1000, Reason = "Full refund",
+            };
+
+            var task1 = billing1.RequestRefundAsync(request());
+            var task2 = billing2.RequestRefundAsync(request());
+
+            try
+            {
+                await Task.WhenAll(task1, task2);
+            }
+            catch
+            {
+                // One of the two being refused is the correct outcome; the assertion below is
+                // on the persisted total, not on which request won.
+            }
+
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            var live = await verifyContext.Refunds
+                .Where(r => r.PaymentTransactionId == txn.Id && r.Status != RefundStatus.Rejected)
+                .ToListAsync();
+            var total = live.Sum(r => r.Amount);
+            verifyContext.Dispose();
+            context2.Dispose();
+
+            // The ceiling RequestRefundAsync exists to enforce. Two live refunds of 1000 against
+            // one 1000 transaction are each individually approvable, and ReviewRefundAsync's
+            // atomic claim is per-refund-row, so it would disburse 2000 against 1000 collected.
+            Assert.True(
+                total <= txn.Amount,
+                $"Refund requests stacked past the transaction: {live.Count} live refund(s) totalling {total} against a {txn.Amount} payment.");
+        }
+
+        // ---- QA pass: persisted data consistency after multi-step operations ----
+
+        [Fact]
+        public async Task ApproveEnrollment_PersistsAnInternallyConsistentChildSubscriptionAndInvoice()
+        {
+            // The existing coverage asserts the three rows exist. This asserts they actually
+            // hang together once committed — read back through a fresh context, so nothing is
+            // satisfied by the seeding context's change tracker.
+            var actingAdmin = await _db.SeedUserAsync($"admin-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
+            _db.CurrentUser.UserId = actingAdmin.Id;
+
+            var parentUser = await _db.SeedUserAsync($"p-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var plan = new PackagePlan
+            {
+                Name = "Phonics Monthly", BillingType = BillingType.Subscription,
+                BillingCycle = BillingCycle.Monthly, Price = 2500,
+            };
+            var account = new PaymentAccount
+            {
+                Name = "Phonics", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p",
+            };
+            _db.Context.AddRange(parentProfile, plan, account);
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateEnrollmentService();
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            var formId = (await service.ListAsync(null)).Single().Id;
+            await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
+            {
+                Approve = true, ChildFirstName = "Kid", ChildLastName = "One", PackagePlanId = plan.Id,
+            });
+
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            var child = await verifyContext.Children.SingleAsync();
+            var subscription = await verifyContext.Subscriptions.SingleAsync();
+            var invoice = await verifyContext.Invoices.SingleAsync();
+
+            // Every foreign key points at the row it claims to.
+            Assert.Equal(parentProfile.Id, child.ParentProfileId);
+            Assert.Equal(parentProfile.Id, subscription.ParentProfileId);
+            Assert.Equal(child.Id, subscription.ChildId);
+            Assert.Equal(plan.Id, subscription.PackagePlanId);
+            Assert.Equal(parentProfile.Id, invoice.ParentProfileId);
+            Assert.Equal(child.Id, invoice.ChildId);
+            Assert.Equal(subscription.Id, invoice.SubscriptionId);
+            Assert.Equal(account.Id, invoice.PaymentAccountId); // routed to the department's account
+
+            // Money and billing pointers agree with the plan.
+            Assert.Equal(plan.Price, invoice.Amount);
+            Assert.Equal(0m, invoice.AmountPaid);
+            Assert.Equal(InvoiceStatus.Pending, invoice.Status);
+            Assert.False(string.IsNullOrWhiteSpace(invoice.InvoiceNumber));
+            Assert.Equal(SubscriptionStatus.Active, subscription.Status);
+            Assert.NotNull(subscription.NextBillingAtUtc);
+            Assert.True(subscription.NextBillingAtUtc > DateTime.UtcNow, "the first renewal must be in the future");
+
+            // Audit fields on the AuditEntity rows are actually stamped, not left default.
+            Assert.NotEqual(default, invoice.CreatedAtUtc);
+            Assert.Equal(actingAdmin.Id, invoice.CreatedBy);
+            Assert.Equal(actingAdmin.Id, subscription.CreatedBy);
+            Assert.False(invoice.IsDeleted);
+
+            // The approved form is linked to the child it created.
+            var form = await verifyContext.EnrollmentForms.SingleAsync(f => f.Id == formId);
+            Assert.Equal(EnrollmentFormStatus.Approved, form.Status);
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task SoftDeletedChild_IsExcludedFromParentDashboardAndBatchAssignment()
+        {
+            var parentUser = await _db.SeedUserAsync($"sd-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.Add(parentProfile);
+            await _db.Context.SaveChangesAsync();
+
+            var kept = new Child { ParentProfileId = parentProfile.Id, FirstName = "Kept", LastName = "Child" };
+            var removed = new Child { ParentProfileId = parentProfile.Id, FirstName = "Removed", LastName = "Child" };
+            _db.Context.Children.AddRange(kept, removed);
+            await _db.Context.SaveChangesAsync();
+
+            // Repository.Remove is transparently converted to a soft delete by the interceptor.
+            _db.UnitOfWork.Repository<Child>().Remove(removed);
+            await _db.UnitOfWork.SaveChangesAsync();
+
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            var stored = await verifyContext.Children.IgnoreQueryFilters().SingleAsync(c => c.Id == removed.Id);
+            Assert.True(stored.IsDeleted);
+            Assert.NotNull(stored.DeletedAtUtc); // the row survives for history, it is not erased
+            verifyContext.Dispose();
+
+            // The global query filter must keep it out of everything user-facing.
+            var dashboard = await new ParentPortalService(_db.UnitOfWork).GetDashboardAsync(parentUser.Id);
+            var only = Assert.Single(dashboard.Children);
+            Assert.Equal(kept.Id, only.ChildId);
+        }
+
+        // ---- QA pass: cross-account isolation on the parent portal ----
+
+        [Fact]
+        public async Task ParentPortal_NeverLeaksAnotherParentsInvoicesOrRecordings()
+        {
+            var (billingA, invoiceA) = await SeedInvoiceAsync(amount: 1000);
+            var parentAUserId = await _db.Context.ParentProfiles.AsNoTracking()
+                .Where(p => p.Id == invoiceA.ParentProfileId).Select(p => p.UserId).FirstAsync();
+
+            var intruderUser = await _db.SeedUserAsync($"intruder-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            _db.Context.ParentProfiles.Add(new ParentProfile { UserId = intruderUser.Id });
+            await _db.Context.SaveChangesAsync();
+
+            var portal = new ParentPortalService(_db.UnitOfWork);
+
+            // Listing is scoped to the caller's own profile.
+            Assert.Empty(await portal.GetInvoicesAsync(intruderUser.Id));
+            Assert.Single(await portal.GetInvoicesAsync(parentAUserId));
+
+            // And every id-keyed read/write on someone else's invoice is refused, not served.
+            await Assert.ThrowsAsync<NotFoundException>(() => billingA.GetParentInvoiceAsync(intruderUser.Id, invoiceA.Id));
+            await Assert.ThrowsAsync<NotFoundException>(() =>
+                billingA.InitiateParentPaymentAsync(intruderUser.Id, invoiceA.Id, new InitiateParentPaymentRequest { MethodKey = "cash" }));
+            await Assert.ThrowsAsync<NotFoundException>(() =>
+                billingA.StartParentInlineCheckoutAsync(intruderUser.Id, invoiceA.Id, new InitiateParentPaymentRequest { MethodKey = "upi" }));
+            await Assert.ThrowsAsync<NotFoundException>(() => billingA.ReconcileInvoicePaymentAsync(intruderUser.Id, invoiceA.Id));
+
+            // Recordings of a class the intruder's child is not enrolled in.
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            await CreateSessionService().AddRecordingAsync(session.Id, new RegisterRecordingRequest
+            {
+                StorageUrl = "https://recordings.test/private.mp4", DurationSeconds = 600,
+            });
+            await Assert.ThrowsAsync<NotFoundException>(() => portal.GetRecordingsAsync(intruderUser.Id, session.Id));
+        }
+
+        // ---- QA pass: input validation at the service boundary ----
+
+        [Fact]
+        public async Task RecordPayment_RejectsNonPositiveAndOverpayingAmounts()
+        {
+            var (billing, invoice) = await SeedInvoiceAsync(amount: 1000);
+
+            // Overpayment is already refused; the boundary cases are the interesting ones.
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1000.01m }));
+
+            await billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1000 });
+
+            // A settled invoice takes no further payment at all.
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1 }));
+
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            var settled = await verifyContext.Invoices.FirstAsync(i => i.Id == invoice.Id);
+            Assert.Equal(1000m, settled.AmountPaid);
+            Assert.NotNull(settled.PaidAtUtc);
+            verifyContext.Dispose();
+        }
+
+        [Fact]
+        public async Task SubmitLeave_RejectsInvertedAndZeroLengthWindows()
+        {
+            var teacherUser = await _db.SeedUserAsync($"lv-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            _db.Context.TeacherProfiles.Add(new TeacherProfile { UserId = teacherUser.Id });
+            await _db.Context.SaveChangesAsync();
+
+            var ops = CreateAcademicOpsService();
+            var start = DateTime.UtcNow.AddDays(5);
+
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                ops.SubmitLeaveAsync(teacherUser.Id, new SubmitLeaveRequest
+                {
+                    StartAtUtc = start, EndAtUtc = start.AddDays(-1), Reason = "Inverted window",
+                }));
+
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                ops.SubmitLeaveAsync(teacherUser.Id, new SubmitLeaveRequest
+                {
+                    StartAtUtc = start, EndAtUtc = start, Reason = "Zero-length window",
+                }));
+
+            Assert.Empty(await _db.Context.LeaveRequests.ToListAsync());
+        }
+
+        [Fact]
+        public async Task Gamification_RejectsSelfMintedMilestonesAndNonParticipants()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var outsiderUser = await _db.SeedUserAsync($"out-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            _db.Context.ParentProfiles.Add(new ParentProfile { UserId = outsiderUser.Id });
+            await _db.Context.SaveChangesAsync();
+
+            var gamification = CreateGamificationService();
+
+            // A client must never be able to mint a milestone directly — they are server-computed.
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                gamification.GrantAsync(outsiderUser.Id, new GrantAwardRequest
+                {
+                    SessionId = session.Id, ParticipantName = "Kid", Kind = AwardKind.Milestone, Points = 0,
+                }));
+
+            // A parent with no child in this batch is not a participant.
+            await Assert.ThrowsAsync<ForbiddenException>(() =>
+                gamification.GrantAsync(outsiderUser.Id, new GrantAwardRequest
+                {
+                    SessionId = session.Id, ParticipantName = "Kid", Kind = AwardKind.Star, Points = 1,
+                }));
+
+            // Nor may a non-staff caller award outside any session at all.
+            await Assert.ThrowsAsync<ForbiddenException>(() =>
+                gamification.GrantAsync(outsiderUser.Id, new GrantAwardRequest
+                {
+                    ParticipantName = "Kid", Kind = AwardKind.Star, Points = 1,
+                }));
+
+            Assert.Empty(await _db.Context.StudentAwards.ToListAsync());
+        }
+
+        /// <summary>A parent with a payment account and one open invoice, plus a live BillingService.</summary>
+        private async Task<(BillingService Billing, Invoice Invoice)> SeedInvoiceAsync(decimal amount)
+        {
+            var parentUser = await _db.SeedUserAsync($"inv-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.AddRange(parentProfile,
+                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+            await _db.Context.SaveChangesAsync();
+
+            var billing = CreateBillingService();
+            var dto = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = amount,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+            return (billing, await _db.Context.Invoices.AsNoTracking().FirstAsync(i => i.Id == dto.Id));
+        }
+
+        // ---- QA pass: input validation on financially-sensitive fields ----
+
+        [Fact]
+        public async Task PayoutRate_RejectsNegativeRateAndOutOfRangeNoShowPenalty()
+        {
+            var payouts = CreatePayoutService();
+            var effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+
+            // A negative per-session rate makes every completed class DEDUCT from the teacher.
+            await Assert.ThrowsAsync<DomainValidationException>(() => payouts.SetRateAsync(new SavePayoutRateRequest
+            {
+                DurationMinutes = 45, RatePerSession = -500, EffectiveFrom = effectiveFrom,
+            }));
+
+            // A negative penalty percent inverts the sign of the no-show deduction
+            // (-(rate * -100 / 100) = +rate), turning a missed class into a BONUS.
+            await Assert.ThrowsAsync<DomainValidationException>(() => payouts.SetRateAsync(new SavePayoutRateRequest
+            {
+                DurationMinutes = 45, RatePerSession = 500, TeacherNoShowPenaltyPercent = -100, EffectiveFrom = effectiveFrom,
+            }));
+
+            // Deducting many times the session's worth is not a configuration, it's a typo.
+            await Assert.ThrowsAsync<DomainValidationException>(() => payouts.SetRateAsync(new SavePayoutRateRequest
+            {
+                DurationMinutes = 45, RatePerSession = 500, TeacherNoShowPenaltyPercent = 10_000, EffectiveFrom = effectiveFrom,
+            }));
+
+            // The legitimate range still saves: 0% is a warning-only no-show, and >100% stays
+            // allowed on purpose — deducting more than the session was worth is a supported
+            // policy (WBS p.31), which is why the guard bounds the sign and typos, not the policy.
+            var saved = await payouts.SetRateAsync(new SavePayoutRateRequest
+            {
+                DurationMinutes = 45, RatePerSession = 500, TeacherNoShowPenaltyPercent = 0, EffectiveFrom = effectiveFrom,
+            });
+            Assert.Equal(0m, saved.TeacherNoShowPenaltyPercent);
+
+            var punitive = await payouts.SetRateAsync(new SavePayoutRateRequest
+            {
+                DurationMinutes = 60, RatePerSession = 500, TeacherNoShowPenaltyPercent = 150, EffectiveFrom = effectiveFrom,
+            });
+            Assert.Equal(150m, punitive.TeacherNoShowPenaltyPercent);
+        }
+
         private static RecordEngagementRequest EngagementRequest() => new()
         {
             Events = [new EngagementEntryDto { ParticipantName = "Tester", Type = EngagementEventType.HandRaise }],

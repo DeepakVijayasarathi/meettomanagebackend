@@ -109,70 +109,26 @@ namespace iucs.readernest.api.Services
                 }
             }
 
+            var failedReminderCount = 0;
             foreach (var session in upcoming)
             {
-                var teacherUser = session.TeacherProfile.User;
-                await notifications.SendTemplatedEmailAsync(
-                    teacherUser.Id, teacherUser.Email, NotificationType.SessionReminder,
-                    "session-reminder-teacher",
-                    new Dictionary<string, string>
-                    {
-                        ["TeacherFirstName"] = teacherUser.FirstName,
-                        ["SessionType"] = session.Type.ToString(),
-                        ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, teacherUser.TimeZoneId),
-                    },
-                    cancellationToken);
-
-                var domain = JitsiLinkBuilder.ResolveDomain(jitsiConfigJson);
-                // Each recipient gets their own token, scoped to this room and expiring a
-                // couple of hours past the class — never a bare, forever-reusable room name.
-                string JoinUrlFor(string participantName, string? participantEmail) =>
-                    JitsiLinkBuilder.BuildJoinUrl(
-                        session.MeetingRoomId,
-                        jitsiConfigJson,
-                        jitsiTokens.CreateToken(
-                            domain, jitsiConfigJson, session.MeetingRoomId!, participantName, participantEmail,
-                            moderator: false, session.ScheduledEndAtUtc.AddHours(2)))
-                    ?? "#";
-
-                if (session.BatchId is null)
+                // The reminder window is stateless de-duplication: each session falls into
+                // exactly one 10-minute window, and the next cycle has moved past it. So an
+                // exception here does not just delay the remaining sessions' reminders, it
+                // loses them permanently — hence per-session isolation rather than letting
+                // one bad recipient abort the batch.
+                try
                 {
-                    // Demo sessions have no batch — the lead is tracked via DemoBooking.ParentEmail,
-                    // which may not correspond to a real account yet, so this bypasses the
-                    // user-bound notification log the same way the initial confirmation email does.
-                    demoBookingsBySessionId.TryGetValue(session.Id, out var demoBooking);
-                    if (demoBooking is not null)
-                    {
-                        var (subject, body) = await emailTemplates.RenderAsync(
-                            "session-reminder-parent",
-                            new Dictionary<string, string>
-                            {
-                                ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, "Asia/Kolkata"),
-                                ["JoinUrl"] = JoinUrlFor(demoBooking.ParentName, demoBooking.ParentEmail),
-                            },
-                            cancellationToken);
-                        await emailSender.SendAsync(demoBooking.ParentEmail, subject, body, cancellationToken);
-                    }
-
-                    continue;
+                    await SendRemindersForSessionAsync(
+                        session, jitsiConfigJson, demoBookingsBySessionId, parentUsersByBatchId,
+                        notifications, emailTemplates, emailSender, jitsiTokens, cancellationToken);
                 }
-
-                if (!parentUsersByBatchId.TryGetValue(session.BatchId.Value, out var parentUsers))
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    continue;
-                }
-
-                foreach (var parent in parentUsers)
-                {
-                    await notifications.SendTemplatedEmailAsync(
-                        parent.Id, parent.Email, NotificationType.SessionReminder,
-                        "session-reminder-parent",
-                        new Dictionary<string, string>
-                        {
-                            ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, parent.TimeZoneId),
-                            ["JoinUrl"] = JoinUrlFor($"{parent.FirstName} {parent.LastName}", parent.Email),
-                        },
-                        cancellationToken);
+                    failedReminderCount++;
+                    _logger.LogWarning(
+                        ex, "Session reminder failed for session {SessionId}; continuing with the rest of the window.",
+                        session.Id);
                 }
             }
 
@@ -194,15 +150,24 @@ namespace iucs.readernest.api.Services
                 {
                     foreach (var admin in admins)
                     {
-                        await notifications.SendTemplatedEmailAsync(
-                            admin.Id, admin.Email, NotificationType.DelayedSessionAlert,
-                            "delayed-session-alert",
-                            new Dictionary<string, string>
-                            {
-                                ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, admin.TimeZoneId),
-                                ["TeacherName"] = $"{session.TeacherProfile.User.FirstName} {session.TeacherProfile.User.LastName}",
-                            },
-                            cancellationToken);
+                        try
+                        {
+                            await notifications.SendTemplatedEmailAsync(
+                                admin.Id, admin.Email, NotificationType.DelayedSessionAlert,
+                                "delayed-session-alert",
+                                new Dictionary<string, string>
+                                {
+                                    ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, admin.TimeZoneId),
+                                    ["TeacherName"] = $"{session.TeacherProfile.User.FirstName} {session.TeacherProfile.User.LastName}",
+                                },
+                                cancellationToken);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            _logger.LogWarning(
+                                ex, "Delayed-session alert failed for session {SessionId} to {AdminId}; continuing.",
+                                session.Id, admin.Id);
+                        }
                     }
                 }
             }
@@ -210,8 +175,84 @@ namespace iucs.readernest.api.Services
             if (upcoming.Count > 0 || delayed.Count > 0)
             {
                 _logger.LogInformation(
-                    "Reminders: {ReminderCount} session reminder group(s), {DelayedCount} delayed alert(s).",
-                    upcoming.Count, delayed.Count);
+                    "Reminders: {ReminderCount} session reminder group(s) ({FailedCount} failed), {DelayedCount} delayed alert(s).",
+                    upcoming.Count, failedReminderCount, delayed.Count);
+            }
+        }
+
+        private static async Task SendRemindersForSessionAsync(
+            ClassSession session,
+            string? jitsiConfigJson,
+            Dictionary<Guid, DemoBooking> demoBookingsBySessionId,
+            Dictionary<Guid, List<User>> parentUsersByBatchId,
+            INotificationService notifications,
+            IEmailTemplateService emailTemplates,
+            IEmailSender emailSender,
+            IJitsiTokenService jitsiTokens,
+            CancellationToken cancellationToken)
+        {
+            var teacherUser = session.TeacherProfile.User;
+            await notifications.SendTemplatedEmailAsync(
+                teacherUser.Id, teacherUser.Email, NotificationType.SessionReminder,
+                "session-reminder-teacher",
+                new Dictionary<string, string>
+                {
+                    ["TeacherFirstName"] = teacherUser.FirstName,
+                    ["SessionType"] = session.Type.ToString(),
+                    ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, teacherUser.TimeZoneId),
+                },
+                cancellationToken);
+
+            var domain = JitsiLinkBuilder.ResolveDomain(jitsiConfigJson);
+            // Each recipient gets their own token, scoped to this room and expiring a
+            // couple of hours past the class — never a bare, forever-reusable room name.
+            string JoinUrlFor(string participantName, string? participantEmail) =>
+                JitsiLinkBuilder.BuildJoinUrl(
+                    session.MeetingRoomId,
+                    jitsiConfigJson,
+                    jitsiTokens.CreateToken(
+                        domain, jitsiConfigJson, session.MeetingRoomId!, participantName, participantEmail,
+                        moderator: false, session.ScheduledEndAtUtc.AddHours(2)))
+                ?? "#";
+
+            if (session.BatchId is null)
+            {
+                // Demo sessions have no batch — the lead is tracked via DemoBooking.ParentEmail,
+                // which may not correspond to a real account yet, so this bypasses the
+                // user-bound notification log the same way the initial confirmation email does.
+                demoBookingsBySessionId.TryGetValue(session.Id, out var demoBooking);
+                if (demoBooking is not null)
+                {
+                    var (subject, body) = await emailTemplates.RenderAsync(
+                        "session-reminder-parent",
+                        new Dictionary<string, string>
+                        {
+                            ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, "Asia/Kolkata"),
+                            ["JoinUrl"] = JoinUrlFor(demoBooking.ParentName, demoBooking.ParentEmail),
+                        },
+                        cancellationToken);
+                    await emailSender.SendAsync(demoBooking.ParentEmail, subject, body, cancellationToken);
+                }
+
+                return;
+            }
+
+            if (!parentUsersByBatchId.TryGetValue(session.BatchId.Value, out var parentUsers))
+            {
+                return;
+            }
+
+            foreach (var parent in parentUsers)
+            {
+                await notifications.SendTemplatedEmailAsync(
+                    parent.Id, parent.Email, NotificationType.SessionReminder,
+                    "session-reminder-parent",
+                    new Dictionary<string, string>
+                    {
+                        ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, parent.TimeZoneId),
+                        ["JoinUrl"] = JoinUrlFor($"{parent.FirstName} {parent.LastName}", parent.Email),
+                    },
+                    cancellationToken);
             }
         }
 

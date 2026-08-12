@@ -418,14 +418,27 @@ namespace iucs.readernest.application.Services
                     }
                 }
 
-                // Close any other still-pending cash intents on this invoice: the money
+                // Close any OTHER still-pending cash intents on this invoice: the money
                 // arrived through another payment, so there is nothing left to collect and
                 // they must not linger in the staff confirmation queue.
-                var staleIntents = await _unitOfWork.Repository<PaymentTransaction>().TrackedQuery()
+                //
+                // The second Where is not redundant with the first. Callers reach here having
+                // already flipped the intent they are settling to Success on the TRACKED entity,
+                // but that change is not committed yet, so the DB-side predicate still sees it as
+                // Pending and returns it. EF then hands back the tracked instance without
+                // clobbering its pending modification — so filtering again in memory (where
+                // Status is already Success) is what excludes the transaction currently being
+                // settled. Without it, confirming a cash payment that fully settles its invoice
+                // immediately re-marked that very payment Failed: the invoice was Paid but the
+                // money's own transaction row was not Success, so it vanished from the invoice's
+                // receipt list and could never be refunded.
+                var staleIntents = (await _unitOfWork.Repository<PaymentTransaction>().TrackedQuery()
                     .Where(t => t.InvoiceId == invoice.Id
                         && t.Method == PaymentMethod.Cash
                         && t.Status == TransactionStatus.Pending)
-                    .ToListAsync(cancellationToken);
+                    .ToListAsync(cancellationToken))
+                    .Where(t => t.Status == TransactionStatus.Pending)
+                    .ToList();
                 foreach (var intent in staleIntents)
                 {
                     intent.Status = TransactionStatus.Failed;
@@ -1103,32 +1116,48 @@ namespace iucs.readernest.application.Services
                     $"Only a successful payment can be refunded; this transaction is {transaction.Status}.");
             }
 
-            // Sum every refund not already rejected — a second request must not be able to
-            // stack on top of one still pending review or one already paid out.
-            var alreadyRefunded = await _unitOfWork.Repository<Refund>().Query()
-                .Where(r => r.PaymentTransactionId == transaction.Id && r.Status != RefundStatus.Rejected)
-                .SumAsync(r => (decimal?)r.Amount, cancellationToken) ?? 0m;
-
-            if (alreadyRefunded + request.Amount > transaction.Amount)
+            // Summing the existing refunds and inserting the new one must be one atomic unit.
+            // Read then insert with nothing in between is the same check-then-act shape as the
+            // demo-booking double-assignment (see DemoBookingService.CreateAsync): two requests
+            // for the same transaction can both read the same "already refunded" total, both find
+            // room under the ceiling, and both insert. The result is two live refunds that
+            // together exceed the money actually collected — and each is independently
+            // approvable, because ReviewRefundAsync's atomic claim is per refund ROW, so the
+            // ceiling enforced here is the only thing standing between them and a double
+            // disbursement. SERIALIZABLE makes the sum and the insert mutually exclusive:
+            // PostgreSQL's SSI aborts one of two overlapping attempts with SQLSTATE 40001 and
+            // the unit of work retries it against the committed state, where the ceiling is now
+            // correctly exceeded and the refusal below fires.
+            var refundId = await _unitOfWork.ExecuteInSerializableTransactionAsync(async ct =>
             {
-                throw new DomainValidationException(
-                    $"Refund of {request.Amount} would exceed the transaction amount of {transaction.Amount} " +
-                    $"({alreadyRefunded} already requested/refunded).");
-            }
+                // Sum every refund not already rejected — a second request must not be able to
+                // stack on top of one still pending review or one already paid out.
+                var alreadyRefunded = await _unitOfWork.Repository<Refund>().Query()
+                    .Where(r => r.PaymentTransactionId == transaction.Id && r.Status != RefundStatus.Rejected)
+                    .SumAsync(r => (decimal?)r.Amount, ct) ?? 0m;
 
-            var refund = new Refund
-            {
-                PaymentTransactionId = transaction.Id,
-                Amount = request.Amount,
-                Reason = request.Reason.Trim(),
-            };
-            await _unitOfWork.Repository<Refund>().AddAsync(refund, cancellationToken);
-            await _auditLog.StageAsync(AuditAction.Create, nameof(Refund), refund.Id.ToString(), cancellationToken: cancellationToken);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
+                if (alreadyRefunded + request.Amount > transaction.Amount)
+                {
+                    throw new DomainValidationException(
+                        $"Refund of {request.Amount} would exceed the transaction amount of {transaction.Amount} " +
+                        $"({alreadyRefunded} already requested/refunded).");
+                }
+
+                var refund = new Refund
+                {
+                    PaymentTransactionId = transaction.Id,
+                    Amount = request.Amount,
+                    Reason = request.Reason.Trim(),
+                };
+                await _unitOfWork.Repository<Refund>().AddAsync(refund, ct);
+                await _auditLog.StageAsync(AuditAction.Create, nameof(Refund), refund.Id.ToString(), cancellationToken: ct);
+                await _unitOfWork.SaveChangesAsync(ct);
+                return refund.Id;
+            }, cancellationToken);
 
             var saved = await _unitOfWork.Repository<Refund>().Query()
                 .Include(r => r.PaymentTransaction).ThenInclude(t => t.Invoice)
-                .FirstAsync(r => r.Id == refund.Id, cancellationToken);
+                .FirstAsync(r => r.Id == refundId, cancellationToken);
             return ToDto(saved);
         }
 
