@@ -30,5 +30,14 @@ namespace iucs.readernest.application.Dto.Sessions
 
         /// <summary>Teacher's class summary, captured on completion for session history.</summary>
         public string? Summary { get; set; }
+
+        /// <summary>
+        /// Which of the calling parent's children this session belongs to — populated only by
+        /// the parent-portal schedule endpoint (via the child's active batch enrollment), so a
+        /// parent with multiple children can filter the shared list by the selected child. Empty
+        /// for every other caller (Admin/Teacher session lists) and for demo sessions, which
+        /// aren't tied to a specific enrolled child yet.
+        /// </summary>
+        public List<Guid> ChildIds { get; set; } = [];
     }
 }

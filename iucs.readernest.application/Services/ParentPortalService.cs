@@ -140,11 +140,16 @@ namespace iucs.readernest.application.Services
         {
             var parent = await GetParentAsync(parentUserId, cancellationToken);
 
-            var batchIds = await _unitOfWork.Repository<BatchEnrollment>().Query()
+            var enrollments = await _unitOfWork.Repository<BatchEnrollment>().Query()
                 .Where(e => e.Child.ParentProfileId == parent.Id && e.Status == EnrollmentStatus.Active)
-                .Select(e => e.BatchId)
-                .Distinct()
+                .Select(e => new { e.BatchId, e.ChildId })
                 .ToListAsync(cancellationToken);
+            var batchIds = enrollments.Select(e => e.BatchId).Distinct().ToList();
+            // A batch can hold more than one of this parent's children (siblings sharing a
+            // batch), so each batch maps to a list of child ids, not a single one.
+            var childIdsByBatch = enrollments
+                .GroupBy(e => e.BatchId)
+                .ToDictionary(g => g.Key, g => g.Select(e => e.ChildId).ToList());
 
             var parentEmail = await _unitOfWork.Repository<User>().Query()
                 .Where(u => u.Id == parentUserId)
@@ -169,7 +174,17 @@ namespace iucs.readernest.application.Services
                 .OrderBy(s => s.ScheduledStartAtUtc)
                 .ToListAsync(cancellationToken);
 
-            return sessions.Select(s => s.ToDto()).ToList();
+            return sessions
+                .Select(s =>
+                {
+                    var dto = s.ToDto();
+                    if (s.BatchId is { } batchId && childIdsByBatch.TryGetValue(batchId, out var childIds))
+                    {
+                        dto.ChildIds = childIds;
+                    }
+                    return dto;
+                })
+                .ToList();
         }
 
         public async Task<IReadOnlyList<ResourceDto>> GetResourcesAsync(
