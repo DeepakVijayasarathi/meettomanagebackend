@@ -1,6 +1,7 @@
 using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Academics;
+using iucs.readernest.application.Helper;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Sessions;
@@ -170,7 +171,7 @@ namespace iucs.readernest.application.Services
             if (blockingSession is not null)
             {
                 throw new DomainValidationException(
-                    $"Leave cannot cover the session at {blockingSession.ScheduledStartAtUtc:u}: applications must be made at least 6 hours before a scheduled class.");
+                    $"Leave cannot cover the session at {DateTimeDisplay.ToLocal(blockingSession.ScheduledStartAtUtc)}: applications must be made at least 6 hours before a scheduled class.");
             }
 
             var leave = new LeaveRequest
@@ -191,8 +192,8 @@ namespace iucs.readernest.application.Services
                     new Dictionary<string, string>
                     {
                         ["TeacherName"] = $"{teacher.User.FirstName} {teacher.User.LastName}",
-                        ["StartAtLocal"] = request.StartAtUtc.ToString("u"),
-                        ["EndAtLocal"] = request.EndAtUtc.ToString("u"),
+                        ["StartAtLocal"] = DateTimeDisplay.ToLocal(request.StartAtUtc),
+                        ["EndAtLocal"] = DateTimeDisplay.ToLocal(request.EndAtUtc),
                         ["AffectedSessions"] = affectedSessions.ToString(),
                         ["Reason"] = request.Reason,
                     },
@@ -287,7 +288,7 @@ namespace iucs.readernest.application.Services
                 {
                     session.Status = SessionStatus.Cancelled;
                     session.CancellationReason =
-                        $"Teacher on approved leave ({leave.StartAtUtc:dd MMM yyyy} – {leave.EndAtUtc:dd MMM yyyy}).";
+                        $"Teacher on approved leave ({DateTimeDisplay.ToLocalDate(leave.StartAtUtc, "dd MMM yyyy")} – {DateTimeDisplay.ToLocalDate(leave.EndAtUtc, "dd MMM yyyy")}).";
                 }
             }
 
@@ -313,8 +314,8 @@ namespace iucs.readernest.application.Services
                 new Dictionary<string, string>
                 {
                     ["TeacherFirstName"] = teacherUser.FirstName,
-                    ["StartAtLocal"] = leave.StartAtUtc.ToString("u"),
-                    ["EndAtLocal"] = leave.EndAtUtc.ToString("u"),
+                    ["StartAtLocal"] = DateTimeDisplay.ToLocal(leave.StartAtUtc, teacherUser.TimeZoneId),
+                    ["EndAtLocal"] = DateTimeDisplay.ToLocal(leave.EndAtUtc, teacherUser.TimeZoneId),
                     ["Status"] = leave.Status.ToString(),
                     ["ReviewNote"] = string.IsNullOrEmpty(request.ReviewNote) ? "" : $"Note: {request.ReviewNote}",
                 },
@@ -325,7 +326,7 @@ namespace iucs.readernest.application.Services
             if (leave.Status == LeaveStatus.Approved)
             {
                 var teacherName = $"{teacherUser.FirstName} {teacherUser.LastName}";
-                var window = $"{leave.StartAtUtc:dd MMM yyyy HH:mm} – {leave.EndAtUtc:dd MMM yyyy HH:mm} UTC";
+                var window = DateTimeDisplay.ToLocalRange(leave.StartAtUtc, leave.EndAtUtc);
 
                 var coreTeam = await _unitOfWork.Repository<User>().Query()
                     .Where(u => (u.Role == UserRole.Admin || u.Role == UserRole.SubAdmin) && u.Status == UserStatus.Active)

@@ -167,7 +167,7 @@ namespace iucs.readernest.application.Services
                 new Dictionary<string, string>
                 {
                     ["ChildName"] = booking.ChildName,
-                    ["WhenLocal"] = $"{request.ScheduledStartAtUtc:u}",
+                    ["WhenLocal"] = DateTimeDisplay.ToLocal(request.ScheduledStartAtUtc),
                     ["JoinUrl"] = JoinUrlFor(booking.ParentName, booking.ParentEmail),
                 },
                 cancellationToken);
@@ -179,7 +179,7 @@ namespace iucs.readernest.application.Services
                     new Dictionary<string, string>
                     {
                         ["ChildName"] = booking.ChildName,
-                        ["WhenLocal"] = $"{request.ScheduledStartAtUtc:u}",
+                        ["WhenLocal"] = DateTimeDisplay.ToLocal(request.ScheduledStartAtUtc),
                         ["JoinUrl"] = JoinUrlFor(participant.Name, participant.Email!),
                     },
                     cancellationToken);

@@ -279,7 +279,7 @@ namespace iucs.readernest.application.Services
                     new Dictionary<string, string>
                     {
                         ["ChildName"] = parent.ChildName,
-                        ["SessionDate"] = session.ScheduledStartAtUtc.ToString("dd MMM"),
+                        ["SessionDate"] = DateTimeDisplay.ToLocalDate(session.ScheduledStartAtUtc),
                         ["Summary"] = session.Summary ?? string.Empty,
                     },
                     cancellationToken);
@@ -591,7 +591,7 @@ namespace iucs.readernest.application.Services
             if (conflict is not null)
             {
                 throw new DomainValidationException(
-                    $"The teacher already has a session from {conflict.ScheduledStartAtUtc:u} to {conflict.ScheduledEndAtUtc:u}.");
+                    $"The teacher already has a session from {DateTimeDisplay.ToLocal(conflict.ScheduledStartAtUtc)} to {DateTimeDisplay.ToLocal(conflict.ScheduledEndAtUtc)}.");
             }
 
             var onLeave = await _unitOfWork.Repository<LeaveRequest>().ExistsAsync(
@@ -626,8 +626,8 @@ namespace iucs.readernest.application.Services
                 {
                     ["TeacherFirstName"] = teacher.User.FirstName,
                     ["SessionType"] = session.Type.ToString(),
-                    ["StartAtLocal"] = session.ScheduledStartAtUtc.ToString("u"),
-                    ["EndAtLocal"] = session.ScheduledEndAtUtc.ToString("u"),
+                    ["StartAtLocal"] = DateTimeDisplay.ToLocal(session.ScheduledStartAtUtc, teacher.User.TimeZoneId),
+                    ["EndAtLocal"] = DateTimeDisplay.ToLocal(session.ScheduledEndAtUtc, teacher.User.TimeZoneId),
                 },
                 cancellationToken);
         }
@@ -848,7 +848,7 @@ namespace iucs.readernest.application.Services
                     admin.Email,
                     NotificationType.NoShowAlert,
                     "teacher-noshow-alert",
-                    new Dictionary<string, string> { ["StartAtLocal"] = session.ScheduledStartAtUtc.ToString("u") },
+                    new Dictionary<string, string> { ["StartAtLocal"] = DateTimeDisplay.ToLocal(session.ScheduledStartAtUtc, admin.TimeZoneId) },
                     cancellationToken);
             }
         }

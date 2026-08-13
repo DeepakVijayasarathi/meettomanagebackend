@@ -257,18 +257,6 @@ namespace iucs.readernest.api.Services
         }
 
         /// <summary>Multi-timezone support: renders a UTC instant in the recipient's own zone.</summary>
-        private static string FormatLocal(DateTime utc, string timeZoneId)
-        {
-            try
-            {
-                var zone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
-                var local = TimeZoneInfo.ConvertTimeFromUtc(utc, zone);
-                return $"{local:ddd, dd MMM yyyy h:mm tt} ({timeZoneId})";
-            }
-            catch (TimeZoneNotFoundException)
-            {
-                return $"{utc:u} (UTC)";
-            }
-        }
+        private static string FormatLocal(DateTime utc, string timeZoneId) => DateTimeDisplay.ToLocal(utc, timeZoneId);
     }
 }
