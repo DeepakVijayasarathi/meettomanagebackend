@@ -1,5 +1,6 @@
 using iucs.readernest.api.Auth;
 using iucs.readernest.application.Dto.Billing;
+using iucs.readernest.application.Dto.Common;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
 using Microsoft.AspNetCore.Authorization;
@@ -26,14 +27,21 @@ namespace iucs.readernest.api.Controllers
             _billingService = billingService;
         }
 
+        /// <summary>
+        /// Newest-first page of invoices. pageSize is clamped to 200 by the service — asking
+        /// for more silently returns 200 rather than erroring, so an over-eager caller gets a
+        /// bounded page instead of a table scan.
+        /// </summary>
         [HttpGet]
         [HasPermission(PermissionModule.BillingFinance, PermissionAction.View)]
-        public async Task<ActionResult<IReadOnlyList<InvoiceDto>>> List(
+        public async Task<ActionResult<PagedResult<InvoiceDto>>> List(
             [FromQuery] InvoiceStatus? status,
             [FromQuery] Guid? parentProfileId,
-            CancellationToken cancellationToken)
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 50,
+            CancellationToken cancellationToken = default)
         {
-            return Ok(await _billingService.ListInvoicesAsync(status, parentProfileId, cancellationToken));
+            return Ok(await _billingService.ListInvoicesAsync(status, parentProfileId, page, pageSize, cancellationToken));
         }
 
         [HttpPost]

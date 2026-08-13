@@ -322,6 +322,46 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task ListInvoices_PagesNewestFirst_AndClampsAnOversizedPageSize()
+        {
+            var parentUser = await _db.SeedUserAsync($"page-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var phonics = new PaymentAccount { Name = "Phonics", Department = Department.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "ph" };
+            _db.Context.AddRange(parentProfile, phonics);
+            await _db.Context.SaveChangesAsync();
+
+            var billing = CreateBillingService();
+            for (var i = 0; i < 5; i++)
+            {
+                await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+                {
+                    ParentProfileId = parentProfile.Id,
+                    Department = Department.Phonics,
+                    Amount = 100 + i,
+                    DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+                });
+            }
+
+            var first = await billing.ListInvoicesAsync(null, parentProfile.Id, page: 1, pageSize: 2);
+            Assert.Equal(5, first.TotalCount);
+            Assert.Equal(2, first.Items.Count);
+            Assert.Equal(1, first.Page);
+
+            var second = await billing.ListInvoicesAsync(null, parentProfile.Id, page: 2, pageSize: 2);
+            Assert.Equal(2, second.Items.Count);
+            // Pages must not overlap — IssuedAtUtc alone ties on rows created in the same tick,
+            // so the ordering carries an Id tiebreaker to keep Skip/Take deterministic.
+            Assert.Empty(first.Items.Select(i => i.Id).Intersect(second.Items.Select(i => i.Id)));
+
+            var third = await billing.ListInvoicesAsync(null, parentProfile.Id, page: 3, pageSize: 2);
+            Assert.Single(third.Items);
+
+            // A caller asking for the whole table gets a bounded page back, not a table scan.
+            var greedy = await billing.ListInvoicesAsync(null, parentProfile.Id, page: 1, pageSize: 100_000);
+            Assert.Equal(200, greedy.PageSize);
+        }
+
+        [Fact]
         public async Task PartialThenFullPayment_TransitionsInvoiceStatus()
         {
             var parentUser = await _db.SeedUserAsync($"part-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);

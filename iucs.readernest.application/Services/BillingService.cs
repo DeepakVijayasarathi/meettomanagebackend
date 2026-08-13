@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Dto.Billing;
+using iucs.readernest.application.Dto.Common;
 using iucs.readernest.application.Mappings;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Entities.Academics;
@@ -15,6 +16,14 @@ namespace iucs.readernest.application.Services
 {
     public class BillingService : IBillingService
     {
+        /// <summary>
+        /// Ceiling on <see cref="ListInvoicesAsync"/>'s page size. The admin billing screen
+        /// asks for a whole working set at once (it filters, sorts and totals client-side),
+        /// so this is deliberately generous — but it is still a ceiling, so no caller can
+        /// turn the endpoint back into an unbounded table scan by asking for pageSize=100000.
+        /// </summary>
+        private const int MaxInvoicePageSize = 200;
+
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
         private readonly IPaymentGateway _paymentGateway;
@@ -215,11 +224,16 @@ namespace iucs.readernest.application.Services
                 .Include(i => i.ParentProfile).ThenInclude(p => p.User)
                 .Include(i => i.Subscription).ThenInclude(s => s!.PackagePlan).ThenInclude(p => p.Course);
 
-        public async Task<IReadOnlyList<InvoiceDto>> ListInvoicesAsync(
+        public async Task<PagedResult<InvoiceDto>> ListInvoicesAsync(
             InvoiceStatus? status,
             Guid? parentProfileId,
+            int page,
+            int pageSize,
             CancellationToken cancellationToken = default)
         {
+            page = Math.Max(page, 1);
+            pageSize = Math.Clamp(pageSize, 1, MaxInvoicePageSize);
+
             var query = WithDtoIncludes(_unitOfWork.Repository<Invoice>().Query());
             if (status.HasValue)
             {
@@ -231,8 +245,24 @@ namespace iucs.readernest.application.Services
                 query = query.Where(i => i.ParentProfileId == parentProfileId.Value);
             }
 
-            var invoices = await query.OrderByDescending(i => i.IssuedAtUtc).ToListAsync(cancellationToken);
-            return invoices.Select(i => i.ToDto()).ToList();
+            // Counted before the includes matter: EF translates this to a COUNT over the
+            // filtered set, so the joins cost nothing on this half of the round trip.
+            var totalCount = await query.CountAsync(cancellationToken);
+
+            var invoices = await query
+                .OrderByDescending(i => i.IssuedAtUtc)
+                .ThenBy(i => i.Id)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .ToListAsync(cancellationToken);
+
+            return new PagedResult<InvoiceDto>
+            {
+                Items = invoices.Select(i => i.ToDto()).ToList(),
+                TotalCount = totalCount,
+                Page = page,
+                PageSize = pageSize,
+            };
         }
 
         public async Task<InvoiceDto> CreateInvoiceAsync(
