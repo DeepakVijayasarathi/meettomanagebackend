@@ -159,7 +159,8 @@ namespace iucs.readernest.application.Services
                     jitsiConfigJson,
                     _jitsiTokenService.CreateToken(
                         domain, jitsiConfigJson, session.MeetingRoomId!, participantName, participantEmail,
-                        moderator: false, request.ScheduledEndAtUtc.AddHours(2)))
+                        moderator: false, request.ScheduledEndAtUtc.AddHours(2)),
+                    participantName)
                 ?? "#";
 
             var (parentSubject, parentHtml) = await _emailTemplateService.RenderAsync(

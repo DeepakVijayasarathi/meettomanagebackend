@@ -212,7 +212,8 @@ namespace iucs.readernest.api.Services
                     jitsiConfigJson,
                     jitsiTokens.CreateToken(
                         domain, jitsiConfigJson, session.MeetingRoomId!, participantName, participantEmail,
-                        moderator: false, session.ScheduledEndAtUtc.AddHours(2)))
+                        moderator: false, session.ScheduledEndAtUtc.AddHours(2)),
+                    participantName)
                 ?? "#";
 
             if (session.BatchId is null)
