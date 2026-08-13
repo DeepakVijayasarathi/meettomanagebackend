@@ -14,6 +14,7 @@ using iucs.readernest.application.Helper;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Admission;
+using iucs.readernest.domain.Entities.Auditing;
 using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Entities.Communication;
 using iucs.readernest.domain.Entities.Payouts;
@@ -359,6 +360,33 @@ namespace iucs.readernest.tests
             // A caller asking for the whole table gets a bounded page back, not a table scan.
             var greedy = await billing.ListInvoicesAsync(null, parentProfile.Id, page: 1, pageSize: 100_000);
             Assert.Equal(200, greedy.PageSize);
+        }
+
+        [Fact]
+        public async Task AuditLog_ListAsync_PagesDeterministically_EvenWhenEntriesShareATimestamp()
+        {
+            // The audit interceptor stamps CreatedAtUtc once per SaveChanges call and applies
+            // it to every entity in that batch, so adding all 5 rows in one AddRange +
+            // SaveChangesAsync forces a genuine tie on the sort column — exactly the case
+            // OrderByDescending(CreatedAtUtc) alone would resolve arbitrarily, letting
+            // Skip/Take repeat or drop a row across pages.
+            var actor = await _db.SeedUserAsync($"al-page-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
+            var entries = Enumerable.Range(0, 5)
+                .Select(i => new AuditLog { ActorUserId = actor.Id, Action = AuditAction.Update, EntityName = $"PagingTest-{i}" })
+                .ToList();
+            _db.Context.AuditLogs.AddRange(entries);
+            await _db.Context.SaveChangesAsync();
+            Assert.Single(entries.Select(e => e.CreatedAtUtc).Distinct()); // the tie really happened
+
+            var first = await _auditLog.ListAsync(entityName: null, action: null, page: 1, pageSize: 2);
+            var second = await _auditLog.ListAsync(entityName: null, action: null, page: 2, pageSize: 2);
+            var third = await _auditLog.ListAsync(entityName: null, action: null, page: 3, pageSize: 2);
+
+            Assert.Equal(2, first.Items.Count);
+            Assert.Equal(2, second.Items.Count);
+            var allIds = first.Items.Concat(second.Items).Concat(third.Items).Select(e => e.Id).ToList();
+            Assert.Equal(allIds.Count, allIds.Distinct().Count()); // nothing repeated across pages
+            Assert.True(allIds.Count >= 5); // and nothing from this batch is missing
         }
 
         [Fact]

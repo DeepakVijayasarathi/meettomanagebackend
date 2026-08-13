@@ -12,6 +12,10 @@ namespace iucs.readernest.domain.Entities.Auditing
     /// </summary>
     [Index(nameof(EntityName), nameof(EntityId))]
     [Index(nameof(ActorUserId))]
+    // The trail is append-only and now paged at the source, newest-first over CreatedAtUtc
+    // (AuditLogService.ListAsync) — without this, every page costs a full-table sort on a
+    // table that only grows.
+    [Index(nameof(CreatedAtUtc))]
     public class AuditLog : BaseEntity
     {
         /// <summary>Null for unauthenticated or system actions.</summary>

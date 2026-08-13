@@ -13,6 +13,10 @@ namespace iucs.readernest.domain.Entities.Billing
     /// </summary>
     [Index(nameof(InvoiceNumber), IsUnique = true)]
     [Index(nameof(Status), nameof(DueDate))]
+    // GET /api/invoices pages newest-first over IssuedAtUtc (BillingService.ListInvoicesAsync);
+    // every current caller fetches unfiltered, so this — not a Status/ParentProfileId
+    // composite — is what backs that Skip/Take instead of a full-table sort per page.
+    [Index(nameof(IssuedAtUtc))]
     public class Invoice : AuditEntity
     {
         [MaxLength(50)]

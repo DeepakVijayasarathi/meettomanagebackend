@@ -71,7 +71,12 @@ namespace iucs.readernest.application.Services
             // Left-join the actor's name for display (system actions have no actor).
             var users = _unitOfWork.Repository<User>().Query();
             var rows = await query
+                // CreatedAtUtc alone ties on rows logged in the same tick (e.g. a bulk
+                // action), which makes Skip/Take non-deterministic across pages — a row can
+                // repeat or vanish depending on which side of the tie it lands on each
+                // request. Same fix as ListInvoicesAsync's pagination (a68b1a1).
                 .OrderByDescending(a => a.CreatedAtUtc)
+                .ThenBy(a => a.Id)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .Select(a => new AuditLogDto
