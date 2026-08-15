@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using iucs.readernest.domain.Enums;
 
 namespace iucs.readernest.application.Dto.Navigation
@@ -25,18 +26,28 @@ namespace iucs.readernest.application.Dto.Navigation
         public PermissionModule? RequiredModule { get; set; }
     }
 
+    /// <remarks>Lengths mirror the MenuItem entity's columns — see SaveIntegrationRequest for why.</remarks>
     public class SaveMenuItemRequest
     {
+        [Required]
+        [MaxLength(32)]
         public string Portal { get; set; } = null!;
 
+        [MaxLength(64)]
         public string? Section { get; set; }
 
         public int SectionOrder { get; set; }
 
+        [Required]
+        [MaxLength(100)]
         public string Label { get; set; } = null!;
 
+        [Required]
+        [MaxLength(200)]
         public string Path { get; set; } = null!;
 
+        [Required]
+        [MaxLength(64)]
         public string Icon { get; set; } = null!;
 
         public int SortOrder { get; set; }

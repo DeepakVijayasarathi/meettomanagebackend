@@ -393,6 +393,16 @@ namespace iucs.readernest.application.Services
                 throw new DomainValidationException("Module permissions can only be assigned to Sub Admin users.");
             }
 
+            // SubAdminPermission is uniquely indexed on (UserId, Module), so the same module
+            // twice in one matrix inserts two colliding rows and fails at SaveChanges as an
+            // opaque 500. RoleService.MapPermissions already rejects exactly this for the
+            // role-level matrix; the per-user matrix written here needs the same guard.
+            var duplicateModule = permissions.GroupBy(p => p.Module).FirstOrDefault(g => g.Count() > 1);
+            if (duplicateModule is not null)
+            {
+                throw new DomainValidationException($"Module '{duplicateModule.Key}' appears more than once.");
+            }
+
             // Only an explicit role assignment (apply-preset) stamps the user's
             // named role; hand-editing individual checkboxes leaves it as-is.
             if (roleDefinitionId.HasValue)
@@ -537,6 +547,29 @@ namespace iucs.readernest.application.Services
                 $"Resent onboarding credentials via {channel}",
                 cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        public async Task<string> ResetPinAsync(Guid userId, CancellationToken cancellationToken = default)
+        {
+            var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
+                ?? throw new NotFoundException(nameof(User), userId);
+
+            var temporaryPin = TemporaryPinGenerator.Generate();
+            user.PinHash = _passwordHasher.Hash(temporaryPin);
+            _unitOfWork.Repository<User>().Update(user);
+
+            // Logged as an admin-visible action, distinct from ResendCredentialsAsync's audit
+            // entry, since this one was never sent anywhere and only the viewing admin ever
+            // saw the plaintext PIN.
+            await _auditLog.StageAsync(
+                AuditAction.Update,
+                nameof(User),
+                user.Id.ToString(),
+                "PIN reset by admin and shown on screen (not delivered via any channel)",
+                cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            return temporaryPin;
         }
 
         public async Task<CredentialChannelsDto> GetCredentialChannelsAsync(CancellationToken cancellationToken = default)

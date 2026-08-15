@@ -7,8 +7,13 @@ using iucs.readernest.application.Dto.Billing;
 using iucs.readernest.application.Dto.Communication;
 using iucs.readernest.application.Dto.Courses;
 using iucs.readernest.application.Dto.Enrollment;
+using iucs.readernest.application.Dto.Integrations;
+using iucs.readernest.application.Dto.Navigation;
 using iucs.readernest.application.Dto.Payouts;
+using iucs.readernest.application.Dto.Portal;
+using iucs.readernest.application.Dto.Reports;
 using iucs.readernest.application.Dto.Sessions;
+using iucs.readernest.application.Dto.Settings;
 using iucs.readernest.application.Dto.Users;
 using iucs.readernest.application.Helper;
 using iucs.readernest.application.Services;
@@ -777,6 +782,47 @@ namespace iucs.readernest.tests
                     ScheduledStartAtUtc = start,
                     ScheduledEndAtUtc = start.AddMinutes(45),
                 }));
+        }
+
+        [Fact]
+        public async Task ScheduleSession_RejectsAStartTimeInThePast()
+        {
+            var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 1, includeSession: false);
+            var teacher = await _db.Context.TeacherProfiles.FirstAsync();
+
+            var start = new DateTime(2020, 1, 1, 10, 0, 0, DateTimeKind.Utc);
+            var ex = await Assert.ThrowsAsync<DomainValidationException>(() =>
+                CreateSessionService().ScheduleAsync(new ScheduleSessionRequest
+                {
+                    BatchId = batch.Id,
+                    TeacherProfileId = teacher.Id,
+                    Type = SessionType.Regular,
+                    ScheduledStartAtUtc = start,
+                    ScheduledEndAtUtc = start.AddMinutes(45),
+                }));
+            Assert.Contains("cannot be in the past", ex.Message);
+
+            var stored = await _db.Context.ClassSessions.CountAsync(s => s.BatchId == batch.Id);
+            Assert.Equal(0, stored); // nothing was persisted
+        }
+
+        [Fact]
+        public async Task RescheduleSession_RejectsAStartTimeInThePast()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var start = new DateTime(2020, 1, 1, 10, 0, 0, DateTimeKind.Utc);
+
+            var ex = await Assert.ThrowsAsync<DomainValidationException>(() => CreateSessionService().RescheduleAsync(
+                session.Id,
+                new RescheduleSessionRequest
+                {
+                    ScheduledStartAtUtc = start,
+                    ScheduledEndAtUtc = start.AddMinutes(45),
+                }));
+            Assert.Contains("cannot be in the past", ex.Message);
+
+            var untouched = await _db.Context.ClassSessions.FindAsync(session.Id);
+            Assert.Equal(SessionStatus.Scheduled, untouched!.Status); // never rescheduled
         }
 
         [Fact]
@@ -3190,6 +3236,869 @@ namespace iucs.readernest.tests
             // (an unrelated teacher, a parent) overwrite this after seeding.
             _db.CurrentUser.UserId = teacherUser.Id;
             return (batch, course, session);
+        }
+
+        // ---- QA round 7: regression coverage ----
+
+        /// <summary>
+        /// BUG-001. A cancelled subscription whose child has since been re-subscribed to the
+        /// same plan cannot be renewed — that would be a second Active row for the same
+        /// child+plan, which CreateSubscriptionAsync forbids and the DB's partial unique index
+        /// blocks. RenewSubscriptionAsync made neither check, so the index violation escaped as
+        /// a raw DbUpdateException (HTTP 500) instead of the 409 the admin should have seen.
+        /// </summary>
+        [Fact]
+        public async Task RenewSubscription_Conflicts_WhenChildAlreadyHasAnActiveSubscriptionOnThatPlan()
+        {
+            var (parentProfile, child, plan) = await SeedSubscriptionFixtureAsync();
+            var billing = CreateBillingService();
+
+            var first = await billing.CreateSubscriptionAsync(new CreateSubscriptionRequest
+            {
+                ParentProfileId = parentProfile.Id,
+                ChildId = child.Id,
+                PackagePlanId = plan.Id,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            });
+            await billing.CancelSubscriptionAsync(first.Id);
+
+            // Free to re-subscribe now that the first one is Cancelled.
+            var second = await billing.CreateSubscriptionAsync(new CreateSubscriptionRequest
+            {
+                ParentProfileId = parentProfile.Id,
+                ChildId = child.Id,
+                PackagePlanId = plan.Id,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            });
+            Assert.Equal(SubscriptionStatus.Active, second.Status);
+
+            await Assert.ThrowsAsync<ConflictException>(() => billing.RenewSubscriptionAsync(first.Id));
+
+            // The rejected renewal must leave nothing behind: the old subscription stays
+            // Cancelled and — critically — no renewal invoice was raised for it.
+            var (context, _) = _db.CreateConcurrentSession();
+            using (context)
+            {
+                var stored = await context.Subscriptions.FirstAsync(s => s.Id == first.Id);
+                Assert.Equal(SubscriptionStatus.Cancelled, stored.Status);
+                Assert.Null(stored.NextBillingAtUtc);
+                // Only the invoice raised when it was first created — the rejected renewal
+                // must not have billed the parent for a cycle that never restarted.
+                Assert.Equal(1, await context.Invoices.CountAsync(i => i.SubscriptionId == first.Id));
+            }
+        }
+
+        /// <summary>A genuinely renewable subscription still renews — the new guard must not block the happy path.</summary>
+        [Fact]
+        public async Task RenewSubscription_StillRenews_WhenNoOtherActiveSubscriptionExists()
+        {
+            var (parentProfile, child, plan) = await SeedSubscriptionFixtureAsync();
+            var billing = CreateBillingService();
+
+            var subscription = await billing.CreateSubscriptionAsync(new CreateSubscriptionRequest
+            {
+                ParentProfileId = parentProfile.Id,
+                ChildId = child.Id,
+                PackagePlanId = plan.Id,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            });
+            await billing.CancelSubscriptionAsync(subscription.Id);
+
+            var renewed = await billing.RenewSubscriptionAsync(subscription.Id);
+
+            Assert.Equal(SubscriptionStatus.Active, renewed.Status);
+            var (context, _) = _db.CreateConcurrentSession();
+            using (context)
+            {
+                var stored = await context.Subscriptions.FirstAsync(s => s.Id == subscription.Id);
+                Assert.Equal(SubscriptionStatus.Active, stored.Status);
+                Assert.Null(stored.CancelledAtUtc);
+                Assert.NotNull(stored.NextBillingAtUtc);
+                // One invoice from the original start, one from the renewal.
+                Assert.Equal(2, await context.Invoices.CountAsync(i => i.SubscriptionId == subscription.Id));
+            }
+        }
+
+        /// <summary>
+        /// BUG-002. AppSetting.Key is uniquely indexed, so the same key twice in one bulk
+        /// upsert inserted two colliding rows and failed at SaveChanges as a 500 — taking every
+        /// other setting in the same request with it.
+        /// </summary>
+        [Fact]
+        public async Task UpsertSettings_RejectsADuplicateKeyInTheSamePayload_WithoutPartiallySaving()
+        {
+            var settings = new SettingsService(_db.UnitOfWork, _auditLog);
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => settings.UpsertAsync(
+            [
+                new UpdateSettingRequest { Key = "brand.name", Value = "First", Category = SettingCategory.Branding },
+                new UpdateSettingRequest { Key = "brand.name", Value = "Second", Category = SettingCategory.Branding },
+                new UpdateSettingRequest { Key = "brand.colour", Value = "#fff", Category = SettingCategory.Branding },
+            ]));
+
+            // Validation runs before anything is staged, so the unrelated third key must not
+            // have been written either — a half-applied settings save is worse than none.
+            var (context, _) = _db.CreateConcurrentSession();
+            using (context)
+            {
+                Assert.False(await context.AppSettings.AnyAsync(s => s.Key == "brand.name"));
+                Assert.False(await context.AppSettings.AnyAsync(s => s.Key == "brand.colour"));
+            }
+        }
+
+        /// <summary>
+        /// BUG-002 (same fix). UpdateSettingRequest carries no length attributes, so a key or
+        /// value longer than the column would pass model validation and fail as a 500 on
+        /// Postgres. Both are now bounded in the service, matching the entity.
+        /// </summary>
+        [Fact]
+        public async Task UpsertSettings_RejectsAnOverLongKeyOrValue()
+        {
+            var settings = new SettingsService(_db.UnitOfWork, _auditLog);
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => settings.UpsertAsync(
+                [new UpdateSettingRequest { Key = new string('k', 101), Value = "x", Category = SettingCategory.General }]));
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => settings.UpsertAsync(
+                [new UpdateSettingRequest { Key = "brand.blurb", Value = new string('v', 2001), Category = SettingCategory.General }]));
+
+            // Exactly at the limit is still accepted — the guard bounds, it doesn't over-reject.
+            var saved = await settings.UpsertAsync(
+                [new UpdateSettingRequest { Key = new string('k', 100), Value = new string('v', 2000), Category = SettingCategory.General }]);
+            Assert.Contains(saved, s => s.Key.Length == 100 && s.Value!.Length == 2000);
+        }
+
+        /// <summary>
+        /// BUG-003. SubAdminPermission is uniquely indexed on (UserId, Module). RoleService
+        /// already rejected a duplicated module in the role-level matrix; the per-user matrix
+        /// didn't, so the same module twice failed at SaveChanges as a 500.
+        /// </summary>
+        [Fact]
+        public async Task SetPermissions_RejectsADuplicateModule_WithoutClearingExistingGrants()
+        {
+            var admin = await _db.SeedUserAsync($"pa-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
+            var sub = await _db.SeedUserAsync($"ps-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
+            var users = CreateUserService();
+
+            await users.SetPermissionsAsync(sub.Id, admin.Id,
+                [new PermissionDto { Module = PermissionModule.Admission, CanView = true }]);
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => users.SetPermissionsAsync(sub.Id, admin.Id,
+            [
+                new PermissionDto { Module = PermissionModule.Settings, CanView = true },
+                new PermissionDto { Module = PermissionModule.Settings, CanEdit = true },
+            ]));
+
+            // SetPermissionsAsync is replace-all: rejecting late (at SaveChanges) would have
+            // meant the existing grants were already staged for removal. The guard runs first,
+            // so the sub-admin keeps the access they had.
+            var (context, _) = _db.CreateConcurrentSession();
+            using (context)
+            {
+                var grants = await context.SubAdminPermissions.Where(p => p.UserId == sub.Id).ToListAsync();
+                Assert.Single(grants);
+                Assert.Equal(PermissionModule.Admission, grants[0].Module);
+                Assert.True(grants[0].CanView);
+            }
+        }
+
+        /// <summary>
+        /// Regression for a68b1a1: the status filter has to compose with paging and with the
+        /// parentProfileId filter. The commit's own test only paged a parentProfileId-filtered
+        /// set, so the status branch was never proven to survive Skip/Take or to be reflected
+        /// in TotalCount (which is counted off a separate query from the page itself).
+        /// </summary>
+        [Fact]
+        public async Task ListInvoices_ComposesTheStatusFilterWithPagingAndTheParentFilter()
+        {
+            var (mine, _) = await SeedInvoiceOwnerAsync();
+            var (other, _) = await SeedInvoiceOwnerAsync();
+            var billing = CreateBillingService();
+
+            // 5 invoices for the parent under test, plus 2 for an unrelated parent that must
+            // never leak into a parent-filtered page or its TotalCount.
+            var minesIds = new List<Guid>();
+            for (var i = 0; i < 5; i++)
+            {
+                var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+                {
+                    ParentProfileId = mine.Id,
+                    Department = Department.Phonics,
+                    Amount = 100 + i,
+                    DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+                });
+                minesIds.Add(invoice.Id);
+            }
+
+            for (var i = 0; i < 2; i++)
+            {
+                await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+                {
+                    ParentProfileId = other.Id,
+                    Department = Department.Phonics,
+                    Amount = 900,
+                    DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+                });
+            }
+
+            // Settle two of this parent's invoices so the two statuses are genuinely mixed.
+            await billing.RecordPaymentAsync(minesIds[0], new RecordPaymentRequest
+            {
+                Amount = 100,
+                Method = PaymentMethod.Cash,
+            });
+            await billing.RecordPaymentAsync(minesIds[1], new RecordPaymentRequest
+            {
+                Amount = 101,
+                Method = PaymentMethod.Cash,
+            });
+
+            // Status filter alone: TotalCount counts the filtered set, not the whole table.
+            var paid = await billing.ListInvoicesAsync(InvoiceStatus.Paid, null, page: 1, pageSize: 50);
+            Assert.Equal(2, paid.TotalCount);
+            Assert.All(paid.Items, i => Assert.Equal(InvoiceStatus.Paid, i.Status));
+
+            // Status + parent together, paged: 3 Pending rows for this parent over 2-row pages.
+            var firstPage = await billing.ListInvoicesAsync(InvoiceStatus.Pending, mine.Id, page: 1, pageSize: 2);
+            Assert.Equal(3, firstPage.TotalCount);
+            Assert.Equal(2, firstPage.Items.Count);
+            Assert.All(firstPage.Items, i => Assert.Equal(InvoiceStatus.Pending, i.Status));
+            Assert.All(firstPage.Items, i => Assert.Equal(mine.Id, i.ParentProfileId));
+
+            var secondPage = await billing.ListInvoicesAsync(InvoiceStatus.Pending, mine.Id, page: 2, pageSize: 2);
+            Assert.Single(secondPage.Items);
+            Assert.Equal(3, secondPage.TotalCount);
+
+            // The Id tiebreaker has to hold under the filtered query too, not just the
+            // unfiltered one — every row appears exactly once across the two pages.
+            var paged = firstPage.Items.Concat(secondPage.Items).Select(i => i.Id).ToList();
+            Assert.Equal(3, paged.Distinct().Count());
+            Assert.DoesNotContain(minesIds[0], paged); // the Paid ones stay filtered out
+            Assert.DoesNotContain(minesIds[1], paged);
+
+            // Past the last page is empty, but TotalCount still reports the filtered total.
+            var beyond = await billing.ListInvoicesAsync(InvoiceStatus.Pending, mine.Id, page: 3, pageSize: 2);
+            Assert.Empty(beyond.Items);
+            Assert.Equal(3, beyond.TotalCount);
+        }
+
+        /// <summary>
+        /// Regression for a68b1a1's clamping. page/pageSize arrive straight off the query
+        /// string, so page=0 (a 0-indexed client) or a negative page would otherwise produce
+        /// Skip(-n) — which EF rejects at translation time — and pageSize=0 an empty page.
+        /// </summary>
+        [Fact]
+        public async Task ListInvoices_ClampsANonPositivePageOrPageSize()
+        {
+            var (parentProfile, _) = await SeedInvoiceOwnerAsync();
+            var billing = CreateBillingService();
+            for (var i = 0; i < 3; i++)
+            {
+                await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+                {
+                    ParentProfileId = parentProfile.Id,
+                    Department = Department.Phonics,
+                    Amount = 100 + i,
+                    DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+                });
+            }
+
+            var pageZero = await billing.ListInvoicesAsync(null, parentProfile.Id, page: 0, pageSize: 2);
+            Assert.Equal(1, pageZero.Page);
+            Assert.Equal(2, pageZero.Items.Count);
+
+            var negativePage = await billing.ListInvoicesAsync(null, parentProfile.Id, page: -5, pageSize: 2);
+            Assert.Equal(1, negativePage.Page);
+            Assert.Equal(pageZero.Items.Select(i => i.Id), negativePage.Items.Select(i => i.Id));
+
+            // pageSize floors at 1 rather than returning an empty page for a valid request.
+            var zeroSize = await billing.ListInvoicesAsync(null, parentProfile.Id, page: 1, pageSize: 0);
+            Assert.Equal(1, zeroSize.PageSize);
+            Assert.Single(zeroSize.Items);
+            Assert.Equal(3, zeroSize.TotalCount);
+
+            var negativeSize = await billing.ListInvoicesAsync(null, parentProfile.Id, page: 1, pageSize: -10);
+            Assert.Equal(1, negativeSize.PageSize);
+        }
+
+        /// <summary>
+        /// Regression for b35e798. AuditLogService.ListAsync gained a ThenBy(Id) tiebreaker;
+        /// the commit proved pages don't overlap, but not that the entityName/action filters
+        /// still compose with paging, nor that page/pageSize are clamped the same way.
+        /// </summary>
+        [Fact]
+        public async Task AuditLog_ListAsync_ComposesFiltersWithPaging_AndClampsThePage()
+        {
+            var actor = await _db.SeedUserAsync($"al-f-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
+            var other = await _db.SeedUserAsync($"al-o-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
+
+            // One batched save, so every row ties on CreatedAtUtc — the exact condition the
+            // Id tiebreaker exists for, now applied through a filter as well.
+            _db.Context.AuditLogs.AddRange(
+            [
+                .. Enumerable.Range(0, 5).Select(_ => new AuditLog
+                {
+                    ActorUserId = actor.Id, Action = AuditAction.Update, EntityName = "FilterProbe",
+                }),
+                .. Enumerable.Range(0, 3).Select(_ => new AuditLog
+                {
+                    ActorUserId = actor.Id, Action = AuditAction.Delete, EntityName = "FilterProbe",
+                }),
+                .. Enumerable.Range(0, 4).Select(_ => new AuditLog
+                {
+                    ActorUserId = other.Id, Action = AuditAction.Update, EntityName = "OtherEntity",
+                }),
+            ]);
+            await _db.Context.SaveChangesAsync();
+
+            // entityName filter, paged: 8 rows over 3-row pages, no overlap and none missing.
+            var p1 = await _auditLog.ListAsync("FilterProbe", null, page: 1, pageSize: 3);
+            var p2 = await _auditLog.ListAsync("FilterProbe", null, page: 2, pageSize: 3);
+            var p3 = await _auditLog.ListAsync("FilterProbe", null, page: 3, pageSize: 3);
+            Assert.Equal(8, p1.TotalCount);
+            var walked = p1.Items.Concat(p2.Items).Concat(p3.Items).Select(e => e.Id).ToList();
+            Assert.Equal(8, walked.Count);
+            Assert.Equal(8, walked.Distinct().Count());
+
+            // entityName + action together.
+            var deletes = await _auditLog.ListAsync("FilterProbe", AuditAction.Delete, page: 1, pageSize: 50);
+            Assert.Equal(3, deletes.TotalCount);
+            Assert.All(deletes.Items, e => Assert.Equal(AuditAction.Delete, e.Action));
+
+            // restrictToActorId (what a non-platform-view caller gets) composes too.
+            var mineOnly = await _auditLog.ListAsync(null, null, page: 1, pageSize: 50, restrictToActorId: other.Id);
+            Assert.All(mineOnly.Items, e => Assert.Equal(other.Id, e.ActorUserId));
+            Assert.Equal(4, mineOnly.TotalCount);
+
+            // Same clamping contract as ListInvoicesAsync.
+            var clamped = await _auditLog.ListAsync("FilterProbe", null, page: 0, pageSize: 100_000);
+            Assert.Equal(1, clamped.Page);
+            Assert.Equal(200, clamped.PageSize);
+        }
+
+        /// <summary>
+        /// BUG-004. SaveIntegrationRequest / SaveRoleRequest / SaveMenuItemRequest /
+        /// UpdateSettingRequest carried no length attributes at all, while their entities'
+        /// columns are varchar(N). On Postgres an over-long field passed model validation and
+        /// blew up at SaveChanges as an unhandled DbUpdateException (a 500) rather than a 400.
+        /// Asserted against the annotations directly: SQLite does not enforce varchar length,
+        /// so the 500 itself is only reproducible on the real stack.
+        /// </summary>
+        [Theory]
+        [InlineData(typeof(SaveIntegrationRequest), nameof(SaveIntegrationRequest.Key), 64)]
+        [InlineData(typeof(SaveIntegrationRequest), nameof(SaveIntegrationRequest.Name), 100)]
+        [InlineData(typeof(SaveIntegrationRequest), nameof(SaveIntegrationRequest.Description), 500)]
+        [InlineData(typeof(SaveRoleRequest), nameof(SaveRoleRequest.Name), 64)]
+        [InlineData(typeof(SaveRoleRequest), nameof(SaveRoleRequest.DisplayName), 100)]
+        [InlineData(typeof(SaveRoleRequest), nameof(SaveRoleRequest.Description), 500)]
+        [InlineData(typeof(SaveRoleRequest), nameof(SaveRoleRequest.DefaultRoute), 200)]
+        [InlineData(typeof(SaveMenuItemRequest), nameof(SaveMenuItemRequest.Portal), 32)]
+        [InlineData(typeof(SaveMenuItemRequest), nameof(SaveMenuItemRequest.Section), 64)]
+        [InlineData(typeof(SaveMenuItemRequest), nameof(SaveMenuItemRequest.Label), 100)]
+        [InlineData(typeof(SaveMenuItemRequest), nameof(SaveMenuItemRequest.Path), 200)]
+        [InlineData(typeof(SaveMenuItemRequest), nameof(SaveMenuItemRequest.Icon), 64)]
+        [InlineData(typeof(UpdateSettingRequest), nameof(UpdateSettingRequest.Key), 100)]
+        [InlineData(typeof(UpdateSettingRequest), nameof(UpdateSettingRequest.Value), 2000)]
+        public void AdminSaveRequests_BoundEveryStringFieldToItsColumnLength(
+            Type requestType, string propertyName, int expectedMaxLength)
+        {
+            var property = requestType.GetProperty(propertyName)!;
+            var maxLength = property
+                .GetCustomAttributes(typeof(System.ComponentModel.DataAnnotations.MaxLengthAttribute), false)
+                .Cast<System.ComponentModel.DataAnnotations.MaxLengthAttribute>()
+                .SingleOrDefault();
+
+            Assert.True(maxLength is not null, $"{requestType.Name}.{propertyName} has no [MaxLength].");
+            Assert.Equal(expectedMaxLength, maxLength!.Length);
+            Assert.False(maxLength.IsValid(new string('x', expectedMaxLength + 1)));
+            Assert.True(maxLength.IsValid(new string('x', expectedMaxLength)));
+        }
+
+        [Fact]
+        public async Task ResetPin_ReturnsAWorkingPin_WithoutSendingAnything()
+        {
+            var user = await _db.SeedUserAsync($"resetpin-{Guid.NewGuid():N}@test.com", "old-pin", UserRole.Parent);
+            var originalHash = user.PinHash;
+
+            var temporaryPin = await CreateUserService().ResetPinAsync(user.Id);
+
+            Assert.False(string.IsNullOrWhiteSpace(temporaryPin));
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            var stored = await verifyContext.Users.FirstAsync(u => u.Id == user.Id);
+            Assert.NotEqual(originalHash, stored.PinHash); // a real new PIN was set, not a no-op
+            Assert.True(_hasher.Verify(temporaryPin, stored.PinHash)); // and it's the one actually returned
+            Assert.False(_hasher.Verify("old-pin", stored.PinHash)); // the old PIN no longer works
+            verifyContext.Dispose();
+        }
+
+        /// <summary>
+        /// CourseService.UpdateAsync's two structural guards, neither previously covered:
+        /// a course backing a multi-student batch can't become Individual, and TotalSessions /
+        /// DurationMinutes can't move once a schedule has been generated from them.
+        /// </summary>
+        [Fact]
+        public async Task UpdateCourse_RefusesToDesyncAnAlreadyGeneratedScheduleOrAMultiStudentBatch()
+        {
+            var (batch, course, _) = await SeedBatchWithSessionAsync(totalSessions: 4);
+            var courses = CreateCourseService();
+
+            Task<CourseDto> Save(CourseType type, int totalSessions, int durationMinutes) =>
+                courses.UpdateAsync(course.Id, new SaveCourseRequest
+                {
+                    CourseCategoryId = course.CourseCategoryId,
+                    Name = course.Name,
+                    Type = type,
+                    DurationMinutes = durationMinutes,
+                    Price = course.Price,
+                    TotalSessions = totalSessions,
+                    Department = course.Department,
+                    IsActive = true,
+                });
+
+            // A session already exists for this batch, so the schedule is generated: neither
+            // TotalSessions nor DurationMinutes may move.
+            await Assert.ThrowsAsync<DomainValidationException>(() => Save(CourseType.Group, 6, 45));
+            await Assert.ThrowsAsync<DomainValidationException>(() => Save(CourseType.Group, 4, 60));
+
+            // Leaving both alone is fine — the guard is about desync, not about editing at all.
+            var renamed = await Save(CourseType.Group, 4, 45);
+            Assert.Equal(CourseType.Group, renamed.Type);
+
+            // Two active students in the batch blocks the switch to Individual (which would
+            // otherwise bypass BatchService's own one-student-per-Individual-batch rule).
+            var parentProfile = new ParentProfile
+            {
+                UserId = (await _db.SeedUserAsync($"cp-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent)).Id,
+            };
+            _db.Context.Add(parentProfile);
+            var children = Enumerable.Range(0, 2)
+                .Select(i => new Child { ParentProfile = parentProfile, FirstName = $"Kid{i}", LastName = "X" })
+                .ToList();
+            _db.Context.AddRange(children);
+            _db.Context.AddRange(children.Select(c => new BatchEnrollment
+            {
+                BatchId = batch.Id,
+                Child = c,
+                Status = EnrollmentStatus.Active,
+            }));
+            await _db.Context.SaveChangesAsync();
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => Save(CourseType.Individual, 4, 45));
+
+            var (context, _) = _db.CreateConcurrentSession();
+            using (context)
+            {
+                var stored = await context.Courses.FirstAsync(c => c.Id == course.Id);
+                Assert.Equal(CourseType.Group, stored.Type); // nothing partially applied
+                Assert.Equal(4, stored.TotalSessions);
+                Assert.Equal(45, stored.DurationMinutes);
+            }
+        }
+
+        /// <summary>
+        /// BatchService.SetStatusAsync's side effects, previously uncovered: taking a batch
+        /// out of service must cancel its still-scheduled future sessions and expire the
+        /// subscriptions that were paying for the course it just stopped running.
+        /// </summary>
+        [Fact]
+        public async Task SetBatchDormant_CancelsFutureSessions_AndExpiresTheSubscriptionsPayingForIt()
+        {
+            var (batch, course, futureSession) = await SeedBatchWithSessionAsync(totalSessions: 4);
+
+            var parentUser = await _db.SeedUserAsync($"bs-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var child = new Child { ParentProfile = parentProfile, FirstName = "Kid", LastName = "X" };
+            var plan = new PackagePlan
+            {
+                Name = "Monthly",
+                Course = course,
+                BillingType = BillingType.Subscription,
+                BillingCycle = BillingCycle.Monthly,
+                Price = 1000,
+            };
+            var subscription = new Subscription
+            {
+                ParentProfile = parentProfile,
+                Child = child,
+                PackagePlan = plan,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+                Status = SubscriptionStatus.Active,
+                NextBillingAtUtc = DateTime.UtcNow.AddDays(30),
+            };
+            // A session already in the past must be left alone — only future ones are dangling.
+            var pastSession = new ClassSession
+            {
+                BatchId = batch.Id,
+                TeacherProfileId = batch.TeacherProfileId,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(-3),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(-3).AddMinutes(45),
+                Status = SessionStatus.Scheduled,
+            };
+            _db.Context.AddRange(parentProfile, child, plan, subscription, pastSession);
+            _db.Context.Add(new BatchEnrollment { BatchId = batch.Id, Child = child, Status = EnrollmentStatus.Active });
+            await _db.Context.SaveChangesAsync();
+
+            await CreateBatchService().SetStatusAsync(batch.Id, BatchStatus.Dormant);
+
+            var (context, _) = _db.CreateConcurrentSession();
+            using (context)
+            {
+                var stored = await context.Batches.FirstAsync(b => b.Id == batch.Id);
+                Assert.Equal(BatchStatus.Dormant, stored.Status);
+                Assert.NotNull(stored.CompletedAtUtc);
+
+                var future = await context.ClassSessions.FirstAsync(s => s.Id == futureSession.Id);
+                Assert.Equal(SessionStatus.Cancelled, future.Status);
+                Assert.Contains("Dormant", future.CancellationReason!);
+
+                var past = await context.ClassSessions.FirstAsync(s => s.Id == pastSession.Id);
+                Assert.Equal(SessionStatus.Scheduled, past.Status); // history untouched
+
+                var storedSubscription = await context.Subscriptions.FirstAsync(s => s.Id == subscription.Id);
+                Assert.Equal(SubscriptionStatus.Expired, storedSubscription.Status);
+                Assert.Null(storedSubscription.NextBillingAtUtc); // and the billing job won't re-invoice
+            }
+        }
+
+        /// <summary>
+        /// IntegrationService's secret handling, previously untested and security-relevant:
+        /// gateway credentials must never round-trip to the client in the clear, and an admin
+        /// saving the form back unchanged must not overwrite the real secret with its mask.
+        /// </summary>
+        [Fact]
+        public async Task Integration_MasksSecretsOnRead_AndPreservesThemWhenTheMaskIsSavedBack()
+        {
+            var integrations = new IntegrationService(_db.UnitOfWork, _auditLog);
+
+            var created = await integrations.CreateAsync(new SaveIntegrationRequest
+            {
+                Key = "Razorpay",
+                Name = "Razorpay",
+                Category = IntegrationCategory.PaymentGateway,
+                IsEnabled = true,
+                Config = new Dictionary<string, string?>
+                {
+                    ["apiKey"] = "rzp_live_supersecret1234",
+                    ["apiSecret"] = "shhh_abcd",
+                    ["webhookUrl"] = "https://hooks.test/rzp",
+                },
+            });
+
+            Assert.Equal("razorpay", created.Key); // normalized to lower-case
+            // All but the last 4 characters bulleted — "rzp_live_supersecret1234" is 24 long.
+            Assert.Equal(new string('•', 20) + "1234", created.Config["apiKey"]);
+            Assert.Equal("•••••abcd", created.Config["apiSecret"]);
+            Assert.Equal("https://hooks.test/rzp", created.Config["webhookUrl"]); // not a secret field
+
+            // The admin edits only the webhook and posts the form back — the secret fields
+            // still hold the masks they were rendered with.
+            var updated = await integrations.UpdateAsync(created.Id, new SaveIntegrationRequest
+            {
+                Key = "razorpay",
+                Name = "Razorpay",
+                Category = IntegrationCategory.PaymentGateway,
+                IsEnabled = true,
+                Config = new Dictionary<string, string?>
+                {
+                    ["apiKey"] = created.Config["apiKey"],
+                    ["apiSecret"] = created.Config["apiSecret"],
+                    ["webhookUrl"] = "https://hooks.test/rzp-v2",
+                },
+            });
+
+            Assert.Equal("https://hooks.test/rzp-v2", updated.Config["webhookUrl"]);
+
+            // The stored ciphertext must still be the original, not the bullet string.
+            var (context, _) = _db.CreateConcurrentSession();
+            using (context)
+            {
+                var stored = await context.Integrations.FirstAsync(i => i.Id == created.Id);
+                Assert.Contains("rzp_live_supersecret1234", stored.ConfigJson!);
+                Assert.Contains("shhh_abcd", stored.ConfigJson!);
+                Assert.DoesNotContain("•", stored.ConfigJson!);
+            }
+
+            // A genuinely new secret still replaces the old one.
+            var rotated = await integrations.UpdateAsync(created.Id, new SaveIntegrationRequest
+            {
+                Key = "razorpay",
+                Name = "Razorpay",
+                Category = IntegrationCategory.PaymentGateway,
+                IsEnabled = true,
+                Config = new Dictionary<string, string?> { ["apiSecret"] = "rotated_wxyz" },
+            });
+            Assert.Equal("••••••••wxyz", rotated.Config["apiSecret"]);
+        }
+
+        /// <summary>
+        /// RoleService's system-role and in-use protections, previously untested. A seeded role
+        /// backs the Sub Admin preset flow, so renaming or deleting one would strand every user
+        /// assigned to it.
+        /// </summary>
+        [Fact]
+        public async Task RoleService_ProtectsSystemRoles_AndRefusesToDeleteOneStillAssigned()
+        {
+            var roles = new RoleService(_db.UnitOfWork, _auditLog);
+
+            var systemRole = new RoleDefinition
+            {
+                Name = "academic-coordinator",
+                DisplayName = "Academic Coordinator",
+                DefaultRoute = "/coordinator",
+                IsSystem = true,
+            };
+            _db.Context.Add(systemRole);
+            await _db.Context.SaveChangesAsync();
+            // RoleService loads no-tracking and calls Update(); production hands each request
+            // its own DbContext, so the seed instance must not stay tracked here.
+            _db.Context.ChangeTracker.Clear();
+
+            SaveRoleRequest Request(string name, string? route = "/coordinator") => new()
+            {
+                Name = name,
+                DisplayName = "Academic Coordinator",
+                DefaultRoute = route,
+                Permissions = [new PermissionDto { Module = PermissionModule.Admission, CanView = true }],
+            };
+
+            // Each call stands for its own HTTP request, so each gets a clean tracker.
+            Task<RoleDto> Update(SaveRoleRequest request)
+            {
+                _db.Context.ChangeTracker.Clear();
+                return roles.UpdateAsync(systemRole.Id, request);
+            }
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => Update(Request("renamed-coordinator")));
+
+            _db.Context.ChangeTracker.Clear();
+            await Assert.ThrowsAsync<DomainValidationException>(() => roles.DeleteAsync(systemRole.Id));
+
+            // A system role's permission matrix is still editable — that's the whole point of
+            // the preset editor; only its identity is frozen.
+            var edited = await Update(Request("academic-coordinator"));
+            Assert.Single(edited.Permissions);
+
+            // A route not starting with '/' is rejected, and a duplicated module is too.
+            await Assert.ThrowsAsync<DomainValidationException>(
+                () => Update(Request("academic-coordinator", "coordinator")));
+            await Assert.ThrowsAsync<DomainValidationException>(() => Update(new SaveRoleRequest
+            {
+                Name = "academic-coordinator",
+                DisplayName = "Academic Coordinator",
+                Permissions =
+                [
+                    new PermissionDto { Module = PermissionModule.Admission, CanView = true },
+                    new PermissionDto { Module = PermissionModule.Admission, CanEdit = true },
+                ],
+            }));
+            _db.Context.ChangeTracker.Clear();
+
+            // A custom role in use by a Sub Admin can't be deleted out from under them.
+            var custom = await roles.CreateAsync(new SaveRoleRequest
+            {
+                Name = "Front-Desk",
+                DisplayName = "Front Desk",
+                Permissions = [],
+            });
+            Assert.Equal("front-desk", custom.Name);
+            await Assert.ThrowsAsync<ConflictException>(() => roles.CreateAsync(new SaveRoleRequest
+            {
+                Name = "FRONT-DESK",
+                DisplayName = "Front Desk Again",
+            }));
+
+            var subAdmin = await _db.SeedUserAsync($"rs-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
+            subAdmin.RoleDefinitionId = custom.Id;
+            await _db.Context.SaveChangesAsync();
+
+            await Assert.ThrowsAsync<ConflictException>(() => roles.DeleteAsync(custom.Id));
+        }
+
+        /// <summary>
+        /// EmailTemplateService's substitution rules, previously exercised only indirectly.
+        /// Token values are parent-supplied (child/parent names), so they must be HTML-escaped
+        /// in the body and stripped of CR/LF in the subject (mail-header injection).
+        /// </summary>
+        [Fact]
+        public async Task EmailTemplate_EscapesTokenValuesInHtml_AndStripsLineBreaksFromTheSubject()
+        {
+            var template = new EmailTemplate
+            {
+                Key = "qa-substitution",
+                Name = "QA",
+                Category = NotificationType.General,
+                Subject = "Welcome {{Name}}",
+                HtmlBody = "<p>Hello {{Name}}, see {{Missing}} and {{Note}}</p>",
+                PlaceholdersJson = "[\"Name\",\"Note\"]",
+                IsActive = true,
+            };
+            _db.Context.EmailTemplates.Add(template);
+            await _db.Context.SaveChangesAsync();
+
+            var (subject, body) = await _emailTemplates.RenderAsync("qa-substitution", new Dictionary<string, string>
+            {
+                // A name carrying markup, a header-injection attempt, and a value that itself
+                // looks like another token (which a naive replace-per-token loop would re-expand).
+                ["Name"] = "<script>alert(1)</script>\r\nBcc: attacker@evil.test",
+                ["Note"] = "{{Name}}",
+            });
+
+            Assert.DoesNotContain("\r", subject);
+            Assert.DoesNotContain("\n", subject);
+            Assert.Contains("Bcc: attacker@evil.test", subject); // flattened onto one line, not a new header
+
+            Assert.DoesNotContain("<script>", body);
+            Assert.Contains("&lt;script&gt;", body);
+            // {{Note}}'s value is literally "{{Name}}" — it must survive as text, never be
+            // re-substituted with Name's value.
+            Assert.Contains("{{Name}}", body);
+            Assert.Contains("{{Missing}}", body); // an unsupplied token is left as-is, not blanked
+
+            // An edit invalidates the render cache immediately rather than waiting out the TTL.
+            await _emailTemplates.UpdateAsync(template.Id, new SaveEmailTemplateRequest
+            {
+                Subject = "Updated {{Name}}",
+                HtmlBody = "<p>v2 {{Name}}</p>",
+                IsActive = true,
+            });
+            var (afterEdit, afterBody) = await _emailTemplates.RenderAsync(
+                "qa-substitution", new Dictionary<string, string> { ["Name"] = "Ann" });
+            Assert.Equal("Updated Ann", afterEdit);
+            Assert.Contains("v2 Ann", afterBody);
+
+            // Deactivating falls back to the generic message rather than blocking the send.
+            await _emailTemplates.UpdateAsync(template.Id, new SaveEmailTemplateRequest
+            {
+                Subject = "Updated {{Name}}",
+                HtmlBody = "<p>v2 {{Name}}</p>",
+                IsActive = false,
+            });
+            var (fallback, _) = await _emailTemplates.RenderAsync(
+                "qa-substitution", new Dictionary<string, string> { ["Name"] = "Ann" });
+            Assert.Equal("Notification from The Reader Nest", fallback);
+        }
+
+        /// <summary>
+        /// Bulk email recipient scoping, previously untested. The count shown on the compose
+        /// screen has to be exactly who the send reaches, and a batch-scoped send must not
+        /// spill into unrelated parents.
+        /// </summary>
+        [Fact]
+        public async Task BulkEmail_PreviewCountMatchesTheSend_AndABatchScopedSendStaysInsideTheBatch()
+        {
+            var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 2);
+            var reports = new ReportsService(_db.UnitOfWork, _notifications);
+
+            async Task<ParentProfile> SeedParentWithChildAsync(bool enrol, UserStatus status = UserStatus.Active)
+            {
+                var user = await _db.SeedUserAsync($"be-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent, status);
+                var profile = new ParentProfile { UserId = user.Id };
+                var child = new Child { ParentProfile = profile, FirstName = "Kid", LastName = "X" };
+                _db.Context.AddRange(profile, child);
+                if (enrol)
+                {
+                    _db.Context.Add(new BatchEnrollment { BatchId = batch.Id, Child = child, Status = EnrollmentStatus.Active });
+                }
+
+                await _db.Context.SaveChangesAsync();
+                return profile;
+            }
+
+            await SeedParentWithChildAsync(enrol: true);
+            await SeedParentWithChildAsync(enrol: true);
+            await SeedParentWithChildAsync(enrol: false);          // active, but not in this batch
+            await SeedParentWithChildAsync(enrol: false, status: UserStatus.Inactive);
+
+            var batchPreview = await reports.PreviewBulkEmailAsync(batch.Id);
+            Assert.Equal(2, batchPreview.RecipientCount);
+
+            _emailSender.Sent.Clear();
+            var batchSend = await reports.SendBulkEmailAsync(new BulkEmailRequest
+            {
+                Subject = "Class update",
+                Body = "<p>See you Monday.</p>",
+                BatchId = batch.Id,
+            });
+            Assert.Equal(2, batchSend.RecipientCount);
+            Assert.Equal(2, _emailSender.Sent.Count); // the preview count is the real reach
+
+            // Unscoped goes to every ACTIVE parent — the inactive one is excluded, and so is
+            // any parent whose account was deactivated after enrolling.
+            var allPreview = await reports.PreviewBulkEmailAsync(null);
+            Assert.Equal(3, allPreview.RecipientCount);
+
+            _emailSender.Sent.Clear();
+            var allSend = await reports.SendBulkEmailAsync(new BulkEmailRequest
+            {
+                Subject = "Newsletter",
+                Body = "<p>Hello</p>",
+            });
+            Assert.Equal(3, allSend.RecipientCount);
+            Assert.Equal(3, _emailSender.Sent.Count);
+
+            // Every send is journalled, so a failed delivery is auditable rather than silent.
+            var (context, _) = _db.CreateConcurrentSession();
+            using (context)
+            {
+                Assert.Equal(5, await context.Notifications.CountAsync(n => n.Channel == NotificationChannel.Email
+                    && (n.Subject == "Class update" || n.Subject == "Newsletter")));
+            }
+        }
+
+        private async Task<(ParentProfile Parent, User User)> SeedInvoiceOwnerAsync()
+        {
+            var parentUser = await _db.SeedUserAsync($"inv-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.Add(parentProfile);
+            if (!await _db.Context.PaymentAccounts.AnyAsync(a => a.Department == Department.Phonics))
+            {
+                _db.Context.Add(new PaymentAccount
+                {
+                    Name = "Phonics",
+                    Department = Department.Phonics,
+                    GatewayProvider = "razorpay",
+                    GatewayAccountRef = "ph",
+                });
+            }
+
+            await _db.Context.SaveChangesAsync();
+            return (parentProfile, parentUser);
+        }
+
+        private async Task<(ParentProfile Parent, Child Child, PackagePlan Plan)> SeedSubscriptionFixtureAsync()
+        {
+            var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var child = new Child { ParentProfile = parentProfile, FirstName = "Kid", LastName = "One" };
+            var category = new CourseCategory { Name = $"Cat-{Guid.NewGuid():N}", Department = Department.Phonics };
+            var course = new Course
+            {
+                CourseCategory = category,
+                Name = "Course",
+                Type = CourseType.Group,
+                DurationMinutes = 45,
+                Price = 100,
+                TotalSessions = 8,
+                Department = Department.Phonics,
+            };
+            var plan = new PackagePlan
+            {
+                Name = "Monthly",
+                Course = course,
+                BillingType = BillingType.Subscription,
+                BillingCycle = BillingCycle.Monthly,
+                Price = 1000,
+            };
+            var account = new PaymentAccount
+            {
+                Name = "Phonics",
+                Department = Department.Phonics,
+                GatewayProvider = "razorpay",
+                GatewayAccountRef = "ph",
+            };
+            _db.Context.AddRange(parentProfile, child, category, course, plan, account);
+            await _db.Context.SaveChangesAsync();
+            return (parentProfile, child, plan);
         }
 
         public void Dispose() => _db.Dispose();

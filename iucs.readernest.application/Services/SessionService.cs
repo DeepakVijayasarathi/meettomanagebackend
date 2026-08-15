@@ -873,11 +873,25 @@ namespace iucs.readernest.application.Services
                 .Include(s => s.TeacherProfile).ThenInclude(t => t.User);
         }
 
+        /// <summary>
+        /// Shared by ScheduleAsync and RescheduleAsync — both put a class on the calendar at
+        /// a specific instant, so neither has a legitimate reason to land in the past. (Batch
+        /// schedule generation doesn't go through this — it always projects forward from a
+        /// start date — so a genuine historical backfill, if one is ever needed, isn't blocked
+        /// by this check; it just isn't reachable through either of these two actions.)
+        /// </summary>
         private static void ValidateWindow(DateTime startUtc, DateTime endUtc)
         {
             if (endUtc <= startUtc)
             {
                 throw new DomainValidationException("Session end time must be after the start time.");
+            }
+
+            // A small grace window, not an exact "> now": a request that was valid when the
+            // admin clicked submit shouldn't fail on submission-lag alone.
+            if (startUtc < DateTime.UtcNow.AddMinutes(-5))
+            {
+                throw new DomainValidationException("Session start time cannot be in the past.");
             }
         }
 

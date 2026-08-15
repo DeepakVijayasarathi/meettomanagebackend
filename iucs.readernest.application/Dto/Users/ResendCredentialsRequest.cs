@@ -22,4 +22,15 @@ namespace iucs.readernest.application.Dto.Users
 
         public bool Sms { get; set; }
     }
+
+    /// <summary>
+    /// The freshly-generated PIN, handed back so an admin can read it out or write it down —
+    /// unlike ResendCredentialsAsync, nothing is emailed/texted, so this doesn't depend on a
+    /// delivery channel being configured and works even when the account has no phone/email
+    /// the parent can currently reach.
+    /// </summary>
+    public class ResetPinResultDto
+    {
+        public string TemporaryPin { get; set; } = null!;
+    }
 }

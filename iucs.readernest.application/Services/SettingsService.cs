@@ -9,6 +9,12 @@ namespace iucs.readernest.application.Services
 {
     public class SettingsService : ISettingsService
     {
+        /// <summary>Mirrors AppSetting.Key's [MaxLength(100)] — validated here so an over-long key is a 400, not a DbUpdateException.</summary>
+        private const int MaxKeyLength = 100;
+
+        /// <summary>Mirrors AppSetting.Value's [MaxLength(2000)].</summary>
+        private const int MaxValueLength = 2000;
+
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
 
@@ -47,7 +53,45 @@ namespace iucs.readernest.application.Services
             }
 
             var repository = _unitOfWork.Repository<AppSetting>();
-            var keys = updates.Select(u => u.Key.Trim()).ToList();
+            var keys = updates.Select(u => u.Key?.Trim() ?? string.Empty).ToList();
+
+            // Validate the whole payload before touching the repository: this is a bulk
+            // upsert, so a key that only fails at SaveChanges would take the other settings
+            // in the same request down with it as an opaque 500.
+            foreach (var key in keys)
+            {
+                if (key.Length == 0)
+                {
+                    throw new DomainValidationException("Setting keys cannot be empty.");
+                }
+
+                // AppSetting.Key/Value are varchar(100)/varchar(2000); UpdateSettingRequest
+                // carries no length attributes of its own, so an over-long key or value would
+                // otherwise pass model validation and fail as a DbUpdateException instead.
+                if (key.Length > MaxKeyLength)
+                {
+                    throw new DomainValidationException(
+                        $"Setting key '{key[..Math.Min(key.Length, 32)]}…' exceeds {MaxKeyLength} characters.");
+                }
+            }
+
+            var overLongValue = updates.FirstOrDefault(u => u.Value is not null && u.Value.Length > MaxValueLength);
+            if (overLongValue is not null)
+            {
+                throw new DomainValidationException(
+                    $"Value for setting '{overLongValue.Key?.Trim()}' exceeds {MaxValueLength} characters.");
+            }
+
+            // Key is uniquely indexed, so the same key twice in one payload inserts two rows
+            // that collide at SaveChanges — a 500 for what is plainly a malformed request.
+            // Rejecting it (rather than silently letting the last one win) matches how
+            // RoleService.MapPermissions handles a duplicated module in the same situation.
+            var duplicateKey = keys.GroupBy(k => k).FirstOrDefault(g => g.Count() > 1);
+            if (duplicateKey is not null)
+            {
+                throw new DomainValidationException($"Setting key '{duplicateKey.Key}' appears more than once.");
+            }
+
             var existing = await repository.Query()
                 .Where(s => keys.Contains(s.Key))
                 .ToDictionaryAsync(s => s.Key, cancellationToken);
@@ -55,10 +99,6 @@ namespace iucs.readernest.application.Services
             foreach (var update in updates)
             {
                 var key = update.Key.Trim();
-                if (key.Length == 0)
-                {
-                    throw new DomainValidationException("Setting keys cannot be empty.");
-                }
 
                 if (existing.TryGetValue(key, out var setting))
                 {

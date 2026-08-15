@@ -179,6 +179,19 @@ namespace iucs.readernest.api.Controllers
             return NoContent();
         }
 
+        /// <summary>
+        /// Regenerates the account's PIN and returns it directly instead of sending it —
+        /// for when the admin wants to relay it themselves (a call, in person) rather than
+        /// rely on a delivery channel reaching this person right now.
+        /// </summary>
+        [HttpPost("{id:guid}/reset-pin")]
+        [HasPermission(PermissionModule.UserManagement, PermissionAction.Edit)]
+        public async Task<ActionResult<ResetPinResultDto>> ResetPin(Guid id, CancellationToken cancellationToken)
+        {
+            var temporaryPin = await _userService.ResetPinAsync(id, cancellationToken);
+            return Ok(new ResetPinResultDto { TemporaryPin = temporaryPin });
+        }
+
         /// <summary>Which credential-delivery channels are enabled (Settings → Integrations), so the UI shows only usable Send buttons.</summary>
         [HttpGet("credential-channels")]
         [HasPermission(PermissionModule.UserManagement, PermissionAction.View)]

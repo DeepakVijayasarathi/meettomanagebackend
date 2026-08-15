@@ -1513,6 +1513,23 @@ namespace iucs.readernest.application.Services
             var plan = await _unitOfWork.Repository<PackagePlan>().GetByIdAsync(subscription.PackagePlanId, cancellationToken)
                 ?? throw new NotFoundException(nameof(PackagePlan), subscription.PackagePlanId);
 
+            // Reactivating is an Active-subscription *creation* as far as the one-active-per
+            // child+plan rule goes, so it needs the same duplicate check CreateSubscriptionAsync
+            // makes. A cancelled subscription whose child has since been re-subscribed to the
+            // same plan is exactly this case, and without the check the only thing stopping the
+            // second Active row is ix_subscriptions_child_id_package_plan_id — whose violation
+            // escapes as a raw DbUpdateException (a 500), not the 409 the admin should see.
+            var alreadyActive = await _unitOfWork.Repository<Subscription>().ExistsAsync(
+                s => s.Id != id
+                    && s.ChildId == subscription.ChildId
+                    && s.PackagePlanId == subscription.PackagePlanId
+                    && s.Status == SubscriptionStatus.Active,
+                cancellationToken);
+            if (alreadyActive)
+            {
+                throw new ConflictException("This child already has an active subscription on that plan.");
+            }
+
             subscription.Status = SubscriptionStatus.Active;
             subscription.CancelledAtUtc = null;
             subscription.NextBillingAtUtc = NextBillingFrom(DateTime.UtcNow, plan.BillingCycle);
@@ -1521,7 +1538,19 @@ namespace iucs.readernest.application.Services
             // Renewal conversion is tracked in the audit trail for the renewal-rate report
             await _auditLog.StageAsync(AuditAction.Update, nameof(Subscription), subscription.Id.ToString(),
                 changesJson: "{\"renewed\":true}", cancellationToken: cancellationToken);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            try
+            {
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException ex) when (ex.InnerException?.Message.Contains(
+                "ix_subscriptions_child_id_package_plan_id", StringComparison.Ordinal) == true)
+            {
+                // Same check-then-write race CreateSubscriptionAsync guards: the ExistsAsync
+                // above takes no lock, so a concurrent create/renew for this child+plan can
+                // commit between it and this save. Translate the index's violation into the
+                // same clean conflict rather than letting it surface as a 500.
+                throw new ConflictException("This child already has an active subscription on that plan.");
+            }
 
             // Renewal bills right away, same as a fresh start — the next cycle is the job's.
             await CreateInvoiceAsync(

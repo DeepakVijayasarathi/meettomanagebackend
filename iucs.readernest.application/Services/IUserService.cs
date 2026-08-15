@@ -55,6 +55,13 @@ namespace iucs.readernest.application.Services
         /// </summary>
         Task ResendCredentialsAsync(Guid userId, CredentialChannel channel, CancellationToken cancellationToken = default);
 
+        /// <summary>
+        /// Regenerates the account's PIN and returns it in plain text instead of sending it
+        /// anywhere — for an admin to read out over a call or hand over in person when no
+        /// delivery channel reaches this person right now.
+        /// </summary>
+        Task<string> ResetPinAsync(Guid userId, CancellationToken cancellationToken = default);
+
         /// <summary>Which credential-delivery channels are enabled in Settings → Integrations, so the UI shows only usable buttons.</summary>
         Task<CredentialChannelsDto> GetCredentialChannelsAsync(CancellationToken cancellationToken = default);
 
