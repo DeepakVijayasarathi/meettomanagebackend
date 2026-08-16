@@ -732,6 +732,20 @@ namespace iucs.readernest.application.Services
                 throw new ForbiddenException("You do not have access to this session.");
             }
 
+            // Mirrors the frontend's own join-window rule (parent/utils.ts isJoinable: 10
+            // minutes before start until the scheduled end) — only enforced client-side before
+            // this, so a real, usable room + token was one direct GET away for any session at
+            // any time, past or weeks out, regardless of what the join button showed.
+            var now = DateTime.UtcNow;
+            if (now < session.ScheduledStartAtUtc.AddMinutes(-10))
+            {
+                throw new DomainValidationException("This class hasn't opened for joining yet.");
+            }
+            if (now > session.ScheduledEndAtUtc)
+            {
+                throw new DomainValidationException("This class has already ended.");
+            }
+
             var jitsiConfigJson = await _unitOfWork.Repository<Integration>().Query()
                 .Where(i => i.Key == "jitsi")
                 .Select(i => i.ConfigJson)

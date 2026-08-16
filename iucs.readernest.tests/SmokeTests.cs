@@ -116,6 +116,57 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task GetJitsiJoin_RejectsAFarFutureOrAlreadyEndedSession_EvenForAValidParticipant()
+        {
+            // The UI's Join button only disables itself outside the window (parent/utils.ts
+            // isJoinable: 10 min before start until the scheduled end) — confirmed live that
+            // GET /api/sessions/{id}/jitsi-join itself had no equivalent check, so a real,
+            // usable room + token was one direct request away regardless of what the button
+            // showed, for a session weeks out or long over.
+            var teacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var teacher = new TeacherProfile { UserId = teacherUser.Id };
+            _db.Context.TeacherProfiles.Add(teacher);
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateSessionService();
+
+            var farFuture = new ClassSession
+            {
+                TeacherProfileId = teacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(21),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(21).AddMinutes(45),
+                Status = SessionStatus.Scheduled,
+                MeetingRoomId = "trn-far-future",
+            };
+            var alreadyEnded = new ClassSession
+            {
+                TeacherProfileId = teacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(-1),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(-1).AddMinutes(45),
+                Status = SessionStatus.Scheduled,
+                MeetingRoomId = "trn-already-ended",
+            };
+            var withinWindow = new ClassSession
+            {
+                TeacherProfileId = teacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddMinutes(5),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddMinutes(50),
+                Status = SessionStatus.Scheduled,
+                MeetingRoomId = "trn-within-window",
+            };
+            _db.Context.AddRange(farFuture, alreadyEnded, withinWindow);
+            await _db.Context.SaveChangesAsync();
+
+            await Assert.ThrowsAsync<DomainValidationException>(
+                () => service.GetJitsiJoinAsync(farFuture.Id, teacherUser.Id));
+            await Assert.ThrowsAsync<DomainValidationException>(
+                () => service.GetJitsiJoinAsync(alreadyEnded.Id, teacherUser.Id));
+
+            var join = await service.GetJitsiJoinAsync(withinWindow.Id, teacherUser.Id);
+            Assert.Equal("trn-within-window", join.Room);
+        }
+
+        [Fact]
         public async Task TeacherNoShow_AppliesConfiguredPenaltyPercent()
         {
             var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 2);
