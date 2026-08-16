@@ -4117,6 +4117,42 @@ namespace iucs.readernest.tests
             await Assert.ThrowsAsync<ConflictException>(() => roles.DeleteAsync(custom.Id));
         }
 
+        [Fact]
+        public async Task UpdateRole_CannotSaveAwayARequiredSystemGrant()
+        {
+            // Reproduces the live bug: saving the "management" preset from the Roles &
+            // Permissions screen without the Courses box checked used to wipe
+            // CourseBatchManagement:View outright, breaking that role's own Revenue & Courses
+            // screen until the process next restarted (the startup-only backfill was the only
+            // thing that ever put it back). RoleService.UpdateAsync must not be able to save
+            // that grant away, independent of what the submitted matrix says.
+            var roles = new RoleService(_db.UnitOfWork, _auditLog);
+            var managementRole = new RoleDefinition
+            {
+                Name = "management",
+                DisplayName = "Management",
+                DefaultRoute = "/management",
+                IsSystem = true,
+            };
+            _db.Context.Add(managementRole);
+            await _db.Context.SaveChangesAsync();
+            _db.Context.ChangeTracker.Clear();
+
+            // Admin edits the role for an unrelated reason (adding Reports access) and submits
+            // the matrix as the screen actually would — Courses simply isn't in it.
+            var updated = await roles.UpdateAsync(managementRole.Id, new SaveRoleRequest
+            {
+                Name = "management",
+                DisplayName = "Management",
+                DefaultRoute = "/management",
+                Permissions = [new PermissionDto { Module = PermissionModule.ReportsAnalytics, CanView = true }],
+            });
+
+            var coursesGrant = Assert.Single(updated.Permissions, p => p.Module == PermissionModule.CourseBatchManagement);
+            Assert.True(coursesGrant.CanView);
+            Assert.Contains(updated.Permissions, p => p.Module == PermissionModule.ReportsAnalytics && p.CanView);
+        }
+
         /// <summary>
         /// EmailTemplateService's substitution rules, previously exercised only indirectly.
         /// Token values are parent-supplied (child/parent names), so they must be HTML-escaped

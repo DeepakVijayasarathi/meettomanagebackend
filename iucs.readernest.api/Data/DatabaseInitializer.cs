@@ -260,16 +260,7 @@ namespace iucs.readernest.api.Data
         /// </summary>
         private static async Task BackfillSystemRolePermissionsAsync(ReaderNestDbContext context)
         {
-            (string RoleName, PermissionModule Module, bool View, bool Create, bool Edit, bool Delete, bool Approve)[] additions =
-            [
-                ("teacher", PermissionModule.Payouts, true, false, false, false, false),
-                ("parent", PermissionModule.SessionCalendarManagement, true, false, false, false, false),
-                ("parent", PermissionModule.ContentAccessManagement, true, false, false, false, false),
-                ("parent", PermissionModule.BillingFinance, true, false, false, false, false),
-                ("parent", PermissionModule.Communication, true, false, false, false, false),
-                ("admission", PermissionModule.BillingFinance, true, false, true, false, true),
-                ("management", PermissionModule.CourseBatchManagement, true, false, false, false, false),
-            ];
+            var additions = RequiredSystemRolePermissions.All;
 
             var roleNames = additions.Select(a => a.RoleName).Distinct().ToList();
             var roles = await context.RoleDefinitions
