@@ -179,6 +179,11 @@ namespace iucs.readernest.application.Services
                     await ValidatePlanForBillingAsync(request.PackagePlanId.Value, parentProfile, cancellationToken);
                 }
 
+                if (request.ChildDateOfBirth > DateOnly.FromDateTime(DateTime.UtcNow))
+                {
+                    throw new DomainValidationException("Child's date of birth cannot be in the future.");
+                }
+
                 var (firstName, lastName) = ResolveChildName(form, request);
                 child = new Child
                 {
