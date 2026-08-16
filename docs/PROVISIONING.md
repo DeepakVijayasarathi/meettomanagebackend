@@ -22,6 +22,19 @@ cloud account; nothing else blocks provisioning.
 - `Payments:PayNowBaseUrl` + real `IPaymentGateway` registration once the
   Phonics/Maths gateway accounts exist
 - `Database:MigrateOnStartup=false` in production — migrations applied by CI
+- `Storage:S3:Endpoint` / `Storage:S3:AccessKey` / `Storage:S3:SecretKey` /
+  `Storage:S3:BucketName` (env vars `Storage__S3__*`) — S3-compatible object
+  storage (Hetzner Object Storage in this project) that `S3FileStorage`
+  needs to construct its client. **Every one of these is required**; there
+  is no local-disk fallback in production (`Program.cs` registers
+  `S3FileStorage` unconditionally). If any is left unset, the container
+  still starts, but every request touching `ResourcesController` or
+  `ParentPortalController`'s resource download — including plain GETs, not
+  just uploads — 500s at DI-construction time with an
+  `Amazon.Runtime.AmazonClientException`. `appsettings.json` seeds these
+  keys as `""` (not absent) purely so they're discoverable, which is why a
+  missing env var surfaces as a runtime exception on first request rather
+  than a startup failure — there's nothing to catch it before then.
 
 ## CI/CD hook-up
 
