@@ -50,6 +50,18 @@ namespace iucs.readernest.api.Controllers
             var confirmation = await _storeService.BookDemoAsync(request, cancellationToken);
             return CreatedAtAction(nameof(Plans), null, confirmation);
         }
+
+        /// <summary>Which 30-minute slots on a given day still have a teacher free — lets the
+        /// booking form offer real openings instead of the visitor guessing a time.</summary>
+        [HttpGet("demo-availability")]
+        [EnableRateLimiting("store-inquiry")]
+        public async Task<ActionResult<IReadOnlyList<AvailableDemoSlotDto>>> DemoAvailability(
+            [FromQuery] DateOnly date,
+            [FromQuery] Department? department,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await _storeService.ListAvailableDemoSlotsAsync(date, department, cancellationToken));
+        }
     }
 
     /// <summary>Admission-team follow-up queue for public store inquiries.</summary>
