@@ -10,6 +10,7 @@ using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace iucs.readernest.application.Services
 {
@@ -21,6 +22,7 @@ namespace iucs.readernest.application.Services
         private readonly IEmailSender _emailSender;
         private readonly IEmailTemplateService _emailTemplateService;
         private readonly IJitsiTokenService _jitsiTokenService;
+        private readonly ILogger<DemoBookingService> _logger;
 
         public DemoBookingService(
             IUnitOfWork unitOfWork,
@@ -28,7 +30,8 @@ namespace iucs.readernest.application.Services
             IEmailSender emailSender,
             IEmailTemplateService emailTemplateService,
             ICrmNotifier crmNotifier,
-            IJitsiTokenService jitsiTokenService)
+            IJitsiTokenService jitsiTokenService,
+            ILogger<DemoBookingService> logger)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
@@ -36,6 +39,7 @@ namespace iucs.readernest.application.Services
             _emailTemplateService = emailTemplateService;
             _crmNotifier = crmNotifier;
             _jitsiTokenService = jitsiTokenService;
+            _logger = logger;
         }
 
         public async Task<IReadOnlyList<DemoBookingDto>> ListAsync(
@@ -158,48 +162,61 @@ namespace iucs.readernest.application.Services
             }, cancellationToken);
 
             // Booking confirmation to the parent and every extra invitee (they may not
-            // have accounts yet, so this bypasses the user-bound notification log)
-            var jitsiConfigJson = await _unitOfWork.Repository<Integration>().Query()
-                .Where(i => i.Key == "jitsi")
-                .Select(i => i.ConfigJson)
-                .FirstOrDefaultAsync(cancellationToken);
-            var domain = JitsiLinkBuilder.ResolveDomain(jitsiConfigJson);
-
-            // No account exists yet for a demo lead, so each invitee gets their own token
-            // (name + email baked in, expiring a couple of hours past the demo) instead of
-            // a bare room name that would work forever for anyone who ever saw the email.
-            string JoinUrlFor(string participantName, string participantEmail) =>
-                JitsiLinkBuilder.BuildJoinUrl(
-                    session.MeetingRoomId,
-                    jitsiConfigJson,
-                    _jitsiTokenService.CreateToken(
-                        domain, jitsiConfigJson, session.MeetingRoomId!, participantName, participantEmail,
-                        moderator: false, request.ScheduledEndAtUtc.AddHours(2)),
-                    participantName)
-                ?? "#";
-
-            var (parentSubject, parentHtml) = await _emailTemplateService.RenderAsync(
-                "demo-confirmed",
-                new Dictionary<string, string>
-                {
-                    ["ChildName"] = booking.ChildName,
-                    ["WhenLocal"] = DateTimeDisplay.ToLocal(request.ScheduledStartAtUtc),
-                    ["JoinUrl"] = JoinUrlFor(booking.ParentName, booking.ParentEmail),
-                },
-                cancellationToken);
-            await _emailSender.SendAsync(booking.ParentEmail, parentSubject, parentHtml, cancellationToken);
-            foreach (var participant in booking.Participants.Where(p => !string.IsNullOrWhiteSpace(p.Email)))
+            // have accounts yet, so this bypasses the user-bound notification log).
+            // The booking itself is already committed at this point — a template-render
+            // glitch or an SMTP failure (e.g. the sender account's own daily limit) must not
+            // turn an already-successful booking into a 500 response, the same reasoning
+            // NotificationService.SendRenderedEmailAsync already applies to every other email
+            // this app sends. Confirmed via production logs: this exact path was throwing an
+            // uncaught SmtpException after the booking had already been saved.
+            try
             {
-                var (participantSubject, participantHtml) = await _emailTemplateService.RenderAsync(
+                var jitsiConfigJson = await _unitOfWork.Repository<Integration>().Query()
+                    .Where(i => i.Key == "jitsi")
+                    .Select(i => i.ConfigJson)
+                    .FirstOrDefaultAsync(cancellationToken);
+                var domain = JitsiLinkBuilder.ResolveDomain(jitsiConfigJson);
+
+                // No account exists yet for a demo lead, so each invitee gets their own token
+                // (name + email baked in, expiring a couple of hours past the demo) instead of
+                // a bare room name that would work forever for anyone who ever saw the email.
+                string JoinUrlFor(string participantName, string participantEmail) =>
+                    JitsiLinkBuilder.BuildJoinUrl(
+                        session.MeetingRoomId,
+                        jitsiConfigJson,
+                        _jitsiTokenService.CreateToken(
+                            domain, jitsiConfigJson, session.MeetingRoomId!, participantName, participantEmail,
+                            moderator: false, request.ScheduledEndAtUtc.AddHours(2)),
+                        participantName)
+                    ?? "#";
+
+                var (parentSubject, parentHtml) = await _emailTemplateService.RenderAsync(
                     "demo-confirmed",
                     new Dictionary<string, string>
                     {
                         ["ChildName"] = booking.ChildName,
                         ["WhenLocal"] = DateTimeDisplay.ToLocal(request.ScheduledStartAtUtc),
-                        ["JoinUrl"] = JoinUrlFor(participant.Name, participant.Email!),
+                        ["JoinUrl"] = JoinUrlFor(booking.ParentName, booking.ParentEmail),
                     },
                     cancellationToken);
-                await _emailSender.SendAsync(participant.Email!, participantSubject, participantHtml, cancellationToken);
+                await _emailSender.SendAsync(booking.ParentEmail, parentSubject, parentHtml, cancellationToken);
+                foreach (var participant in booking.Participants.Where(p => !string.IsNullOrWhiteSpace(p.Email)))
+                {
+                    var (participantSubject, participantHtml) = await _emailTemplateService.RenderAsync(
+                        "demo-confirmed",
+                        new Dictionary<string, string>
+                        {
+                            ["ChildName"] = booking.ChildName,
+                            ["WhenLocal"] = DateTimeDisplay.ToLocal(request.ScheduledStartAtUtc),
+                            ["JoinUrl"] = JoinUrlFor(participant.Name, participant.Email!),
+                        },
+                        cancellationToken);
+                    await _emailSender.SendAsync(participant.Email!, participantSubject, participantHtml, cancellationToken);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Demo confirmation email delivery failed for booking {BookingId}", booking.Id);
             }
 
             // New lead lands in the client's CRM (no-op when no webhook is configured)

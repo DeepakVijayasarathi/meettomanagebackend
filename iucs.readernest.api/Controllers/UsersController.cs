@@ -5,6 +5,7 @@ using iucs.readernest.application.Dto.Users;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace iucs.readernest.api.Controllers
 {
@@ -83,12 +84,18 @@ namespace iucs.readernest.api.Controllers
 
         /// <summary>
         /// The signed-in member's permanent personal meeting room (Zoom-style): one
-        /// stable room id, startable any time. Minted on first request.
+        /// stable room id, startable any time. Minted on first request. Also returns a
+        /// signed join token the same way GET /api/sessions/{id}/jitsi-join does for a class
+        /// session — without one, a token-enforcing Jitsi deployment refuses the join outright
+        /// (see JitsiLinkBuilder.BuildJoinUrl's own doc comment), which is exactly what three
+        /// separate frontend call sites building a bare room URL from just this endpoint's
+        /// roomId were exposed to.
         /// </summary>
         [HttpGet("me/meeting-room")]
         [Microsoft.AspNetCore.Authorization.Authorize]
         public async Task<ActionResult<object>> MyMeetingRoom(
             [FromServices] iucs.readernest.domain.Repository.IUnitOfWork unitOfWork,
+            [FromServices] application.Common.Interfaces.IJitsiTokenService jitsiTokenService,
             CancellationToken cancellationToken)
         {
             var userId = Guid.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
@@ -106,7 +113,17 @@ namespace iucs.readernest.api.Controllers
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             }
 
-            return Ok(new { roomId = user.PersonalMeetingRoomId });
+            var jitsiConfigJson = await unitOfWork.Repository<domain.Entities.Integrations.Integration>().Query()
+                .Where(i => i.Key == "jitsi")
+                .Select(i => i.ConfigJson)
+                .FirstOrDefaultAsync(cancellationToken);
+            var domain = application.Helper.JitsiLinkBuilder.ResolveDomain(jitsiConfigJson);
+            // Always moderator: this is the member's own permanent room, nobody else's.
+            var token = jitsiTokenService.CreateToken(
+                domain, jitsiConfigJson, user.PersonalMeetingRoomId, $"{user.FirstName} {user.LastName}",
+                user.Email, moderator: true, DateTime.UtcNow.AddHours(6));
+
+            return Ok(new { roomId = user.PersonalMeetingRoomId, domain, token });
         }
 
         [HttpGet("{id:guid}")]

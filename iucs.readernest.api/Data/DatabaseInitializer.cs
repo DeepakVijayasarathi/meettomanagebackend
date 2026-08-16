@@ -261,16 +261,7 @@ namespace iucs.readernest.api.Data
         /// </summary>
         private static async Task BackfillSystemRolePermissionsAsync(ReaderNestDbContext context)
         {
-            (string RoleName, PermissionModule Module, bool View, bool Create, bool Edit, bool Delete, bool Approve)[] additions =
-            [
-                ("teacher", PermissionModule.Payouts, true, false, false, false, false),
-                ("parent", PermissionModule.SessionCalendarManagement, true, false, false, false, false),
-                ("parent", PermissionModule.ContentAccessManagement, true, false, false, false, false),
-                ("parent", PermissionModule.BillingFinance, true, false, false, false, false),
-                ("parent", PermissionModule.Communication, true, false, false, false, false),
-                ("admission", PermissionModule.BillingFinance, true, false, true, false, true),
-                ("management", PermissionModule.CourseBatchManagement, true, false, false, false, false),
-            ];
+            var additions = RequiredSystemRolePermissions.All;
 
             var roleNames = additions.Select(a => a.RoleName).Distinct().ToList();
             var roles = await context.RoleDefinitions
@@ -278,24 +269,91 @@ namespace iucs.readernest.api.Data
                 .Where(r => roleNames.Contains(r.Name))
                 .ToListAsync();
 
+            // Sub Admin personas (Academic Coordinator, Management, ...) don't read this
+            // RoleDefinition live — LoadPermissionClaimsAsync resolves every Sub Admin's
+            // access from their own SubAdminPermission rows, a snapshot copied in once when
+            // the preset was assigned (deliberately editable per-person after that; see
+            // AuthService.LoadPermissionClaimsAsync's own comment). Fixing the shared preset
+            // above does nothing for someone who was already assigned it before the fix
+            // shipped — confirmed the actual reason a Management-role test account kept
+            // 403ing on GET /api/courses even after this grant existed on the "management"
+            // RoleDefinition. Preloaded once for every role in `additions`, even non-Sub-Admin
+            // ones (teacher/parent/admission), where this query simply returns nothing since
+            // no user is both that role's assignee and UserRole.SubAdmin.
+            var roleIds = roles.Select(r => r.Id).ToList();
+            var subAdminUserIds = await context.Users
+                .Where(u => u.Role == UserRole.SubAdmin && u.RoleDefinitionId.HasValue && roleIds.Contains(u.RoleDefinitionId.Value))
+                .Select(u => new { u.Id, u.RoleDefinitionId })
+                .ToListAsync();
+            var existingSubAdminGrants = await context.SubAdminPermissions
+                .Where(p => subAdminUserIds.Select(u => u.Id).Contains(p.UserId))
+                .ToListAsync();
+
             foreach (var (roleName, module, view, create, edit, delete, approve) in additions)
             {
                 var role = roles.FirstOrDefault(r => r.Name == roleName);
-                if (role is null || role.Permissions.Any(p => p.Module == module))
+                if (role is null)
                 {
                     continue;
                 }
 
-                context.RolePermissions.Add(new RolePermission
+                var existing = role.Permissions.FirstOrDefault(p => p.Module == module);
+                if (existing is null)
                 {
-                    RoleDefinitionId = role.Id,
-                    Module = module,
-                    CanView = view,
-                    CanCreate = create,
-                    CanEdit = edit,
-                    CanDelete = delete,
-                    CanApprove = approve,
-                });
+                    context.RolePermissions.Add(new RolePermission
+                    {
+                        RoleDefinitionId = role.Id,
+                        Module = module,
+                        CanView = view,
+                        CanCreate = create,
+                        CanEdit = edit,
+                        CanDelete = delete,
+                        CanApprove = approve,
+                    });
+                }
+                else
+                {
+                    // A row already existing here isn't proof this addition already landed — the
+                    // Permissions screen saves its whole matrix on every edit (RoleService.UpdateAsync),
+                    // so an admin saving that role for an unrelated reason, without this module's box
+                    // checked, creates exactly this row with every flag false. Skipping whenever *a*
+                    // row exists (the previous check) meant that row permanently blocked this addition
+                    // from ever taking effect — confirmed live: Management kept 403ing on GET
+                    // /api/courses after this grant shipped, because a prior Permissions save had
+                    // already created a CanView=false row for it. OR-in only the flags this addition
+                    // asks for, so it can't revoke something an admin deliberately granted elsewhere.
+                    existing.CanView = existing.CanView || view;
+                    existing.CanCreate = existing.CanCreate || create;
+                    existing.CanEdit = existing.CanEdit || edit;
+                    existing.CanDelete = existing.CanDelete || delete;
+                    existing.CanApprove = existing.CanApprove || approve;
+                }
+
+                foreach (var userId in subAdminUserIds.Where(u => u.RoleDefinitionId == role.Id).Select(u => u.Id))
+                {
+                    var grant = existingSubAdminGrants.FirstOrDefault(p => p.UserId == userId && p.Module == module);
+                    if (grant is null)
+                    {
+                        context.SubAdminPermissions.Add(new SubAdminPermission
+                        {
+                            UserId = userId,
+                            Module = module,
+                            CanView = view,
+                            CanCreate = create,
+                            CanEdit = edit,
+                            CanDelete = delete,
+                            CanApprove = approve,
+                        });
+                    }
+                    else
+                    {
+                        grant.CanView = grant.CanView || view;
+                        grant.CanCreate = grant.CanCreate || create;
+                        grant.CanEdit = grant.CanEdit || edit;
+                        grant.CanDelete = grant.CanDelete || delete;
+                        grant.CanApprove = grant.CanApprove || approve;
+                    }
+                }
             }
         }
 

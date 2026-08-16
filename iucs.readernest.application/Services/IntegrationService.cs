@@ -44,6 +44,7 @@ namespace iucs.readernest.application.Services
         {
             var key = NormalizeKey(request.Key);
             ValidateName(request.Name);
+            ValidateRazorpayKeyId(key, request.Config);
 
             var repository = _unitOfWork.Repository<Integration>();
             if (await repository.ExistsAsync(i => i.Key == key, cancellationToken))
@@ -90,6 +91,10 @@ namespace iucs.readernest.application.Services
                 kv => IsSecretField(kv.Key) && existingConfig.TryGetValue(kv.Key, out var current) && kv.Value == Mask(current)
                     ? current
                     : kv.Value);
+            // Validated against the resolved value, not the raw request — "keyId" counts as a
+            // secret field (contains "key"), so an untouched field arrives here as its mask
+            // placeholder, which would otherwise always fail this check.
+            ValidateRazorpayKeyId(key, resolvedConfig);
 
             Apply(integration, request, key, resolvedConfig);
             repository.Update(integration);
@@ -124,6 +129,36 @@ namespace iucs.readernest.application.Services
             }
 
             return normalized;
+        }
+
+        /// <summary>Field name aliases RazorpayGateway actually reads the Key Id from — must
+        /// stay in sync with RazorpayGateway.KeyId.</summary>
+        private static readonly string[] RazorpayKeyIdFields = ["keyId", "razorpayKey", "keyid", "apiKey"];
+
+        /// <summary>
+        /// The Configure dialog already warns about this client-side, but nothing stopped the
+        /// bad value from being saved anyway if the warning was dismissed or the request came
+        /// from somewhere other than that dialog — which is how a live keyId/keySecret mixup
+        /// reached production undetected. Enforced here too so a malformed Key Id can no longer
+        /// be saved at all, from any caller.
+        /// </summary>
+        private static void ValidateRazorpayKeyId(string key, Dictionary<string, string?> config)
+        {
+            if (key != "razorpay")
+            {
+                return;
+            }
+
+            var keyId = RazorpayKeyIdFields
+                .Select(field => config.TryGetValue(field, out var value) ? value : null)
+                .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+            if (keyId is not null && !keyId.StartsWith("rzp_", StringComparison.Ordinal))
+            {
+                throw new DomainValidationException(
+                    "The Razorpay Key Id doesn't look valid — it should start with rzp_test_ or rzp_live_. " +
+                    "If the Key Secret was pasted into this field instead, payments will fail with a 401.");
+            }
         }
 
         private static void ValidateName(string name)

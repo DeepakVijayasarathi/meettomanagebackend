@@ -7,6 +7,7 @@ using iucs.readernest.api.Middleware;
 using iucs.readernest.api.Services;
 using iucs.readernest.application;
 using iucs.readernest.application.Common.Interfaces;
+using iucs.readernest.application.Services;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Data;
 using iucs.readernest.domain.Data.Interceptors;
@@ -136,10 +137,13 @@ builder.Services
                 return Task.CompletedTask;
             },
             // The JWT itself stays valid for up to AccessTokenMinutes (8h) regardless of what
-            // happens to the account after it was issued — a deactivated/deleted/role-changed
-            // user would otherwise keep full API access on their existing token until it
-            // naturally expires. Re-checking current status here closes that window down to
-            // the request itself, at the cost of one indexed PK lookup per authenticated call.
+            // happens to the account after it was issued. Re-resolving access here — not just
+            // status — closes that window down to the request itself: a revoked permission, a
+            // changed role, or a role preset's own permissions being edited now takes effect on
+            // the very next request from anyone holding a token for that account, instead of
+            // silently staying valid until the token expires or they happen to log in again.
+            // Costs one indexed PK lookup (plus the account's permission rows) per authenticated
+            // call — the same shape of cost this check already paid for the status-only version.
             OnTokenValidated = async context =>
             {
                 var userIdClaim = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -149,13 +153,30 @@ builder.Services
                     return;
                 }
 
-                var unitOfWork = context.HttpContext.RequestServices.GetRequiredService<IUnitOfWork>();
-                var user = await unitOfWork.Repository<User>().Query()
-                    .Select(u => new { u.Id, u.Status })
-                    .FirstOrDefaultAsync(u => u.Id == userId);
-                if (user is null || user.Status != UserStatus.Active)
+                var authService = context.HttpContext.RequestServices.GetRequiredService<IAuthService>();
+                var access = await authService.GetCurrentAccessAsync(userId);
+                if (access is null || access.Status != UserStatus.Active)
                 {
                     context.Fail("This account is no longer active.");
+                    return;
+                }
+
+                if (context.Principal!.Identity is ClaimsIdentity identity)
+                {
+                    // The role claim drives [Authorize(Roles = ...)] checks; Admin already gets
+                    // every permission implicitly (PermissionAuthorizationHandler), so it carries
+                    // none of these claims to begin with — nothing to refresh for that role.
+                    foreach (var claim in identity.FindAll(ClaimTypes.Role).ToList())
+                    {
+                        identity.RemoveClaim(claim);
+                    }
+                    identity.AddClaim(new Claim(ClaimTypes.Role, access.Role.ToString()));
+
+                    foreach (var claim in identity.FindAll(JwtTokenService.PermissionClaimType).ToList())
+                    {
+                        identity.RemoveClaim(claim);
+                    }
+                    identity.AddClaims(access.Permissions.Select(p => new Claim(JwtTokenService.PermissionClaimType, p)));
                 }
             },
         };

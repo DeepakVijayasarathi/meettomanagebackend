@@ -711,6 +711,18 @@ namespace iucs.readernest.application.Services
                     .AnyAsync(u => u == userId, cancellationToken);
             }
 
+            // Coordinator (and anyone else with the same scheduling-edit grant): "the
+            // coordinator can drop into any ongoing/upcoming class or demo" is documented,
+            // deliberate monitor access on the frontend (coordinator/Calendar.tsx's Join Class
+            // button) — not scoped to a specific batch/session the way Parent/Teacher are,
+            // since coordinating means being able to check any of them.
+            if (user.Role == UserRole.SubAdmin)
+            {
+                return await _unitOfWork.Repository<SubAdminPermission>().ExistsAsync(
+                    p => p.UserId == userId && p.Module == PermissionModule.SessionCalendarManagement && p.CanEdit,
+                    cancellationToken);
+            }
+
             return false;
         }
 
@@ -730,6 +742,20 @@ namespace iucs.readernest.application.Services
             if (!await IsSessionParticipantAsync(session, userId, cancellationToken))
             {
                 throw new ForbiddenException("You do not have access to this session.");
+            }
+
+            // Mirrors the frontend's own join-window rule (parent/utils.ts isJoinable: 10
+            // minutes before start until the scheduled end) — only enforced client-side before
+            // this, so a real, usable room + token was one direct GET away for any session at
+            // any time, past or weeks out, regardless of what the join button showed.
+            var now = DateTime.UtcNow;
+            if (now < session.ScheduledStartAtUtc.AddMinutes(-10))
+            {
+                throw new DomainValidationException("This class hasn't opened for joining yet.");
+            }
+            if (now > session.ScheduledEndAtUtc)
+            {
+                throw new DomainValidationException("This class has already ended.");
             }
 
             var jitsiConfigJson = await _unitOfWork.Repository<Integration>().Query()

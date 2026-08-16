@@ -1,3 +1,4 @@
+using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Users;
 using iucs.readernest.domain.Entities.Users;
@@ -88,11 +89,50 @@ namespace iucs.readernest.application.Services
             }
 
             role.Permissions = MapPermissions(request.Permissions);
+            ApplyRequiredGrants(role);
             repository.Update(role);
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(RoleDefinition), name, cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
             return ToDto(role);
+        }
+
+        /// <summary>
+        /// Re-applies RequiredSystemRolePermissions.All to a role's just-replaced matrix. Save
+        /// here is genuinely replace-all (the editor submits the whole matrix, including
+        /// deliberately unchecking things), which is correct for everything except the handful
+        /// of grants a page's own functionality depends on — confirmed live: the "management"
+        /// role lost GET /api/courses access (breaking its own Revenue &amp; Courses screen) every
+        /// time an admin saved that preset without the Courses box checked, and the only thing
+        /// that put it back was the next process restart's startup backfill. OR-in only, so it
+        /// still can't revoke anything the admin actually granted.
+        /// </summary>
+        private static void ApplyRequiredGrants(RoleDefinition role)
+        {
+            foreach (var required in RequiredSystemRolePermissions.All.Where(r => r.RoleName == role.Name))
+            {
+                var existing = role.Permissions.FirstOrDefault(p => p.Module == required.Module);
+                if (existing is null)
+                {
+                    role.Permissions.Add(new RolePermission
+                    {
+                        Module = required.Module,
+                        CanView = required.View,
+                        CanCreate = required.Create,
+                        CanEdit = required.Edit,
+                        CanDelete = required.Delete,
+                        CanApprove = required.Approve,
+                    });
+                }
+                else
+                {
+                    existing.CanView = existing.CanView || required.View;
+                    existing.CanCreate = existing.CanCreate || required.Create;
+                    existing.CanEdit = existing.CanEdit || required.Edit;
+                    existing.CanDelete = existing.CanDelete || required.Delete;
+                    existing.CanApprove = existing.CanApprove || required.Approve;
+                }
+            }
         }
 
         public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)

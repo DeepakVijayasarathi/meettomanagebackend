@@ -31,6 +31,16 @@ namespace iucs.readernest.tests
         }
     }
 
+    /// <summary>Simulates an SMTP failure (e.g. a sender account's daily limit) to prove a
+    /// caller treats email delivery as best-effort rather than letting it fail the request.</summary>
+    public class ThrowingEmailSender : IEmailSender
+    {
+        public Task SendAsync(string toEmail, string subject, string body, CancellationToken cancellationToken = default)
+        {
+            throw new InvalidOperationException("Simulated SMTP failure.");
+        }
+    }
+
     public class FakeCrmNotifier : ICrmNotifier
     {
         public List<(string EventType, object Payload)> Pushed { get; } = [];

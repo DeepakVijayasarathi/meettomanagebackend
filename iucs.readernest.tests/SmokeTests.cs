@@ -58,7 +58,7 @@ namespace iucs.readernest.tests
 
         private readonly FakeSmsSender _smsSender = new();
 
-        private UserService CreateUserService() => new(_db.UnitOfWork, _hasher, _notifications, _emailTemplates, _auditLog, _emailSender, _whatsAppSender, _smsSender);
+        private UserService CreateUserService() => new(_db.UnitOfWork, _hasher, _notifications, _emailTemplates, _auditLog, _emailSender, _whatsAppSender, _smsSender, NullLogger<UserService>.Instance);
 
         private CourseService CreateCourseService() => new(_db.UnitOfWork, _auditLog);
 
@@ -88,7 +88,7 @@ namespace iucs.readernest.tests
         private ResourceService CreateResourceService() => new(_db.UnitOfWork, _auditLog);
 
         private DemoBookingService CreateDemoBookingService() =>
-            new(_db.UnitOfWork, _auditLog, _emailSender, _emailTemplates, new FakeCrmNotifier(), new FakeJitsiTokenService());
+            new(_db.UnitOfWork, _auditLog, _emailSender, _emailTemplates, new FakeCrmNotifier(), new FakeJitsiTokenService(), NullLogger<DemoBookingService>.Instance);
 
         // ---- WBS business-rule coverage (Reader_Nest_LMS.pdf pp.28–32) ----
 
@@ -113,6 +113,107 @@ namespace iucs.readernest.tests
             var item = Assert.Single(_db.Context.PayoutItems.ToList());
             Assert.Equal(PayoutItemType.TeacherNoShowDeduction, item.Type);
             Assert.Equal(-1000m, item.Amount); // default penalty: 100% of the session rate
+        }
+
+        [Fact]
+        public async Task GetJitsiJoin_RejectsAFarFutureOrAlreadyEndedSession_EvenForAValidParticipant()
+        {
+            // The UI's Join button only disables itself outside the window (parent/utils.ts
+            // isJoinable: 10 min before start until the scheduled end) — confirmed live that
+            // GET /api/sessions/{id}/jitsi-join itself had no equivalent check, so a real,
+            // usable room + token was one direct request away regardless of what the button
+            // showed, for a session weeks out or long over.
+            var teacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var teacher = new TeacherProfile { UserId = teacherUser.Id };
+            _db.Context.TeacherProfiles.Add(teacher);
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateSessionService();
+
+            var farFuture = new ClassSession
+            {
+                TeacherProfileId = teacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(21),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(21).AddMinutes(45),
+                Status = SessionStatus.Scheduled,
+                MeetingRoomId = "trn-far-future",
+            };
+            var alreadyEnded = new ClassSession
+            {
+                TeacherProfileId = teacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(-1),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(-1).AddMinutes(45),
+                Status = SessionStatus.Scheduled,
+                MeetingRoomId = "trn-already-ended",
+            };
+            var withinWindow = new ClassSession
+            {
+                TeacherProfileId = teacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddMinutes(5),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddMinutes(50),
+                Status = SessionStatus.Scheduled,
+                MeetingRoomId = "trn-within-window",
+            };
+            _db.Context.AddRange(farFuture, alreadyEnded, withinWindow);
+            await _db.Context.SaveChangesAsync();
+
+            await Assert.ThrowsAsync<DomainValidationException>(
+                () => service.GetJitsiJoinAsync(farFuture.Id, teacherUser.Id));
+            await Assert.ThrowsAsync<DomainValidationException>(
+                () => service.GetJitsiJoinAsync(alreadyEnded.Id, teacherUser.Id));
+
+            var join = await service.GetJitsiJoinAsync(withinWindow.Id, teacherUser.Id);
+            Assert.Equal("trn-within-window", join.Room);
+        }
+
+        [Fact]
+        public async Task GetJitsiJoin_AllowsACoordinator_ButNotAPlainSubAdminWithoutTheGrant()
+        {
+            // coordinator/Calendar.tsx documents this as deliberate: "the coordinator can drop
+            // into any ongoing/upcoming class or demo" — not scoped to a specific batch/session
+            // the way Parent/Teacher access is, since coordinating means being able to check any
+            // of them. Gated on the same SessionCalendarManagement:Edit grant the "coordinator"
+            // preset carries, not the SubAdmin role generally — a Sub Admin without that specific
+            // grant must still be refused.
+            var otherTeacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var teacher = new TeacherProfile { UserId = otherTeacherUser.Id };
+            _db.Context.TeacherProfiles.Add(teacher);
+            await _db.Context.SaveChangesAsync();
+
+            var session = new ClassSession
+            {
+                TeacherProfileId = teacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddMinutes(5),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddMinutes(50),
+                Status = SessionStatus.Scheduled,
+                MeetingRoomId = "trn-coordinator-check",
+            };
+            _db.Context.ClassSessions.Add(session);
+
+            var coordinator = await _db.SeedUserAsync($"co-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
+            _db.Context.SubAdminPermissions.Add(new SubAdminPermission
+            {
+                UserId = coordinator.Id,
+                Module = PermissionModule.SessionCalendarManagement,
+                CanView = true,
+                CanEdit = true,
+            });
+
+            var billingOnlySubAdmin = await _db.SeedUserAsync($"sa-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
+            _db.Context.SubAdminPermissions.Add(new SubAdminPermission
+            {
+                UserId = billingOnlySubAdmin.Id,
+                Module = PermissionModule.BillingFinance,
+                CanView = true,
+            });
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateSessionService();
+            var join = await service.GetJitsiJoinAsync(session.Id, coordinator.Id);
+            Assert.Equal("trn-coordinator-check", join.Room);
+
+            await Assert.ThrowsAsync<ForbiddenException>(
+                () => service.GetJitsiJoinAsync(session.Id, billingOnlySubAdmin.Id));
         }
 
         [Fact]
@@ -1007,6 +1108,39 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task GetCurrentAccess_ReflectsAPermissionRevokedAfterLogin_WithoutANewLogin()
+        {
+            // Backs Program.cs's OnTokenValidated: a permission grant baked into a JWT at login
+            // used to stay valid for that token's whole lifetime even after being revoked. This
+            // proves the underlying read this fix relies on is genuinely live — same UnitOfWork
+            // session throughout, no re-login, no new token — the way a real request's DB round
+            // trip would see it after the app itself changed the same rows out from under it.
+            var subAdminUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
+            var otherAdmin = await _db.SeedUserAsync($"admin-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
+            _db.Context.SubAdminPermissions.Add(new SubAdminPermission
+            {
+                UserId = subAdminUser.Id,
+                Module = PermissionModule.BillingFinance,
+                CanView = true,
+            });
+            await _db.Context.SaveChangesAsync();
+            // UserService.SetPermissionsAsync below re-queries and removes this same row;
+            // production hands each request its own DbContext, so the seed instance must not
+            // stay tracked here (mirrors the same pattern used for RoleService tests).
+            _db.Context.ChangeTracker.Clear();
+
+            var auth = CreateAuthService();
+            var beforeRevoke = await auth.GetCurrentAccessAsync(subAdminUser.Id);
+            Assert.Contains($"{PermissionModule.BillingFinance}:{PermissionAction.View}", beforeRevoke!.Permissions);
+
+            // Revoke it — the same "replace-all" path the real Permissions screen uses.
+            await CreateUserService().SetPermissionsAsync(subAdminUser.Id, otherAdmin.Id, []);
+
+            var afterRevoke = await auth.GetCurrentAccessAsync(subAdminUser.Id);
+            Assert.DoesNotContain($"{PermissionModule.BillingFinance}:{PermissionAction.View}", afterRevoke!.Permissions);
+        }
+
+        [Fact]
         public async Task Login_Blocks_InactiveUser()
         {
             await _db.SeedUserAsync("gone@test.com", _hasher.Hash("4821"), status: UserStatus.Inactive);
@@ -1087,6 +1221,32 @@ namespace iucs.readernest.tests
             Assert.Single(_db.Context.ParentProfiles);
             var email = Assert.Single(_emailSender.Sent);
             Assert.Contains("PIN", email.Body);
+        }
+
+        [Fact]
+        public async Task ListUsers_SkipsARowWithACorruptStoredEnumValue_InsteadOfFailingTheWholePage()
+        {
+            // Every enum column round-trips as a string; this simulates the real production
+            // failure — a users.role value that doesn't match any current UserRole member
+            // (stale data, a manual edit, whatever) — by writing one directly, bypassing EF's
+            // type-safe API entirely, the same way corrupt data actually gets into a real
+            // database.
+            var good1 = await _db.SeedUserAsync("good1@test.com", "x", UserRole.Teacher);
+            var corrupt = await _db.SeedUserAsync("corrupt@test.com", "x", UserRole.Teacher);
+            var good2 = await _db.SeedUserAsync("good2@test.com", "x", UserRole.Teacher);
+
+            await _db.Context.Database.ExecuteSqlRawAsync(
+                "UPDATE users SET role = 'NotARealRole' WHERE id = {0}", corrupt.Id);
+
+            var service = CreateUserService();
+            var page = await service.ListAsync(role: null, search: null, page: 1, pageSize: 100);
+
+            // The corrupt row is skipped, not defaulted to some guessed role — but it doesn't
+            // take the other two rows down with it the way a single ToListAsync() over the
+            // whole batch used to.
+            Assert.Contains(page.Items, u => u.Id == good1.Id);
+            Assert.Contains(page.Items, u => u.Id == good2.Id);
+            Assert.DoesNotContain(page.Items, u => u.Id == corrupt.Id);
         }
 
         [Fact]
@@ -1254,6 +1414,35 @@ namespace iucs.readernest.tests
 
             var email = Assert.Single(_emailSender.Sent, e => e.To == "lead@test.com");
             Assert.Contains($"https://meet.techmisai.com/{dto.MeetingRoomId}", email.Body);
+        }
+
+        [Fact]
+        public async Task CreateDemoBooking_SucceedsAndReturnsTheBooking_EvenWhenConfirmationEmailFails()
+        {
+            var teacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var teacher = new TeacherProfile { UserId = teacherUser.Id };
+            _db.Context.TeacherProfiles.Add(teacher);
+            await _db.Context.SaveChangesAsync();
+
+            var service = new DemoBookingService(
+                _db.UnitOfWork, _auditLog, new ThrowingEmailSender(), _emailTemplates,
+                new FakeCrmNotifier(), new FakeJitsiTokenService(), NullLogger<DemoBookingService>.Instance);
+
+            // An SMTP failure (confirmed in production logs as an uncaught exception here) must
+            // not turn an already-committed booking into a 500 — the booking is real by the time
+            // this code runs, and a delivery failure shouldn't undo confirming that to the caller.
+            var dto = await service.CreateAsync(new CreateDemoBookingRequest
+            {
+                ParentName = "Lead Parent",
+                ParentEmail = "lead2@test.com",
+                ChildName = "Kid",
+                TeacherProfileId = teacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(1),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(1).AddMinutes(30),
+            });
+
+            Assert.NotEqual(Guid.Empty, dto.Id);
+            Assert.NotNull(await _db.Context.DemoBookings.FirstOrDefaultAsync(b => b.Id == dto.Id));
         }
 
         [Fact]
@@ -1909,6 +2098,31 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task ApproveEnrollment_RejectsAFutureDateOfBirth()
+        {
+            var parentUser = await _db.SeedUserAsync($"p-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.ParentProfiles.Add(parentProfile);
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateEnrollmentService();
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            var formId = (await service.ListAsync(null)).Single().Id;
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
+            {
+                Approve = true,
+                ChildFirstName = "Kid",
+                ChildLastName = "One",
+                ChildDateOfBirth = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(1),
+            }));
+
+            Assert.Empty(_db.Context.Children.ToList());
+            var form = await _db.Context.EnrollmentForms.FirstAsync(f => f.Id == formId);
+            Assert.Equal(EnrollmentFormStatus.Submitted, form.Status); // rejected before anything was mutated
+        }
+
+        [Fact]
         public async Task ApproveEnrollment_WithPackagePlan_StartsSubscription_AndIssuesFirstInvoice()
         {
             var parentUser = await _db.SeedUserAsync($"p-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
@@ -2199,7 +2413,7 @@ namespace iucs.readernest.tests
             var service1 = CreateStoreService();
             var service2 = new StoreService(
                 uow2, auditLog2,
-                new DemoBookingService(uow2, auditLog2, _emailSender, emailTemplates2, new FakeCrmNotifier(), new FakeJitsiTokenService()));
+                new DemoBookingService(uow2, auditLog2, _emailSender, emailTemplates2, new FakeCrmNotifier(), new FakeJitsiTokenService(), NullLogger<DemoBookingService>.Instance));
 
             var request1 = new CreateStoreDemoBookingRequest
             {
@@ -3871,6 +4085,56 @@ namespace iucs.readernest.tests
         }
 
         /// <summary>
+        /// The Configure dialog already warns client-side when a Razorpay Key Id doesn't look
+        /// right (most likely the Key Secret pasted into the wrong field) — but nothing
+        /// stopped the bad value from actually being saved. Confirmed live: production has an
+        /// integration saved with exactly this mixup.
+        /// </summary>
+        [Fact]
+        public async Task Integration_RejectsRazorpayKeyId_ThatDoesNotStartWithRzp()
+        {
+            var integrations = new IntegrationService(_db.UnitOfWork, _auditLog);
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => integrations.CreateAsync(new SaveIntegrationRequest
+            {
+                Key = "razorpay",
+                Name = "Razorpay",
+                Category = IntegrationCategory.PaymentGateway,
+                IsEnabled = true,
+                Config = new Dictionary<string, string?>
+                {
+                    // Looks like a Key Secret was pasted into the Key Id field.
+                    ["apiKey"] = "shhh_this_is_actually_the_secret",
+                    ["apiSecret"] = "rzp_live_realkeyid",
+                },
+            }));
+
+            // A valid keyId still saves fine — this isn't rejecting Razorpay integrations
+            // outright, only a value that can't be a real Key Id.
+            var created = await integrations.CreateAsync(new SaveIntegrationRequest
+            {
+                Key = "razorpay",
+                Name = "Razorpay",
+                Category = IntegrationCategory.PaymentGateway,
+                IsEnabled = true,
+                Config = new Dictionary<string, string?> { ["apiKey"] = "rzp_live_valid1234" },
+            });
+            Assert.NotEqual(Guid.Empty, created.Id);
+
+            // An update that touches an unrelated field (the keyId's mask round-trips
+            // untouched) must not be rejected as if it were a fresh invalid value.
+            var updated = await integrations.UpdateAsync(created.Id, new SaveIntegrationRequest
+            {
+                Key = "razorpay",
+                Name = "Razorpay",
+                Category = IntegrationCategory.PaymentGateway,
+                IsEnabled = false,
+                Config = new Dictionary<string, string?> { ["apiKey"] = created.Config["apiKey"] },
+            });
+            Assert.False(updated.IsEnabled);
+        }
+
+        /// <summary>
         /// RoleService's system-role and in-use protections, previously untested. A seeded role
         /// backs the Sub Admin preset flow, so renaming or deleting one would strand every user
         /// assigned to it.
@@ -3952,6 +4216,42 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             await Assert.ThrowsAsync<ConflictException>(() => roles.DeleteAsync(custom.Id));
+        }
+
+        [Fact]
+        public async Task UpdateRole_CannotSaveAwayARequiredSystemGrant()
+        {
+            // Reproduces the live bug: saving the "management" preset from the Roles &
+            // Permissions screen without the Courses box checked used to wipe
+            // CourseBatchManagement:View outright, breaking that role's own Revenue & Courses
+            // screen until the process next restarted (the startup-only backfill was the only
+            // thing that ever put it back). RoleService.UpdateAsync must not be able to save
+            // that grant away, independent of what the submitted matrix says.
+            var roles = new RoleService(_db.UnitOfWork, _auditLog);
+            var managementRole = new RoleDefinition
+            {
+                Name = "management",
+                DisplayName = "Management",
+                DefaultRoute = "/management",
+                IsSystem = true,
+            };
+            _db.Context.Add(managementRole);
+            await _db.Context.SaveChangesAsync();
+            _db.Context.ChangeTracker.Clear();
+
+            // Admin edits the role for an unrelated reason (adding Reports access) and submits
+            // the matrix as the screen actually would — Courses simply isn't in it.
+            var updated = await roles.UpdateAsync(managementRole.Id, new SaveRoleRequest
+            {
+                Name = "management",
+                DisplayName = "Management",
+                DefaultRoute = "/management",
+                Permissions = [new PermissionDto { Module = PermissionModule.ReportsAnalytics, CanView = true }],
+            });
+
+            var coursesGrant = Assert.Single(updated.Permissions, p => p.Module == PermissionModule.CourseBatchManagement);
+            Assert.True(coursesGrant.CanView);
+            Assert.Contains(updated.Permissions, p => p.Module == PermissionModule.ReportsAnalytics && p.CanView);
         }
 
         /// <summary>
