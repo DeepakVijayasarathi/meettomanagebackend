@@ -88,7 +88,7 @@ namespace iucs.readernest.tests
         private ResourceService CreateResourceService() => new(_db.UnitOfWork, _auditLog);
 
         private DemoBookingService CreateDemoBookingService() =>
-            new(_db.UnitOfWork, _auditLog, _emailSender, _emailTemplates, new FakeCrmNotifier(), new FakeJitsiTokenService());
+            new(_db.UnitOfWork, _auditLog, _emailSender, _emailTemplates, new FakeCrmNotifier(), new FakeJitsiTokenService(), NullLogger<DemoBookingService>.Instance);
 
         // ---- WBS business-rule coverage (Reader_Nest_LMS.pdf pp.28–32) ----
 
@@ -1257,6 +1257,35 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task CreateDemoBooking_SucceedsAndReturnsTheBooking_EvenWhenConfirmationEmailFails()
+        {
+            var teacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var teacher = new TeacherProfile { UserId = teacherUser.Id };
+            _db.Context.TeacherProfiles.Add(teacher);
+            await _db.Context.SaveChangesAsync();
+
+            var service = new DemoBookingService(
+                _db.UnitOfWork, _auditLog, new ThrowingEmailSender(), _emailTemplates,
+                new FakeCrmNotifier(), new FakeJitsiTokenService(), NullLogger<DemoBookingService>.Instance);
+
+            // An SMTP failure (confirmed in production logs as an uncaught exception here) must
+            // not turn an already-committed booking into a 500 — the booking is real by the time
+            // this code runs, and a delivery failure shouldn't undo confirming that to the caller.
+            var dto = await service.CreateAsync(new CreateDemoBookingRequest
+            {
+                ParentName = "Lead Parent",
+                ParentEmail = "lead2@test.com",
+                ChildName = "Kid",
+                TeacherProfileId = teacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(1),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(1).AddMinutes(30),
+            });
+
+            Assert.NotEqual(Guid.Empty, dto.Id);
+            Assert.NotNull(await _db.Context.DemoBookings.FirstOrDefaultAsync(b => b.Id == dto.Id));
+        }
+
+        [Fact]
         public async Task CreateDemoBooking_RejectsExplicitTeacher_AlreadyBookedAtThatTime()
         {
             var teacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
@@ -2199,7 +2228,7 @@ namespace iucs.readernest.tests
             var service1 = CreateStoreService();
             var service2 = new StoreService(
                 uow2, auditLog2,
-                new DemoBookingService(uow2, auditLog2, _emailSender, emailTemplates2, new FakeCrmNotifier(), new FakeJitsiTokenService()));
+                new DemoBookingService(uow2, auditLog2, _emailSender, emailTemplates2, new FakeCrmNotifier(), new FakeJitsiTokenService(), NullLogger<DemoBookingService>.Instance));
 
             var request1 = new CreateStoreDemoBookingRequest
             {
@@ -3868,6 +3897,56 @@ namespace iucs.readernest.tests
                 Config = new Dictionary<string, string?> { ["apiSecret"] = "rotated_wxyz" },
             });
             Assert.Equal("••••••••wxyz", rotated.Config["apiSecret"]);
+        }
+
+        /// <summary>
+        /// The Configure dialog already warns client-side when a Razorpay Key Id doesn't look
+        /// right (most likely the Key Secret pasted into the wrong field) — but nothing
+        /// stopped the bad value from actually being saved. Confirmed live: production has an
+        /// integration saved with exactly this mixup.
+        /// </summary>
+        [Fact]
+        public async Task Integration_RejectsRazorpayKeyId_ThatDoesNotStartWithRzp()
+        {
+            var integrations = new IntegrationService(_db.UnitOfWork, _auditLog);
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => integrations.CreateAsync(new SaveIntegrationRequest
+            {
+                Key = "razorpay",
+                Name = "Razorpay",
+                Category = IntegrationCategory.PaymentGateway,
+                IsEnabled = true,
+                Config = new Dictionary<string, string?>
+                {
+                    // Looks like a Key Secret was pasted into the Key Id field.
+                    ["apiKey"] = "shhh_this_is_actually_the_secret",
+                    ["apiSecret"] = "rzp_live_realkeyid",
+                },
+            }));
+
+            // A valid keyId still saves fine — this isn't rejecting Razorpay integrations
+            // outright, only a value that can't be a real Key Id.
+            var created = await integrations.CreateAsync(new SaveIntegrationRequest
+            {
+                Key = "razorpay",
+                Name = "Razorpay",
+                Category = IntegrationCategory.PaymentGateway,
+                IsEnabled = true,
+                Config = new Dictionary<string, string?> { ["apiKey"] = "rzp_live_valid1234" },
+            });
+            Assert.NotEqual(Guid.Empty, created.Id);
+
+            // An update that touches an unrelated field (the keyId's mask round-trips
+            // untouched) must not be rejected as if it were a fresh invalid value.
+            var updated = await integrations.UpdateAsync(created.Id, new SaveIntegrationRequest
+            {
+                Key = "razorpay",
+                Name = "Razorpay",
+                Category = IntegrationCategory.PaymentGateway,
+                IsEnabled = false,
+                Config = new Dictionary<string, string?> { ["apiKey"] = created.Config["apiKey"] },
+            });
+            Assert.False(updated.IsEnabled);
         }
 
         /// <summary>
