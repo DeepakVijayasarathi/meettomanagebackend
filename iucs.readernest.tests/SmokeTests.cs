@@ -1007,6 +1007,39 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task GetCurrentAccess_ReflectsAPermissionRevokedAfterLogin_WithoutANewLogin()
+        {
+            // Backs Program.cs's OnTokenValidated: a permission grant baked into a JWT at login
+            // used to stay valid for that token's whole lifetime even after being revoked. This
+            // proves the underlying read this fix relies on is genuinely live — same UnitOfWork
+            // session throughout, no re-login, no new token — the way a real request's DB round
+            // trip would see it after the app itself changed the same rows out from under it.
+            var subAdminUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
+            var otherAdmin = await _db.SeedUserAsync($"admin-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
+            _db.Context.SubAdminPermissions.Add(new SubAdminPermission
+            {
+                UserId = subAdminUser.Id,
+                Module = PermissionModule.BillingFinance,
+                CanView = true,
+            });
+            await _db.Context.SaveChangesAsync();
+            // UserService.SetPermissionsAsync below re-queries and removes this same row;
+            // production hands each request its own DbContext, so the seed instance must not
+            // stay tracked here (mirrors the same pattern used for RoleService tests).
+            _db.Context.ChangeTracker.Clear();
+
+            var auth = CreateAuthService();
+            var beforeRevoke = await auth.GetCurrentAccessAsync(subAdminUser.Id);
+            Assert.Contains($"{PermissionModule.BillingFinance}:{PermissionAction.View}", beforeRevoke!.Permissions);
+
+            // Revoke it — the same "replace-all" path the real Permissions screen uses.
+            await CreateUserService().SetPermissionsAsync(subAdminUser.Id, otherAdmin.Id, []);
+
+            var afterRevoke = await auth.GetCurrentAccessAsync(subAdminUser.Id);
+            Assert.DoesNotContain($"{PermissionModule.BillingFinance}:{PermissionAction.View}", afterRevoke!.Permissions);
+        }
+
+        [Fact]
         public async Task Login_Blocks_InactiveUser()
         {
             await _db.SeedUserAsync("gone@test.com", _hasher.Hash("4821"), status: UserStatus.Inactive);
@@ -1961,6 +1994,31 @@ namespace iucs.readernest.tests
             var refreshedParent = await _db.Context.ParentProfiles.FirstAsync(p => p.Id == parentProfile.Id);
             Assert.True(refreshedParent.EnrollmentFormCompleted);
             Assert.Single(_db.Context.Children.ToList());
+        }
+
+        [Fact]
+        public async Task ApproveEnrollment_RejectsAFutureDateOfBirth()
+        {
+            var parentUser = await _db.SeedUserAsync($"p-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.ParentProfiles.Add(parentProfile);
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateEnrollmentService();
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            var formId = (await service.ListAsync(null)).Single().Id;
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
+            {
+                Approve = true,
+                ChildFirstName = "Kid",
+                ChildLastName = "One",
+                ChildDateOfBirth = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(1),
+            }));
+
+            Assert.Empty(_db.Context.Children.ToList());
+            var form = await _db.Context.EnrollmentForms.FirstAsync(f => f.Id == formId);
+            Assert.Equal(EnrollmentFormStatus.Submitted, form.Status); // rejected before anything was mutated
         }
 
         [Fact]

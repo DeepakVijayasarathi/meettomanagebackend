@@ -82,6 +82,23 @@ namespace iucs.readernest.application.Services
             return BuildResponse(user, permissions, null, defaultRoute);
         }
 
+        public async Task<CurrentAccessSnapshot?> GetCurrentAccessAsync(Guid userId, CancellationToken cancellationToken = default)
+        {
+            var user = await _unitOfWork.Repository<User>().Query()
+                .FirstOrDefaultAsync(u => u.Id == userId, cancellationToken);
+            if (user is null)
+            {
+                return null;
+            }
+
+            return new CurrentAccessSnapshot
+            {
+                Role = user.Role,
+                Status = user.Status,
+                Permissions = await LoadPermissionClaimsAsync(user, cancellationToken),
+            };
+        }
+
         public async Task RequestPinResetAsync(ForgotPinRequest request, CancellationToken cancellationToken = default)
         {
             var email = request.Email.Trim().ToLowerInvariant();
