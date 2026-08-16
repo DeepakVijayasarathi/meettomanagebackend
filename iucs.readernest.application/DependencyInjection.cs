@@ -34,6 +34,7 @@ namespace iucs.readernest.application
             services.AddScoped<IRoleService, RoleService>();
             services.AddScoped<IIntegrationService, IntegrationService>();
             services.AddScoped<IFloatingNoteService, FloatingNoteService>();
+            services.AddScoped<IAccessRequestService, AccessRequestService>();
             return services;
         }
     }

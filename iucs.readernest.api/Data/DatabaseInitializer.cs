@@ -52,6 +52,7 @@ namespace iucs.readernest.api.Data
             await EnsureEmailTemplatesMenuAsync(context);
             await EnsureProgressReportEmailTemplateAsync(context);
             await EnsurePinResetEmailTemplateAsync(context);
+            await EnsureAccessRequestEmailTemplatesAsync(context);
             await EnsureProgressReportsMenuAsync(context);
             await EnsureStoreInquiriesMenuAsync(context);
             await BackfillPlainTextNotificationBodiesAsync(context);
@@ -936,6 +937,37 @@ namespace iucs.readernest.api.Data
                 IsActive = true,
                 IsSystem = true,
             }));
+        }
+
+        /// <summary>
+        /// SeedEmailTemplatesAsync is insert-only, so a live DB that predates the Sub Admin
+        /// "request additional access" feature never picks these up on its own — inserts
+        /// whichever of the two rows is missing, mirroring EnsurePinResetEmailTemplateAsync.
+        /// </summary>
+        private static async Task EnsureAccessRequestEmailTemplatesAsync(ReaderNestDbContext context)
+        {
+            foreach (var key in new[] { "access-request-submitted-admin-alert", "access-request-reviewed" })
+            {
+                if (context.EmailTemplates.Local.Any(t => t.Key == key) ||
+                    await context.EmailTemplates.AnyAsync(t => t.Key == key))
+                {
+                    continue;
+                }
+
+                var seed = EmailTemplateSeedData.All.First(s => s.Key == key);
+                context.EmailTemplates.Add(new EmailTemplate
+                {
+                    Key = seed.Key,
+                    Name = seed.Name,
+                    Description = seed.Description,
+                    Category = seed.Category,
+                    Subject = seed.Subject,
+                    HtmlBody = seed.HtmlBody,
+                    PlaceholdersJson = JsonSerializer.Serialize(seed.Placeholders),
+                    IsActive = true,
+                    IsSystem = true,
+                });
+            }
         }
 
         /// <summary>
