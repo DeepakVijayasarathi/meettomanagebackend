@@ -12,6 +12,7 @@ using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace iucs.readernest.application.Services
 {
@@ -25,6 +26,7 @@ namespace iucs.readernest.application.Services
         private readonly IEmailSender _emailSender;
         private readonly IWhatsAppSender _whatsAppSender;
         private readonly ISmsSender _smsSender;
+        private readonly ILogger<UserService> _logger;
 
         public UserService(
             IUnitOfWork unitOfWork,
@@ -34,7 +36,8 @@ namespace iucs.readernest.application.Services
             IAuditLogService auditLog,
             IEmailSender emailSender,
             IWhatsAppSender whatsAppSender,
-            ISmsSender smsSender)
+            ISmsSender smsSender,
+            ILogger<UserService> logger)
         {
             _unitOfWork = unitOfWork;
             _passwordHasher = passwordHasher;
@@ -44,6 +47,7 @@ namespace iucs.readernest.application.Services
             _emailSender = emailSender;
             _whatsAppSender = whatsAppSender;
             _smsSender = smsSender;
+            _logger = logger;
         }
 
         public async Task<PagedResult<UserDto>> ListAsync(
@@ -73,15 +77,42 @@ namespace iucs.readernest.application.Services
             }
 
             var total = await query.CountAsync(cancellationToken);
-            var users = await query
+
+            // Every enum column (Role, Status, TeacherProfile.Department, ...) is stored as a
+            // string and converted back on read; a single row whose stored value doesn't match
+            // any current enum member throws while EF materializes it. Selecting just the ids
+            // triggers no such conversion (Id is a plain Guid column), so it can't fail here —
+            // only the per-row fetch below can, and it's scoped to one row at a time instead of
+            // taking down the whole page the way a single ToListAsync() over the batch did.
+            var pageIds = await query
                 .OrderByDescending(u => u.CreatedAtUtc)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
+                .Select(u => u.Id)
                 .ToListAsync(cancellationToken);
+
+            var items = new List<UserDto>(pageIds.Count);
+            foreach (var id in pageIds)
+            {
+                try
+                {
+                    var user = await _unitOfWork.Repository<User>().Query()
+                        .Include(u => u.TeacherProfile)
+                        .FirstAsync(u => u.Id == id, cancellationToken);
+                    items.Add(user.ToDto());
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Skipped, not defaulted — this is a corrupt/stale value that needs a real
+                    // data fix, and silently guessing a role or status for it would be worse
+                    // than leaving it off an admin list page.
+                    _logger.LogError(ex, "Failed to load user {UserId} for the Users list; skipping this row.", id);
+                }
+            }
 
             return new PagedResult<UserDto>
             {
-                Items = users.Select(u => u.ToDto()).ToList(),
+                Items = items,
                 TotalCount = total,
                 Page = page,
                 PageSize = pageSize,

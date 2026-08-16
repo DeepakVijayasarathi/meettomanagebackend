@@ -58,7 +58,7 @@ namespace iucs.readernest.tests
 
         private readonly FakeSmsSender _smsSender = new();
 
-        private UserService CreateUserService() => new(_db.UnitOfWork, _hasher, _notifications, _emailTemplates, _auditLog, _emailSender, _whatsAppSender, _smsSender);
+        private UserService CreateUserService() => new(_db.UnitOfWork, _hasher, _notifications, _emailTemplates, _auditLog, _emailSender, _whatsAppSender, _smsSender, NullLogger<UserService>.Instance);
 
         private CourseService CreateCourseService() => new(_db.UnitOfWork, _auditLog);
 
@@ -1087,6 +1087,32 @@ namespace iucs.readernest.tests
             Assert.Single(_db.Context.ParentProfiles);
             var email = Assert.Single(_emailSender.Sent);
             Assert.Contains("PIN", email.Body);
+        }
+
+        [Fact]
+        public async Task ListUsers_SkipsARowWithACorruptStoredEnumValue_InsteadOfFailingTheWholePage()
+        {
+            // Every enum column round-trips as a string; this simulates the real production
+            // failure — a users.role value that doesn't match any current UserRole member
+            // (stale data, a manual edit, whatever) — by writing one directly, bypassing EF's
+            // type-safe API entirely, the same way corrupt data actually gets into a real
+            // database.
+            var good1 = await _db.SeedUserAsync("good1@test.com", "x", UserRole.Teacher);
+            var corrupt = await _db.SeedUserAsync("corrupt@test.com", "x", UserRole.Teacher);
+            var good2 = await _db.SeedUserAsync("good2@test.com", "x", UserRole.Teacher);
+
+            await _db.Context.Database.ExecuteSqlRawAsync(
+                "UPDATE users SET role = 'NotARealRole' WHERE id = {0}", corrupt.Id);
+
+            var service = CreateUserService();
+            var page = await service.ListAsync(role: null, search: null, page: 1, pageSize: 100);
+
+            // The corrupt row is skipped, not defaulted to some guessed role — but it doesn't
+            // take the other two rows down with it the way a single ToListAsync() over the
+            // whole batch used to.
+            Assert.Contains(page.Items, u => u.Id == good1.Id);
+            Assert.Contains(page.Items, u => u.Id == good2.Id);
+            Assert.DoesNotContain(page.Items, u => u.Id == corrupt.Id);
         }
 
         [Fact]
