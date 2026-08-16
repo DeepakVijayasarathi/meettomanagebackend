@@ -280,21 +280,41 @@ namespace iucs.readernest.api.Data
             foreach (var (roleName, module, view, create, edit, delete, approve) in additions)
             {
                 var role = roles.FirstOrDefault(r => r.Name == roleName);
-                if (role is null || role.Permissions.Any(p => p.Module == module))
+                if (role is null)
                 {
                     continue;
                 }
 
-                context.RolePermissions.Add(new RolePermission
+                var existing = role.Permissions.FirstOrDefault(p => p.Module == module);
+                if (existing is null)
                 {
-                    RoleDefinitionId = role.Id,
-                    Module = module,
-                    CanView = view,
-                    CanCreate = create,
-                    CanEdit = edit,
-                    CanDelete = delete,
-                    CanApprove = approve,
-                });
+                    context.RolePermissions.Add(new RolePermission
+                    {
+                        RoleDefinitionId = role.Id,
+                        Module = module,
+                        CanView = view,
+                        CanCreate = create,
+                        CanEdit = edit,
+                        CanDelete = delete,
+                        CanApprove = approve,
+                    });
+                    continue;
+                }
+
+                // A row already existing here isn't proof this addition already landed — the
+                // Permissions screen saves its whole matrix on every edit (RoleService.UpdateAsync),
+                // so an admin saving that role for an unrelated reason, without this module's box
+                // checked, creates exactly this row with every flag false. Skipping whenever *a*
+                // row exists (the previous check) meant that row permanently blocked this addition
+                // from ever taking effect — confirmed live: Management kept 403ing on GET
+                // /api/courses after this grant shipped, because a prior Permissions save had
+                // already created a CanView=false row for it. OR-in only the flags this addition
+                // asks for, so it can't revoke something an admin deliberately granted elsewhere.
+                existing.CanView = existing.CanView || view;
+                existing.CanCreate = existing.CanCreate || create;
+                existing.CanEdit = existing.CanEdit || edit;
+                existing.CanDelete = existing.CanDelete || delete;
+                existing.CanApprove = existing.CanApprove || approve;
             }
         }
 
