@@ -29,14 +29,14 @@ namespace iucs.readernest.api.Services
 
         public S3FileStorage(IConfiguration configuration)
         {
-            var endpoint = configuration["Storage:S3:Endpoint"]
-                ?? throw new InvalidOperationException("Storage:S3:Endpoint is not configured.");
-            var accessKey = configuration["Storage:S3:AccessKey"]
-                ?? throw new InvalidOperationException("Storage:S3:AccessKey is not configured.");
-            var secretKey = configuration["Storage:S3:SecretKey"]
-                ?? throw new InvalidOperationException("Storage:S3:SecretKey is not configured.");
-            _bucket = configuration["Storage:S3:BucketName"]
-                ?? throw new InvalidOperationException("Storage:S3:BucketName is not configured.");
+            // appsettings.json seeds these as "" (so the key names are discoverable), not
+            // absent — a plain `?? throw` only catches a missing key, not that empty default,
+            // and let this constructor build ServiceURL = "https://" from an unset endpoint
+            // instead of failing with an actionable message.
+            var endpoint = RequireConfigValue(configuration, "Storage:S3:Endpoint");
+            var accessKey = RequireConfigValue(configuration, "Storage:S3:AccessKey");
+            var secretKey = RequireConfigValue(configuration, "Storage:S3:SecretKey");
+            _bucket = RequireConfigValue(configuration, "Storage:S3:BucketName");
 
             var config = new AmazonS3Config
             {
@@ -46,6 +46,19 @@ namespace iucs.readernest.api.Services
                 ForcePathStyle = false,
             };
             _client = new AmazonS3Client(new BasicAWSCredentials(accessKey, secretKey), config);
+        }
+
+        private static string RequireConfigValue(IConfiguration configuration, string key)
+        {
+            var value = configuration[key];
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                throw new InvalidOperationException(
+                    $"{key} is not configured. Set the corresponding environment variable " +
+                    $"({key.Replace(":", "__")}) — every resource-storage endpoint fails until it is.");
+            }
+
+            return value;
         }
 
         public async Task<StoredFile> StoreAsync(
