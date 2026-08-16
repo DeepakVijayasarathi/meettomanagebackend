@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Dto.Billing;
@@ -308,10 +309,16 @@ namespace iucs.readernest.application.Services
 
             // Invoices are emailed to the parent automatically the moment they're issued
             // (covers both manual invoices and the recurring-billing background service).
-            var parentUser = await _unitOfWork.Repository<ParentProfile>().Query()
-                .Where(p => p.Id == invoice.ParentProfileId)
-                .Select(p => p.User)
-                .FirstOrDefaultAsync(cancellationToken);
+            // Settings → Notifications → "Fee payment reminders" also turns this one off —
+            // it's the same parent-facing fee email as the daily due/overdue sweep
+            // (SendPaymentRemindersAsync in BillingBackgroundService); leaving it ungated
+            // meant every subscription renewal kept emailing the parent regardless of the toggle.
+            var parentUser = await NotificationToggles.IsEnabledAsync(_unitOfWork, NotificationToggles.FeeReminders, cancellationToken)
+                ? await _unitOfWork.Repository<ParentProfile>().Query()
+                    .Where(p => p.Id == invoice.ParentProfileId)
+                    .Select(p => p.User)
+                    .FirstOrDefaultAsync(cancellationToken)
+                : null;
             if (parentUser is not null)
             {
                 await NotifyUserAsync(

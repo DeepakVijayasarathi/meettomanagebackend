@@ -25,5 +25,11 @@ namespace iucs.readernest.application.Dto.Courses
         public Department Department { get; set; }
 
         public bool IsActive { get; set; }
+
+        public int ActiveBatches { get; set; }
+
+        public int TotalEnrolled { get; set; }
+
+        public decimal Revenue { get; set; }
     }
 }

@@ -215,7 +215,9 @@ namespace iucs.readernest.application.Services
 
         public async Task<UserDto> UpdateAsync(Guid id, UpdateUserRequest request, CancellationToken cancellationToken = default)
         {
-            var user = await _unitOfWork.Repository<User>().GetByIdAsync(id, cancellationToken)
+            var user = await _unitOfWork.Repository<User>().TrackedQuery()
+                .Include(u => u.TeacherProfile)
+                .FirstOrDefaultAsync(u => u.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), id);
 
             user.FirstName = request.FirstName.Trim();
@@ -224,6 +226,11 @@ namespace iucs.readernest.application.Services
             if (!string.IsNullOrWhiteSpace(request.TimeZoneId))
             {
                 user.TimeZoneId = request.TimeZoneId;
+            }
+
+            if (request.Department.HasValue && user.TeacherProfile is not null)
+            {
+                user.TeacherProfile.Department = request.Department.Value;
             }
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(User), user.Id.ToString(), cancellationToken: cancellationToken);

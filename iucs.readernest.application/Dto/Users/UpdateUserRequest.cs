@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using iucs.readernest.domain.Enums;
 
 namespace iucs.readernest.application.Dto.Users
 {
@@ -17,5 +18,8 @@ namespace iucs.readernest.application.Dto.Users
 
         [MaxLength(64)]
         public string? TimeZoneId { get; set; }
+
+        /// <summary>Primary department for teachers; ignored for other roles. Null means "leave unchanged".</summary>
+        public Department? Department { get; set; }
     }
 }

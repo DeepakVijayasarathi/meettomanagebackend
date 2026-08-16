@@ -16,7 +16,7 @@ namespace iucs.readernest.api.Services
         // slot and later served back with a client-supplied Content-Type.
         private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
         {
-            ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".txt",
+            ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".txt", ".epub",
             ".jpg", ".jpeg", ".png", ".gif", ".webp",
             ".mp4", ".webm", ".mov", ".mp3", ".wav", ".zip",
         };

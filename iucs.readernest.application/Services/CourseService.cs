@@ -2,6 +2,7 @@ using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Courses;
 using iucs.readernest.application.Mappings;
 using iucs.readernest.domain.Entities.Academics;
+using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Entities.Sessions;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
@@ -65,7 +66,47 @@ namespace iucs.readernest.application.Services
             }
 
             var courses = await query.OrderBy(c => c.Name).ToListAsync(cancellationToken);
-            return courses.Select(c => c.ToDto()).ToList();
+            var dtos = courses.Select(c => c.ToDto()).ToList();
+            await ApplyStatsAsync(dtos, cancellationToken);
+            return dtos;
+        }
+
+        /// <summary>
+        /// Fills ActiveBatches/TotalEnrolled/Revenue — deliberately not part of Course.ToDto()
+        /// since they're cross-table aggregates (Batch/BatchEnrollment/Invoice), not fields on
+        /// the Course entity itself. Revenue is AmountPaid summed over invoices tied to the
+        /// course (Invoice.CourseId), so it reflects money actually collected, not billed.
+        /// </summary>
+        private async Task ApplyStatsAsync(IReadOnlyList<CourseDto> dtos, CancellationToken cancellationToken)
+        {
+            if (dtos.Count == 0) return;
+
+            var courseIds = dtos.Select(d => d.Id).ToList();
+
+            var activeBatchCounts = await _unitOfWork.Repository<Batch>().Query()
+                .Where(b => courseIds.Contains(b.CourseId) && b.Status == BatchStatus.Active)
+                .GroupBy(b => b.CourseId)
+                .Select(g => new { CourseId = g.Key, Count = g.Count() })
+                .ToDictionaryAsync(x => x.CourseId, x => x.Count, cancellationToken);
+
+            var enrolledCounts = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                .Where(e => e.Status == EnrollmentStatus.Active && courseIds.Contains(e.Batch.CourseId))
+                .GroupBy(e => e.Batch.CourseId)
+                .Select(g => new { CourseId = g.Key, Count = g.Count() })
+                .ToDictionaryAsync(x => x.CourseId, x => x.Count, cancellationToken);
+
+            var revenueByCourse = await _unitOfWork.Repository<Invoice>().Query()
+                .Where(i => i.CourseId != null && courseIds.Contains(i.CourseId.Value))
+                .GroupBy(i => i.CourseId!.Value)
+                .Select(g => new { CourseId = g.Key, Amount = g.Sum(i => i.AmountPaid) })
+                .ToDictionaryAsync(x => x.CourseId, x => x.Amount, cancellationToken);
+
+            foreach (var dto in dtos)
+            {
+                dto.ActiveBatches = activeBatchCounts.GetValueOrDefault(dto.Id);
+                dto.TotalEnrolled = enrolledCounts.GetValueOrDefault(dto.Id);
+                dto.Revenue = revenueByCourse.GetValueOrDefault(dto.Id);
+            }
         }
 
         public async Task<IReadOnlyList<CourseOptionDto>> ListOptionsAsync(CancellationToken cancellationToken = default)
@@ -84,7 +125,9 @@ namespace iucs.readernest.application.Services
                 .FirstOrDefaultAsync(c => c.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(Course), id);
 
-            return course.ToDto();
+            var dto = course.ToDto();
+            await ApplyStatsAsync([dto], cancellationToken);
+            return dto;
         }
 
         public async Task<CourseDto> CreateAsync(SaveCourseRequest request, CancellationToken cancellationToken = default)
