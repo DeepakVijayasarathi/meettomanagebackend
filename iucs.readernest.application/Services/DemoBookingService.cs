@@ -88,6 +88,21 @@ namespace iucs.readernest.application.Services
                         throw new NotFoundException(nameof(TeacherProfile), request.TeacherProfileId.Value);
                     }
 
+                    // Auto-assign already skips busy teachers; an explicitly-picked one needs the
+                    // same overlap check, or staff could double-book a teacher the auto-assign
+                    // path would have correctly avoided. Same predicate shape as AutoAssignTeacherAsync's
+                    // Busy check, so it benefits from the same SERIALIZABLE protection this runs under.
+                    var teacherBusy = await _unitOfWork.Repository<ClassSession>().ExistsAsync(
+                        s => s.TeacherProfileId == request.TeacherProfileId.Value
+                             && (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward)
+                             && s.ScheduledStartAtUtc < request.ScheduledEndAtUtc
+                             && s.ScheduledEndAtUtc > request.ScheduledStartAtUtc,
+                        ct);
+                    if (teacherBusy)
+                    {
+                        throw new DomainValidationException("This teacher already has a session booked during that time.");
+                    }
+
                     teacherProfileId = request.TeacherProfileId.Value;
                 }
                 else

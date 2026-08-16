@@ -1257,6 +1257,43 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task CreateDemoBooking_RejectsExplicitTeacher_AlreadyBookedAtThatTime()
+        {
+            var teacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var teacher = new TeacherProfile { UserId = teacherUser.Id };
+            _db.Context.TeacherProfiles.Add(teacher);
+            await _db.Context.SaveChangesAsync();
+
+            var start = DateTime.UtcNow.AddDays(1);
+            var end = start.AddMinutes(30);
+            var service = CreateDemoBookingService();
+
+            await service.CreateAsync(new CreateDemoBookingRequest
+            {
+                ParentName = "First Parent",
+                ParentEmail = "first@test.com",
+                ChildName = "Kid One",
+                TeacherProfileId = teacher.Id,
+                ScheduledStartAtUtc = start,
+                ScheduledEndAtUtc = end,
+            });
+
+            // Same teacher, overlapping slot, explicitly requested this time instead of
+            // auto-assigned — must be rejected the same way auto-assign already avoids it.
+            await Assert.ThrowsAsync<DomainValidationException>(() => service.CreateAsync(new CreateDemoBookingRequest
+            {
+                ParentName = "Second Parent",
+                ParentEmail = "second@test.com",
+                ChildName = "Kid Two",
+                TeacherProfileId = teacher.Id,
+                ScheduledStartAtUtc = start.AddMinutes(10),
+                ScheduledEndAtUtc = end.AddMinutes(10),
+            }));
+
+            Assert.Equal(1, await _db.Context.DemoBookings.CountAsync(b => b.ChildName == "Kid One" || b.ChildName == "Kid Two"));
+        }
+
+        [Fact]
         public void JitsiLinkBuilder_UsesConfiguredDomain_WhenIntegrationConfigured()
         {
             var url = JitsiLinkBuilder.BuildJoinUrl("trn-abc123", """{"domain":"meet.example.org"}""");
