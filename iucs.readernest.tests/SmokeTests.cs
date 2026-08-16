@@ -10,6 +10,7 @@ using iucs.readernest.application.Dto.Enrollment;
 using iucs.readernest.application.Dto.Integrations;
 using iucs.readernest.application.Dto.Navigation;
 using iucs.readernest.application.Dto.Payouts;
+using iucs.readernest.application.Dto.Resources;
 using iucs.readernest.application.Dto.Portal;
 using iucs.readernest.application.Dto.Reports;
 using iucs.readernest.application.Dto.Sessions;
@@ -83,6 +84,8 @@ namespace iucs.readernest.tests
             new(_db.UnitOfWork, _auditLog, _notifications, _db.CurrentUser, CreateSessionService());
 
         private GamificationService CreateGamificationService() => new(_db.UnitOfWork, CreateSessionService());
+
+        private ResourceService CreateResourceService() => new(_db.UnitOfWork, _auditLog);
 
         private DemoBookingService CreateDemoBookingService() =>
             new(_db.UnitOfWork, _auditLog, _emailSender, _emailTemplates, new FakeCrmNotifier(), new FakeJitsiTokenService());
@@ -4099,6 +4102,49 @@ namespace iucs.readernest.tests
             _db.Context.AddRange(parentProfile, child, category, course, plan, account);
             await _db.Context.SaveChangesAsync();
             return (parentProfile, child, plan);
+        }
+
+        /// <summary>
+        /// ResourceService.CreateAsync never checked CourseId/BatchId(s) existed before
+        /// writing Resource/ResourceBatchVisibility rows referencing them - a stale dropdown
+        /// value (or one deleted between page-load and submit) hit the FK constraint at
+        /// SaveChanges as an unhandled DbUpdateException, surfacing to the uploader as a raw
+        /// 500 with no indication of what was wrong. Reproduced directly against SQLite
+        /// (real FK enforcement, same as Postgres) before being fixed.
+        /// </summary>
+        [Fact]
+        public async Task UploadResource_RejectsANonExistentCourseId_WithACleanNotFound()
+        {
+            var resources = CreateResourceService();
+            var ex = await Assert.ThrowsAsync<NotFoundException>(() => resources.CreateAsync(
+                new CreateResourceRequest { Title = "R", Type = ResourceType.Worksheet, CourseId = Guid.NewGuid() },
+                "some/stored/path.txt", "text/plain", 100));
+            Assert.Contains("Course", ex.Message);
+            Assert.Empty(await _db.Context.Resources.ToListAsync());
+        }
+
+        [Fact]
+        public async Task UploadResource_RejectsANonExistentBatchId_WithACleanNotFound()
+        {
+            var resources = CreateResourceService();
+            var ex = await Assert.ThrowsAsync<NotFoundException>(() => resources.CreateAsync(
+                new CreateResourceRequest { Title = "R", Type = ResourceType.Worksheet, BatchId = Guid.NewGuid() },
+                "some/stored/path.txt", "text/plain", 100));
+            Assert.Contains("Batch", ex.Message);
+            Assert.Empty(await _db.Context.Resources.ToListAsync());
+        }
+
+        [Fact]
+        public async Task UploadResource_WithARealCourseAndBatch_StillSucceeds()
+        {
+            // The guard above must not reject a genuinely valid selection.
+            var (batch, course, _) = await SeedBatchWithSessionAsync(totalSessions: 1, includeSession: false);
+            var resources = CreateResourceService();
+            var dto = await resources.CreateAsync(
+                new CreateResourceRequest { Title = "Worksheet", Type = ResourceType.Worksheet, CourseId = course.Id, BatchId = batch.Id },
+                "some/stored/path.txt", "text/plain", 100);
+            Assert.Equal(course.Id, dto.CourseId);
+            Assert.Equal(batch.Id, dto.BatchId);
         }
 
         public void Dispose() => _db.Dispose();

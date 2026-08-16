@@ -268,6 +268,7 @@ namespace iucs.readernest.api.Data
                 ("parent", PermissionModule.BillingFinance, true, false, false, false, false),
                 ("parent", PermissionModule.Communication, true, false, false, false, false),
                 ("admission", PermissionModule.BillingFinance, true, false, true, false, true),
+                ("management", PermissionModule.CourseBatchManagement, true, false, false, false, false),
             ];
 
             var roleNames = additions.Select(a => a.RoleName).Distinct().ToList();
@@ -343,6 +344,11 @@ namespace iucs.readernest.api.Data
                 ("management", "Management", "Read-only executive dashboards and reports.", "/management",
                 [
                     Grant(PermissionModule.ReportsAnalytics, view: true),
+                    // /management/revenue's course-wise breakdown reads GET /api/courses,
+                    // which is gated on this module, not ReportsAnalytics — without it the
+                    // page's own API call 403'd and silently rendered "No records found,
+                    // ₹0 total" instead of the real figures shown by the chart above it.
+                    Grant(PermissionModule.CourseBatchManagement, view: true),
                 ]),
                 ("student", "Student", "Learner experience surfaced through the parent account.", "/student", []),
             ];

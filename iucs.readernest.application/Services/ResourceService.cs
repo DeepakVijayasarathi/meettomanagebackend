@@ -106,6 +106,25 @@ namespace iucs.readernest.application.Services
                 visibleBatchIds.Insert(0, request.BatchId.Value);
             }
 
+            // CourseId/BatchId(s) were never checked against the DB before being written into
+            // Resource/ResourceBatchVisibility rows that reference them — a stale dropdown
+            // value (or one that got deleted between page-load and submit) hit the FK
+            // constraint at SaveChanges as an unhandled DbUpdateException, surfacing as a raw
+            // 500 with no indication of what was actually wrong. Checked up front instead, so
+            // it's a clean 404 naming the missing id.
+            if (request.CourseId.HasValue
+                && !await _unitOfWork.Repository<Course>().ExistsAsync(c => c.Id == request.CourseId.Value, cancellationToken))
+            {
+                throw new NotFoundException(nameof(Course), request.CourseId.Value);
+            }
+            foreach (var batchId in visibleBatchIds)
+            {
+                if (!await _unitOfWork.Repository<Batch>().ExistsAsync(b => b.Id == batchId, cancellationToken))
+                {
+                    throw new NotFoundException(nameof(Batch), batchId);
+                }
+            }
+
             var resource = new Resource
             {
                 Title = request.Title.Trim(),
