@@ -711,6 +711,18 @@ namespace iucs.readernest.application.Services
                     .AnyAsync(u => u == userId, cancellationToken);
             }
 
+            // Coordinator (and anyone else with the same scheduling-edit grant): "the
+            // coordinator can drop into any ongoing/upcoming class or demo" is documented,
+            // deliberate monitor access on the frontend (coordinator/Calendar.tsx's Join Class
+            // button) — not scoped to a specific batch/session the way Parent/Teacher are,
+            // since coordinating means being able to check any of them.
+            if (user.Role == UserRole.SubAdmin)
+            {
+                return await _unitOfWork.Repository<SubAdminPermission>().ExistsAsync(
+                    p => p.UserId == userId && p.Module == PermissionModule.SessionCalendarManagement && p.CanEdit,
+                    cancellationToken);
+            }
+
             return false;
         }
 

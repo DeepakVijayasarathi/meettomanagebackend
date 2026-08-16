@@ -167,6 +167,56 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task GetJitsiJoin_AllowsACoordinator_ButNotAPlainSubAdminWithoutTheGrant()
+        {
+            // coordinator/Calendar.tsx documents this as deliberate: "the coordinator can drop
+            // into any ongoing/upcoming class or demo" — not scoped to a specific batch/session
+            // the way Parent/Teacher access is, since coordinating means being able to check any
+            // of them. Gated on the same SessionCalendarManagement:Edit grant the "coordinator"
+            // preset carries, not the SubAdmin role generally — a Sub Admin without that specific
+            // grant must still be refused.
+            var otherTeacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var teacher = new TeacherProfile { UserId = otherTeacherUser.Id };
+            _db.Context.TeacherProfiles.Add(teacher);
+            await _db.Context.SaveChangesAsync();
+
+            var session = new ClassSession
+            {
+                TeacherProfileId = teacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddMinutes(5),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddMinutes(50),
+                Status = SessionStatus.Scheduled,
+                MeetingRoomId = "trn-coordinator-check",
+            };
+            _db.Context.ClassSessions.Add(session);
+
+            var coordinator = await _db.SeedUserAsync($"co-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
+            _db.Context.SubAdminPermissions.Add(new SubAdminPermission
+            {
+                UserId = coordinator.Id,
+                Module = PermissionModule.SessionCalendarManagement,
+                CanView = true,
+                CanEdit = true,
+            });
+
+            var billingOnlySubAdmin = await _db.SeedUserAsync($"sa-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
+            _db.Context.SubAdminPermissions.Add(new SubAdminPermission
+            {
+                UserId = billingOnlySubAdmin.Id,
+                Module = PermissionModule.BillingFinance,
+                CanView = true,
+            });
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateSessionService();
+            var join = await service.GetJitsiJoinAsync(session.Id, coordinator.Id);
+            Assert.Equal("trn-coordinator-check", join.Room);
+
+            await Assert.ThrowsAsync<ForbiddenException>(
+                () => service.GetJitsiJoinAsync(session.Id, billingOnlySubAdmin.Id));
+        }
+
+        [Fact]
         public async Task TeacherNoShow_AppliesConfiguredPenaltyPercent()
         {
             var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 2);
