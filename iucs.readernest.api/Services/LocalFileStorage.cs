@@ -53,9 +53,15 @@ namespace iucs.readernest.api.Services
             return new StoredFile { RelativePath = relativePath, SizeBytes = target.Length };
         }
 
-        public string GetAbsolutePath(string relativePath)
+        public Task<Stream?> OpenReadAsync(string relativePath, CancellationToken cancellationToken = default)
         {
-            return Path.Combine(_rootPath, relativePath);
+            var absolutePath = Path.Combine(_rootPath, relativePath);
+            if (!File.Exists(absolutePath))
+            {
+                return Task.FromResult<Stream?>(null);
+            }
+
+            return Task.FromResult<Stream?>(File.OpenRead(absolutePath));
         }
     }
 }

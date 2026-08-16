@@ -65,7 +65,11 @@ builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
 builder.Services.AddScoped<IWhatsAppSender, WhatsAppSender>();
 // SMS delivery (MSG91/Twilio), driven by the DB "sms" integration.
 builder.Services.AddScoped<ISmsSender, SmsSender>();
-builder.Services.AddSingleton<IFileStorage, LocalFileStorage>();
+// S3-compatible object storage (Hetzner Object Storage) everywhere — dev and prod both, so
+// an upload made locally behaves identically to one made against the real deployment instead
+// of silently depending on which environment you're in. Configured via Storage:S3:* (real
+// credentials come from user-secrets locally, environment variables in prod — never committed).
+builder.Services.AddSingleton<IFileStorage, S3FileStorage>();
 // Signs room-scoped Jitsi join tokens from the DB "jitsi" integration's appId/appSecret;
 // no-ops (null token, unsigned join) until an admin sets them — see JITSI_ARCHITECTURE.md.
 builder.Services.AddSingleton<IJitsiTokenService, JitsiTokenService>();

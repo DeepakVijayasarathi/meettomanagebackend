@@ -201,14 +201,14 @@ namespace iucs.readernest.api.Controllers
             await _parentPortal.GetResourceForDownloadAsync(UserId(), id, cancellationToken);
 
             var resource = await resourceService.GetForDownloadAsync(id, cancellationToken);
-            var absolutePath = fileStorage.GetAbsolutePath(resource.FileUrl);
-            if (!System.IO.File.Exists(absolutePath))
+            var stream = await fileStorage.OpenReadAsync(resource.FileUrl, cancellationToken);
+            if (stream is null)
             {
                 return NotFound();
             }
 
             var mimeType = string.IsNullOrWhiteSpace(resource.MimeType) ? "application/octet-stream" : resource.MimeType;
-            return PhysicalFile(absolutePath, mimeType, $"{resource.Title}{Path.GetExtension(resource.FileUrl)}");
+            return File(stream, mimeType, $"{resource.Title}{Path.GetExtension(resource.FileUrl)}");
         }
 
         private Guid UserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);

@@ -81,15 +81,15 @@ namespace iucs.readernest.api.Controllers
         {
             var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
             var resource = await _resourceService.GetForTeacherDownloadAsync(userId, id, cancellationToken);
-            var absolutePath = _fileStorage.GetAbsolutePath(resource.FileUrl);
+            var stream = await _fileStorage.OpenReadAsync(resource.FileUrl, cancellationToken);
 
-            if (!System.IO.File.Exists(absolutePath))
+            if (stream is null)
             {
                 return NotFound(new ProblemDetails { Status = 404, Title = "Not Found", Detail = "The stored file is missing." });
             }
 
             var mimeType = string.IsNullOrWhiteSpace(resource.MimeType) ? "application/octet-stream" : resource.MimeType;
-            return PhysicalFile(absolutePath, mimeType, $"{resource.Title}{Path.GetExtension(resource.FileUrl)}");
+            return File(stream, mimeType, $"{resource.Title}{Path.GetExtension(resource.FileUrl)}");
         }
 
         [HttpPost]
@@ -110,7 +110,7 @@ namespace iucs.readernest.api.Controllers
             var stored = await _fileStorage.StoreAsync(stream, file.FileName, cancellationToken);
 
             // Browsers/clients may send an empty Content-Type on the file part;
-            // never persist "" (as opposed to null) or PhysicalFile fails to parse it downstream.
+            // never persist "" (as opposed to null) or the download response fails to set one.
             var mimeType = string.IsNullOrWhiteSpace(file.ContentType) ? null : file.ContentType;
             var resource = await _resourceService.CreateAsync(
                 request, stored.RelativePath, mimeType, stored.SizeBytes, cancellationToken);
@@ -124,15 +124,15 @@ namespace iucs.readernest.api.Controllers
         public async Task<IActionResult> Download(Guid id, CancellationToken cancellationToken)
         {
             var resource = await _resourceService.GetForDownloadAsync(id, cancellationToken);
-            var absolutePath = _fileStorage.GetAbsolutePath(resource.FileUrl);
+            var stream = await _fileStorage.OpenReadAsync(resource.FileUrl, cancellationToken);
 
-            if (!System.IO.File.Exists(absolutePath))
+            if (stream is null)
             {
                 return NotFound(new ProblemDetails { Status = 404, Title = "Not Found", Detail = "The stored file is missing." });
             }
 
             var mimeType = string.IsNullOrWhiteSpace(resource.MimeType) ? "application/octet-stream" : resource.MimeType;
-            return PhysicalFile(absolutePath, mimeType, $"{resource.Title}{Path.GetExtension(resource.FileUrl)}");
+            return File(stream, mimeType, $"{resource.Title}{Path.GetExtension(resource.FileUrl)}");
         }
 
         [HttpPut("{id:guid}")]
