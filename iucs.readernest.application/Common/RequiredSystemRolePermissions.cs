@@ -22,6 +22,14 @@ namespace iucs.readernest.application.Common
             new("parent", PermissionModule.BillingFinance, View: true),
             new("parent", PermissionModule.Communication, View: true),
             new("admission", PermissionModule.BillingFinance, View: true, Edit: true, Approve: true),
+            // The Admission Dashboard's KPI tiles, conversion funnel and "Today & Upcoming
+            // Demos" list all read GET /api/sessions, which is gated on this module (see
+            // SessionsController.List's [HasPermission] — the [Authorize(Roles=...)] on that
+            // endpoint already allows AdmissionTeam, but the permission check still 403's
+            // without this). Without it those widgets show "Couldn't load this data" forever,
+            // even on a real account with real demos. Confirmed live via network trace:
+            // GET /api/sessions?fromUtc=...&toUtc=... → 403 for the admission role.
+            new("admission", PermissionModule.SessionCalendarManagement, View: true),
             // /management/revenue's course-wise breakdown reads GET /api/courses, which is
             // gated on this module, not ReportsAnalytics — without it the page's own API call
             // 403's and silently renders "No records found, ₹0 total" instead of the real
