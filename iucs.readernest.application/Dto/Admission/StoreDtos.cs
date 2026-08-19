@@ -120,4 +120,12 @@ namespace iucs.readernest.application.Dto.Admission
 
         public DateTime ScheduledEndAtUtc { get; set; }
     }
+
+    /// <summary>One bookable 30-minute demo start time, with at least one matching teacher free.</summary>
+    public class AvailableDemoSlotDto
+    {
+        public DateTime StartAtUtc { get; set; }
+
+        public DateTime EndAtUtc { get; set; }
+    }
 }

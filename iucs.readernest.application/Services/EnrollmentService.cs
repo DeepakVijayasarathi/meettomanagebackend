@@ -25,19 +25,23 @@ namespace iucs.readernest.application.Services
             _billingService = billingService;
         }
 
+        /// <summary>
+        /// Answer keys the admin review screen is actually built around (docs/ENROLLMENT_FORM_FIELDS.md
+        /// marks all four required) — display name, age and course all come straight from these.
+        /// The wizard already enforces this client-side, but that's only ever a UX nicety: nothing
+        /// stopped a direct API call from posting "{}" and landing a form the review queue can't
+        /// meaningfully show (blank name, "Age 0", no course) or even approve into a real child
+        /// record with any accuracy. Enforcing it here closes that off for every caller, not just
+        /// the wizard.
+        /// </summary>
+        private static readonly string[] RequiredFormFields = ["childName", "dob", "grade", "courseInterest"];
+
         public async Task<EnrollmentFormDto> SubmitAsync(
             Guid parentUserId,
             SubmitEnrollmentFormRequest request,
             CancellationToken cancellationToken = default)
         {
-            try
-            {
-                using var _ = JsonDocument.Parse(request.FormDataJson);
-            }
-            catch (JsonException)
-            {
-                throw new DomainValidationException("The submitted form data is not valid JSON.");
-            }
+            ValidateRequiredFields(request.FormDataJson);
 
             var parent = await GetParentAsync(parentUserId, cancellationToken);
 
@@ -120,14 +124,7 @@ namespace iucs.readernest.application.Services
             SubmitEnrollmentFormRequest request,
             CancellationToken cancellationToken = default)
         {
-            try
-            {
-                using var _ = JsonDocument.Parse(request.FormDataJson);
-            }
-            catch (JsonException)
-            {
-                throw new DomainValidationException("The submitted form data is not valid JSON.");
-            }
+            ValidateRequiredFields(request.FormDataJson);
 
             // Load tracked so the mutation persists (BaseQuery is AsNoTracking).
             var form = await _unitOfWork.Repository<EnrollmentForm>()
@@ -365,6 +362,38 @@ namespace iucs.readernest.application.Services
             await _auditLog.StageAsync(AuditAction.Update, nameof(Child), child.Id.ToString(),
                 changesJson: "{\"rmNotes\":\"updated\"}", cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// Parses <paramref name="formDataJson"/> and requires every <see cref="RequiredFormFields"/>
+        /// key to be present with a non-blank string value. Shared by Submit and the admin Edit
+        /// dialog's save — both write the same document the review queue reads back.
+        /// </summary>
+        private static void ValidateRequiredFields(string formDataJson)
+        {
+            JsonDocument document;
+            try
+            {
+                document = JsonDocument.Parse(formDataJson);
+            }
+            catch (JsonException)
+            {
+                throw new DomainValidationException("The submitted form data is not valid JSON.");
+            }
+
+            using (document)
+            {
+                var missing = RequiredFormFields.Where(field =>
+                    !document.RootElement.TryGetProperty(field, out var value)
+                    || value.ValueKind != JsonValueKind.String
+                    || string.IsNullOrWhiteSpace(value.GetString())).ToList();
+
+                if (missing.Count > 0)
+                {
+                    throw new DomainValidationException(
+                        $"The enrollment form is missing required field(s): {string.Join(", ", missing)}.");
+                }
+            }
         }
 
         private static (string FirstName, string LastName) ResolveChildName(EnrollmentForm form, ReviewEnrollmentFormRequest request)

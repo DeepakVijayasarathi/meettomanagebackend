@@ -297,6 +297,26 @@ namespace iucs.readernest.application.Common
                     """,
                     "TotalStudents", "ActiveStudents", "RevenueCollected", "RevenuePending", "TotalEnrollments",
                     "ActiveBatches", "DormantBatches", "OccupancyPercent", "ConversionRate", "RefundRate", "Utilization"),
+
+                New("access-request-submitted-admin-alert", "Access Request Submitted (Admin)",
+                    "Sent to Admins when a Relationship Manager requests additional module access.",
+                    NotificationType.General, "Access request: {{RequesterName}}",
+                    """
+                    <p><strong>{{RequesterName}}</strong> ({{RequesterEmail}}) requested access to modules they don't currently hold:</p>
+                    <p style="font-weight:600;">{{RequestedModules}}</p>
+                    <p>Review it from Roles &amp; Permissions &rarr; Access Requests.</p>
+                    """,
+                    "RequesterName", "RequesterEmail", "RequestedModules"),
+
+                New("access-request-reviewed", "Access Request Reviewed (Relationship Manager)",
+                    "Sent to the Relationship Manager once an Admin approves or rejects their access request.",
+                    NotificationType.General, "Your access request was {{Status}}",
+                    """
+                    <p>Hi {{RequesterFirstName}},</p>
+                    <p>Your request for access to <strong>{{RequestedModules}}</strong> was <strong>{{Status}}</strong>.</p>
+                    <p>{{ReviewNote}}</p>
+                    """,
+                    "RequesterFirstName", "RequestedModules", "Status", "ReviewNote"),
             ];
         }
     }

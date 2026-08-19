@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Communication;
 using iucs.readernest.domain.Entities.Communication;
@@ -115,10 +116,11 @@ namespace iucs.readernest.application.Services
             {
                 // A missing/disabled template must never block the underlying business
                 // operation — fall back to a minimal generic message instead of throwing.
+                var brandName = await BrandSettings.GetNameAsync(_unitOfWork, cancellationToken);
                 var fallbackSubject = tokens.TryGetValue("Subject", out var s) && !string.IsNullOrWhiteSpace(s)
                     ? s
-                    : "Notification from The Reader Nest";
-                return (fallbackSubject, "<p>Please check your Reader Nest dashboard for details.</p>");
+                    : $"Notification from {brandName}";
+                return (fallbackSubject, $"<p>Please check your {brandName} dashboard for details.</p>");
             }
 
             return (SubstituteSubject(snapshot.Subject, tokens), SubstituteHtml(snapshot.HtmlBody, tokens));

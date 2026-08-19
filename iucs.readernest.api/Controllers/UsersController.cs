@@ -246,6 +246,16 @@ namespace iucs.readernest.api.Controllers
         }
 
         /// <summary>
+        /// System role names with their own fixed-portal UserRole (Admin/Teacher/Parent/
+        /// AdmissionTeam/Student) — never a valid preset for a Sub Admin account. Applying
+        /// one here would stamp the Sub Admin's RoleDefinitionId onto e.g. the Teacher role,
+        /// and MenuService/AuthService's DefaultRoute lookup would then land — and let
+        /// RequireAuth admit — that Sub Admin straight into the Teacher portal.
+        /// </summary>
+        private static readonly HashSet<string> NonSubAdminPresetNames =
+            new(StringComparer.OrdinalIgnoreCase) { "admin", "teacher", "parent", "admission", "student" };
+
+        /// <summary>
         /// Assigns the named DB role to the user: replaces their grants with its
         /// matrix and records the assignment, which drives their post-login default route.
         /// </summary>
@@ -253,6 +263,16 @@ namespace iucs.readernest.api.Controllers
         [HasPermission(PermissionModule.UserManagement, PermissionAction.Edit)]
         public async Task<IActionResult> ApplyPermissionPreset(Guid id, string preset, CancellationToken cancellationToken)
         {
+            if (NonSubAdminPresetNames.Contains(preset.Trim()))
+            {
+                return BadRequest(new Microsoft.AspNetCore.Mvc.ProblemDetails
+                {
+                    Status = 400,
+                    Title = "Bad Request",
+                    Detail = $"'{preset}' is a fixed-portal system role, not a Sub Admin preset, and can't be assigned to a Sub Admin account.",
+                });
+            }
+
             var role = await _roleService.FindByNameAsync(preset, cancellationToken);
             if (role is null)
             {

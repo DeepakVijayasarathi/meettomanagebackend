@@ -705,7 +705,7 @@ namespace iucs.readernest.application.Services
                 OrderId = checkout.OrderId,
                 Amount = checkout.AmountMinor,
                 Currency = checkout.Currency,
-                DisplayName = "The Reader Nest",
+                DisplayName = await BrandSettings.GetNameAsync(_unitOfWork, cancellationToken),
                 Description = checkout.Description,
                 PrefillName = checkout.PrefillName,
                 PrefillEmail = checkout.PrefillEmail,
