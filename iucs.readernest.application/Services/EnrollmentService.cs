@@ -179,6 +179,15 @@ namespace iucs.readernest.application.Services
                     await ValidatePlanForBillingAsync(request.PackagePlanId.Value, parentProfile, cancellationToken);
                 }
 
+                // Not [Required] on the DTO — that would also reject Approve=false requests,
+                // which never touch this field. DateOfBirth stays optional on Child itself
+                // (age display already handles null), but a genuinely missing value at
+                // approval is worth catching explicitly rather than silently creating a
+                // Child nobody can show an age for.
+                if (request.ChildDateOfBirth is null)
+                {
+                    throw new DomainValidationException("Child's date of birth is required to approve this enrollment.");
+                }
                 if (request.ChildDateOfBirth > DateOnly.FromDateTime(DateTime.UtcNow))
                 {
                     throw new DomainValidationException("Child's date of birth cannot be in the future.");

@@ -2089,6 +2089,7 @@ namespace iucs.readernest.tests
                 Approve = true,
                 ChildFirstName = "Kid",
                 ChildLastName = "One",
+                ChildDateOfBirth = DateOnly.FromDateTime(DateTime.UtcNow).AddYears(-8),
             });
 
             Assert.Equal(EnrollmentFormStatus.Approved, result.Status);
@@ -2123,6 +2124,24 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task ApproveEnrollment_RequiresADateOfBirth_ButRejectingNeverNeedsOne()
+        {
+            var parentUser = await _db.SeedUserAsync($"p-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.ParentProfiles.Add(parentProfile);
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateEnrollmentService();
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            var formId = (await service.ListAsync(null)).Single().Id;
+
+            // Not [Required] on the DTO — a reject request never touches this field and
+            // must not be blocked by its absence.
+            var rejected = await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest { Approve = false });
+            Assert.Equal(EnrollmentFormStatus.Rejected, rejected.Status);
+        }
+
+        [Fact]
         public async Task ApproveEnrollment_WithPackagePlan_StartsSubscription_AndIssuesFirstInvoice()
         {
             var parentUser = await _db.SeedUserAsync($"p-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
@@ -2141,6 +2160,7 @@ namespace iucs.readernest.tests
                 Approve = true,
                 ChildFirstName = "Kid",
                 ChildLastName = "One",
+                ChildDateOfBirth = DateOnly.FromDateTime(DateTime.UtcNow).AddYears(-8),
                 PackagePlanId = plan.Id,
             });
 
@@ -2297,7 +2317,13 @@ namespace iucs.readernest.tests
             Assert.Contains("New Name", reloaded.FormDataJson);
 
             // Once approved, the form is immutable.
-            await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest { Approve = true, ChildFirstName = "New", ChildLastName = "Name" });
+            await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
+            {
+                Approve = true,
+                ChildFirstName = "New",
+                ChildLastName = "Name",
+                ChildDateOfBirth = DateOnly.FromDateTime(DateTime.UtcNow).AddYears(-8),
+            });
             await Assert.ThrowsAsync<ConflictException>(
                 () => service.UpdateFormDataAsync(formId, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Later\"}" }));
         }
@@ -3196,7 +3222,8 @@ namespace iucs.readernest.tests
             var formId = (await service.ListAsync(null)).Single().Id;
             await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
             {
-                Approve = true, ChildFirstName = "Kid", ChildLastName = "One", PackagePlanId = plan.Id,
+                Approve = true, ChildFirstName = "Kid", ChildLastName = "One",
+                ChildDateOfBirth = DateOnly.FromDateTime(DateTime.UtcNow).AddYears(-8), PackagePlanId = plan.Id,
             });
 
             var (verifyContext, _) = _db.CreateConcurrentSession();
