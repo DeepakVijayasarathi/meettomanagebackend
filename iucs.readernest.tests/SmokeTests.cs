@@ -868,6 +868,46 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task CancelSubscription_CancelsItsStillOpenInvoice_ButLeavesAPaidOneAlone()
+        {
+            var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var plan = new PackagePlan { Name = "Monthly", BillingType = BillingType.Subscription, BillingCycle = BillingCycle.Monthly, Price = 2000 };
+            var account = new PaymentAccount { Name = "Phonics", Department = Department.Phonics, GatewayProvider = "simulated", GatewayAccountRef = "ph" };
+            _db.Context.AddRange(parentProfile, plan, account);
+            await _db.Context.SaveChangesAsync();
+            var child = new Child { ParentProfileId = parentProfile.Id, FirstName = "Kid", LastName = "One", IsActive = true };
+            _db.Context.Children.Add(child);
+            await _db.Context.SaveChangesAsync();
+            var billing = CreateBillingService();
+            var sub = await billing.CreateSubscriptionAsync(new CreateSubscriptionRequest
+            {
+                ParentProfileId = parentProfile.Id, ChildId = child.Id, PackagePlanId = plan.Id,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            });
+
+            // The subscription's first invoice is still Pending; pay it off, then add a second,
+            // still-open one (mirrors a real second billing-cycle invoice) so both a settled and
+            // an unsettled invoice exist on the same subscription before cancelling it.
+            var firstInvoice = await _db.Context.Invoices.FirstAsync(i => i.SubscriptionId == sub.Id);
+            await billing.RecordPaymentAsync(firstInvoice.Id, new RecordPaymentRequest { Amount = firstInvoice.Amount });
+            var secondInvoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id,
+                ChildId = child.Id,
+                SubscriptionId = sub.Id,
+                Department = Department.Phonics,
+                Amount = 2000,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+
+            await billing.CancelSubscriptionAsync(sub.Id);
+
+            Assert.Equal(InvoiceStatus.Paid, (await _db.Context.Invoices.FindAsync(firstInvoice.Id))!.Status);
+            Assert.Equal(InvoiceStatus.Cancelled, (await _db.Context.Invoices.FindAsync(secondInvoice.Id))!.Status);
+        }
+
+        [Fact]
         public async Task ScheduleSession_OnHoliday_IsBlocked()
         {
             var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 1, includeSession: false);
