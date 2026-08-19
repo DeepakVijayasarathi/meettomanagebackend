@@ -1592,6 +1592,27 @@ namespace iucs.readernest.application.Services
             subscription.NextBillingAtUtc = null;
             _unitOfWork.Repository<Subscription>().Update(subscription);
 
+            // A cancelled subscription stops billing going forward, but its already-issued,
+            // still-unsettled invoices were otherwise left Pending/Overdue forever — nothing
+            // else ever revisits them once the subscription they belong to is gone, so the
+            // parent kept seeing a payable balance for a plan they'd already cancelled.
+            var openInvoiceIds = await _unitOfWork.Repository<Invoice>().Query()
+                .Where(i => i.SubscriptionId == subscription.Id
+                    && i.Status != InvoiceStatus.Paid
+                    && i.Status != InvoiceStatus.Cancelled)
+                .Select(i => i.Id)
+                .ToListAsync(cancellationToken);
+            foreach (var openInvoiceId in openInvoiceIds)
+            {
+                // Load each one tracked (Query() above is AsNoTracking) so the mutation persists.
+                var openInvoice = await _unitOfWork.Repository<Invoice>().GetByIdAsync(openInvoiceId, cancellationToken)
+                    ?? throw new NotFoundException(nameof(Invoice), openInvoiceId);
+                openInvoice.Status = InvoiceStatus.Cancelled;
+                _unitOfWork.Repository<Invoice>().Update(openInvoice);
+                await _auditLog.StageAsync(AuditAction.Update, nameof(Invoice), openInvoice.Id.ToString(),
+                    changesJson: "{\"reason\":\"subscription_cancelled\"}", cancellationToken: cancellationToken);
+            }
+
             await _auditLog.StageAsync(AuditAction.Update, nameof(Subscription), subscription.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 

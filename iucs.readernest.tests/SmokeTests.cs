@@ -933,6 +933,46 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task CancelSubscription_CancelsItsStillOpenInvoice_ButLeavesAPaidOneAlone()
+        {
+            var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var plan = new PackagePlan { Name = "Monthly", BillingType = BillingType.Subscription, BillingCycle = BillingCycle.Monthly, Price = 2000 };
+            var account = new PaymentAccount { Name = "Phonics", Department = Department.Phonics, GatewayProvider = "simulated", GatewayAccountRef = "ph" };
+            _db.Context.AddRange(parentProfile, plan, account);
+            await _db.Context.SaveChangesAsync();
+            var child = new Child { ParentProfileId = parentProfile.Id, FirstName = "Kid", LastName = "One", IsActive = true };
+            _db.Context.Children.Add(child);
+            await _db.Context.SaveChangesAsync();
+            var billing = CreateBillingService();
+            var sub = await billing.CreateSubscriptionAsync(new CreateSubscriptionRequest
+            {
+                ParentProfileId = parentProfile.Id, ChildId = child.Id, PackagePlanId = plan.Id,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            });
+
+            // The subscription's first invoice is still Pending; pay it off, then add a second,
+            // still-open one (mirrors a real second billing-cycle invoice) so both a settled and
+            // an unsettled invoice exist on the same subscription before cancelling it.
+            var firstInvoice = await _db.Context.Invoices.FirstAsync(i => i.SubscriptionId == sub.Id);
+            await billing.RecordPaymentAsync(firstInvoice.Id, new RecordPaymentRequest { Amount = firstInvoice.Amount });
+            var secondInvoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id,
+                ChildId = child.Id,
+                SubscriptionId = sub.Id,
+                Department = Department.Phonics,
+                Amount = 2000,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+
+            await billing.CancelSubscriptionAsync(sub.Id);
+
+            Assert.Equal(InvoiceStatus.Paid, (await _db.Context.Invoices.FindAsync(firstInvoice.Id))!.Status);
+            Assert.Equal(InvoiceStatus.Cancelled, (await _db.Context.Invoices.FindAsync(secondInvoice.Id))!.Status);
+        }
+
+        [Fact]
         public async Task ScheduleSession_OnHoliday_IsBlocked()
         {
             var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 1, includeSession: false);
@@ -2188,7 +2228,7 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\",\"dob\":\"2016-01-01\",\"grade\":\"3\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
 
             var result = await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
@@ -2196,6 +2236,7 @@ namespace iucs.readernest.tests
                 Approve = true,
                 ChildFirstName = "Kid",
                 ChildLastName = "One",
+                ChildDateOfBirth = DateOnly.FromDateTime(DateTime.UtcNow).AddYears(-8),
             });
 
             Assert.Equal(EnrollmentFormStatus.Approved, result.Status);
@@ -2213,7 +2254,7 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\",\"dob\":\"2016-01-01\",\"grade\":\"3\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
 
             await Assert.ThrowsAsync<DomainValidationException>(() => service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
@@ -2230,6 +2271,24 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task ApproveEnrollment_RequiresADateOfBirth_ButRejectingNeverNeedsOne()
+        {
+            var parentUser = await _db.SeedUserAsync($"p-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.ParentProfiles.Add(parentProfile);
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateEnrollmentService();
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\",\"dob\":\"2016-01-01\",\"grade\":\"3\",\"courseInterest\":\"Math\"}" });
+            var formId = (await service.ListAsync(null)).Single().Id;
+
+            // Not [Required] on the DTO — a reject request never touches this field and
+            // must not be blocked by its absence.
+            var rejected = await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest { Approve = false });
+            Assert.Equal(EnrollmentFormStatus.Rejected, rejected.Status);
+        }
+
+        [Fact]
         public async Task ApproveEnrollment_WithPackagePlan_StartsSubscription_AndIssuesFirstInvoice()
         {
             var parentUser = await _db.SeedUserAsync($"p-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
@@ -2240,7 +2299,7 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\",\"dob\":\"2016-01-01\",\"grade\":\"3\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
 
             var result = await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
@@ -2248,6 +2307,7 @@ namespace iucs.readernest.tests
                 Approve = true,
                 ChildFirstName = "Kid",
                 ChildLastName = "One",
+                ChildDateOfBirth = DateOnly.FromDateTime(DateTime.UtcNow).AddYears(-8),
                 PackagePlanId = plan.Id,
             });
 
@@ -2272,7 +2332,7 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\",\"dob\":\"2016-01-01\",\"grade\":\"3\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
 
             await Assert.ThrowsAsync<DomainValidationException>(() => service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
@@ -2392,21 +2452,27 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Old Name\",\"grade\":\"1\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Old Name\",\"dob\":\"2016-01-01\",\"grade\":\"1\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
 
             var edited = await service.UpdateFormDataAsync(formId, new SubmitEnrollmentFormRequest
             {
-                FormDataJson = "{\"childName\":\"New Name\",\"grade\":\"2\"}",
+                FormDataJson = "{\"childName\":\"New Name\",\"dob\":\"2016-01-01\",\"grade\":\"2\",\"courseInterest\":\"Math\"}",
             });
             Assert.Contains("New Name", edited.FormDataJson);
             var reloaded = await service.GetAsync(formId);
             Assert.Contains("New Name", reloaded.FormDataJson);
 
             // Once approved, the form is immutable.
-            await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest { Approve = true, ChildFirstName = "New", ChildLastName = "Name" });
+            await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
+            {
+                Approve = true,
+                ChildFirstName = "New",
+                ChildLastName = "Name",
+                ChildDateOfBirth = DateOnly.FromDateTime(DateTime.UtcNow).AddYears(-8),
+            });
             await Assert.ThrowsAsync<ConflictException>(
-                () => service.UpdateFormDataAsync(formId, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Later\"}" }));
+                () => service.UpdateFormDataAsync(formId, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Later\",\"dob\":\"2016-01-01\",\"grade\":\"2\",\"courseInterest\":\"Math\"}" }));
         }
 
         [Fact]
@@ -3299,11 +3365,12 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\",\"dob\":\"2016-01-01\",\"grade\":\"3\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
             await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
             {
-                Approve = true, ChildFirstName = "Kid", ChildLastName = "One", PackagePlanId = plan.Id,
+                Approve = true, ChildFirstName = "Kid", ChildLastName = "One",
+                ChildDateOfBirth = DateOnly.FromDateTime(DateTime.UtcNow).AddYears(-8), PackagePlanId = plan.Id,
             });
 
             var (verifyContext, _) = _db.CreateConcurrentSession();
