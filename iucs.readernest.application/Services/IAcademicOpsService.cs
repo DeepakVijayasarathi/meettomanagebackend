@@ -32,5 +32,8 @@ namespace iucs.readernest.application.Services
             CancellationToken cancellationToken = default);
 
         Task<IReadOnlyList<SessionAttendanceDto>> ListAttendanceAsync(Guid sessionId, CancellationToken cancellationToken = default);
+
+        /// <summary>Join-based capture called by ClassroomHub.JoinSession — see the implementation's doc comment.</summary>
+        Task CaptureJoinAttendanceAsync(Guid sessionId, Guid userId, CancellationToken cancellationToken = default);
     }
 }

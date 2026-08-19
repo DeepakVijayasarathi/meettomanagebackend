@@ -22,11 +22,13 @@ namespace iucs.readernest.api.Hubs
 
         private readonly ISessionService _sessionService;
         private readonly IGamificationService _gamificationService;
+        private readonly IAcademicOpsService _academicOpsService;
 
-        public ClassroomHub(ISessionService sessionService, IGamificationService gamificationService)
+        public ClassroomHub(ISessionService sessionService, IGamificationService gamificationService, IAcademicOpsService academicOpsService)
         {
             _sessionService = sessionService;
             _gamificationService = gamificationService;
+            _academicOpsService = academicOpsService;
         }
 
         public record ParticipantState(string Name, string Role, bool HandRaised);
@@ -117,6 +119,11 @@ namespace iucs.readernest.api.Hubs
             await Groups.AddToGroupAsync(Context.ConnectionId, Group(sessionId));
             await BroadcastRosterAsync(sessionId);
             await SendLeaderboardAsync(sessionId);
+
+            // PDF's "System Marks Attendance" — join-based capture, fired now that the caller
+            // is confirmed to genuinely belong to this session. Best-effort by design (see the
+            // method's own doc comment); never allowed to affect the join that already succeeded.
+            await _academicOpsService.CaptureJoinAttendanceAsync(sessionGuid, userId, Context.ConnectionAborted);
         }
 
         public async Task LeaveSession(string sessionId)
@@ -193,11 +200,29 @@ namespace iucs.readernest.api.Hubs
             var name = UserNameFor(sessionId);
             if (correct)
             {
-                var scores = Scores.GetOrAdd(sessionId, _ => new ConcurrentDictionary<string, int>());
-                scores.AddOrUpdate(name, 1, (_, current) => current + 1);
+                AddLiveStar(sessionId, name);
             }
 
             await Clients.Group(Group(sessionId)).SendAsync("QuizAnswer", name, questionIndex, selectedIndex, correct);
+            await SendLeaderboardAsync(sessionId);
+        }
+
+        /// <summary>
+        /// Live-leaderboard bump for completing a whiteboard mini-game (drag & drop / tag &
+        /// match / hotspot) — these activities only fire their completion callback once every
+        /// item is correctly placed, so "completed" already means "correct," same as a right
+        /// quiz answer. This only keeps everyone's in-room leaderboard view in sync instantly;
+        /// the durable record (StudentAward row, milestone auto-grant) is the client's separate
+        /// REST call to POST /api/gamification/awards, exactly like the quiz's own star flow.
+        /// </summary>
+        public async Task AwardStar(string sessionId)
+        {
+            if (!IsJoined(sessionId))
+            {
+                return;
+            }
+
+            AddLiveStar(sessionId, UserNameFor(sessionId));
             await SendLeaderboardAsync(sessionId);
         }
 
@@ -262,6 +287,13 @@ namespace iucs.readernest.api.Hubs
             }
 
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, Group(sessionId));
+        }
+
+        /// <summary>Shared by AnswerQuiz and AwardStar — bumps the in-memory live score only.</summary>
+        private static void AddLiveStar(string sessionId, string name)
+        {
+            var scores = Scores.GetOrAdd(sessionId, _ => new ConcurrentDictionary<string, int>());
+            scores.AddOrUpdate(name, 1, (_, current) => current + 1);
         }
 
         private string UserNameFor(string sessionId) =>
