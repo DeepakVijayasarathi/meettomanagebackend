@@ -2081,7 +2081,7 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\",\"dob\":\"2016-01-01\",\"grade\":\"3\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
 
             var result = await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
@@ -2107,7 +2107,7 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\",\"dob\":\"2016-01-01\",\"grade\":\"3\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
 
             await Assert.ThrowsAsync<DomainValidationException>(() => service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
@@ -2132,7 +2132,7 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\",\"dob\":\"2016-01-01\",\"grade\":\"3\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
 
             // Not [Required] on the DTO — a reject request never touches this field and
@@ -2152,7 +2152,7 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\",\"dob\":\"2016-01-01\",\"grade\":\"3\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
 
             var result = await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
@@ -2185,7 +2185,7 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\",\"dob\":\"2016-01-01\",\"grade\":\"3\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
 
             await Assert.ThrowsAsync<DomainValidationException>(() => service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
@@ -2305,12 +2305,12 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Old Name\",\"grade\":\"1\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Old Name\",\"dob\":\"2016-01-01\",\"grade\":\"1\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
 
             var edited = await service.UpdateFormDataAsync(formId, new SubmitEnrollmentFormRequest
             {
-                FormDataJson = "{\"childName\":\"New Name\",\"grade\":\"2\"}",
+                FormDataJson = "{\"childName\":\"New Name\",\"dob\":\"2016-01-01\",\"grade\":\"2\",\"courseInterest\":\"Math\"}",
             });
             Assert.Contains("New Name", edited.FormDataJson);
             var reloaded = await service.GetAsync(formId);
@@ -2325,7 +2325,7 @@ namespace iucs.readernest.tests
                 ChildDateOfBirth = DateOnly.FromDateTime(DateTime.UtcNow).AddYears(-8),
             });
             await Assert.ThrowsAsync<ConflictException>(
-                () => service.UpdateFormDataAsync(formId, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Later\"}" }));
+                () => service.UpdateFormDataAsync(formId, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Later\",\"dob\":\"2016-01-01\",\"grade\":\"2\",\"courseInterest\":\"Math\"}" }));
         }
 
         [Fact]
@@ -3218,7 +3218,7 @@ namespace iucs.readernest.tests
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
-            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\"}" });
+            await service.SubmitAsync(parentUser.Id, new SubmitEnrollmentFormRequest { FormDataJson = "{\"childName\":\"Kid One\",\"dob\":\"2016-01-01\",\"grade\":\"3\",\"courseInterest\":\"Math\"}" });
             var formId = (await service.ListAsync(null)).Single().Id;
             await service.ReviewAsync(formId, new ReviewEnrollmentFormRequest
             {
