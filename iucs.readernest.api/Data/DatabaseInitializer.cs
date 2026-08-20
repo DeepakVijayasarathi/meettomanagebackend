@@ -55,6 +55,7 @@ namespace iucs.readernest.api.Data
             await EnsureAccessRequestEmailTemplatesAsync(context);
             await EnsureProgressReportsMenuAsync(context);
             await EnsureStoreInquiriesMenuAsync(context);
+            await EnsureParentRecordingsMenuAsync(context);
             await BackfillPlainTextNotificationBodiesAsync(context);
 
             await context.SaveChangesAsync();
@@ -467,7 +468,8 @@ namespace iucs.readernest.api.Data
             ("teacher", "My Account", "Resources", "/teacher/resources", "FolderOpen", PermissionModule.ContentAccessManagement),
             ("parent", null, "Dashboard", "/parent", "LayoutDashboard", null),
             ("parent", "Learning", "Schedule & Live Class", "/parent/schedule", "CalendarClock", PermissionModule.SessionCalendarManagement),
-            ("parent", "Learning", "Resources & Recordings", "/parent/resources", "FolderOpen", PermissionModule.ContentAccessManagement),
+            ("parent", "Learning", "Resources", "/parent/resources", "FolderOpen", PermissionModule.ContentAccessManagement),
+            ("parent", "Learning", "Recordings", "/parent/recordings", "Video", PermissionModule.ContentAccessManagement),
             ("parent", "Learning", "Student View", "/student", "Sparkles", null),
             ("parent", "Account", "Payments & Billing", "/parent/billing", "CreditCard", PermissionModule.BillingFinance),
             ("parent", "Account", "Notifications & Reports", "/parent/notifications", "Bell", PermissionModule.Communication),
@@ -912,6 +914,44 @@ namespace iucs.readernest.api.Data
                 SortOrder = (enrollmentReview?.SortOrder ?? 0) + 1,
                 IsActive = true,
                 RequiredModule = PermissionModule.Admission,
+            });
+        }
+
+        /// <summary>
+        /// Retrofits the "Recordings" parent menu item (mirrors EnsureProgressReportsMenuAsync).
+        /// Fresh databases already get it from MenuSeedItems(); a pre-existing one only had
+        /// "Resources &amp; Recordings" → /parent/resources, whose own Recordings tab actually
+        /// reads a different, unrelated data source (the generic Resource library, not
+        /// SessionRecording) — so this also renames that older row back to plain "Resources"
+        /// (only if it still has its original label, so a since-hand-edited one is left alone)
+        /// to stop the two screens claiming the same name for two different things.
+        /// </summary>
+        private static async Task EnsureParentRecordingsMenuAsync(ReaderNestDbContext context)
+        {
+            var resources = await context.MenuItems
+                .FirstOrDefaultAsync(m => m.Portal == "parent" && m.Path == "/parent/resources");
+            if (resources is not null && resources.Label == "Resources & Recordings")
+            {
+                resources.Label = "Resources";
+            }
+
+            if (context.MenuItems.Local.Any(m => m.Portal == "parent" && m.Path == "/parent/recordings") ||
+                await context.MenuItems.AnyAsync(m => m.Portal == "parent" && m.Path == "/parent/recordings"))
+            {
+                return;
+            }
+
+            context.MenuItems.Add(new MenuItem
+            {
+                Portal = "parent",
+                Section = "Learning",
+                SectionOrder = resources?.SectionOrder ?? 0,
+                Label = "Recordings",
+                Path = "/parent/recordings",
+                Icon = "Video",
+                SortOrder = (resources?.SortOrder ?? 0) + 1,
+                IsActive = true,
+                RequiredModule = PermissionModule.ContentAccessManagement,
             });
         }
 
