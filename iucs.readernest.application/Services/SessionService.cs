@@ -233,6 +233,14 @@ namespace iucs.readernest.application.Services
             {
                 session.Summary = request.Summary.Trim();
             }
+            else
+            {
+                // PDF's "Session Summary Generated" (p.19) is an unconditional step — a teacher
+                // who completes a class without typing notes still gets a real summary, built
+                // from the same engagement data GetEngagementSummaryAsync already computes.
+                var engagement = await GetEngagementSummaryAsync(session.Id, cancellationToken);
+                session.Summary = BuildAutoSummary(engagement);
+            }
 
             if (session.BatchId.HasValue)
             {
@@ -859,6 +867,36 @@ namespace iucs.readernest.application.Services
                 })
                 .OrderByDescending(s => s.EngagementScore)
                 .ToList();
+        }
+
+        /// <summary>Builds the auto-generated fallback used by CompleteAsync when the teacher left the summary blank.</summary>
+        private static string BuildAutoSummary(IReadOnlyList<EngagementSummaryDto> engagement)
+        {
+            if (engagement.Count == 0)
+            {
+                return "Class completed. No interactive engagement was recorded for this session.";
+            }
+
+            var avgScore = (int)Math.Round(engagement.Average(e => e.EngagementScore));
+            var onTrack = engagement.Count(e => e.LearningOutcome == "on-track");
+            var needsEncouragement = engagement.Count(e => e.LearningOutcome == "needs-encouragement");
+            var needsAttention = engagement.Count(e => e.LearningOutcome == "needs-attention");
+
+            var outcomeParts = new List<string>();
+            if (onTrack > 0) outcomeParts.Add($"{onTrack} on track");
+            if (needsEncouragement > 0) outcomeParts.Add($"{needsEncouragement} could use encouragement");
+            if (needsAttention > 0) outcomeParts.Add($"{needsAttention} need{(needsAttention == 1 ? "s" : "")} attention");
+
+            var summary = $"Class completed with {engagement.Count} participant{(engagement.Count == 1 ? "" : "s")} — " +
+                $"average engagement score {avgScore}/100 ({string.Join(", ", outcomeParts)}).";
+
+            var quizAttempts = engagement.Sum(e => e.QuizAttempts);
+            if (quizAttempts > 0)
+            {
+                summary += $" {engagement.Sum(e => e.QuizCorrect)}/{quizAttempts} quiz answers correct.";
+            }
+
+            return summary;
         }
 
         private async Task NotifyAdminsOfTeacherNoShowAsync(ClassSession session, CancellationToken cancellationToken)

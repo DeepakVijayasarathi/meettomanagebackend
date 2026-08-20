@@ -393,6 +393,71 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task CaptureJoinAttendance_Teacher_RecordsPresentAgainstOwnTeacherProfile()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var teacherProfile = await _db.Context.TeacherProfiles.FindAsync(session.TeacherProfileId);
+
+            await CreateAcademicOpsService().CaptureJoinAttendanceAsync(session.Id, teacherProfile!.UserId);
+
+            var row = Assert.Single(_db.Context.SessionAttendances.Where(a => a.ClassSessionId == session.Id));
+            Assert.Equal(teacherProfile.Id, row.TeacherProfileId);
+            Assert.Equal(AttendanceStatus.Present, row.Status);
+        }
+
+        [Fact]
+        public async Task CaptureJoinAttendance_ParentWithEnrolledChild_RecordsPresentAgainstThatChild()
+        {
+            var (batch, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var parentUser = await _db.SeedUserAsync($"p-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var child = new Child { ParentProfile = parentProfile, FirstName = "Kid", LastName = "One" };
+            _db.Context.AddRange(parentProfile, child);
+            await _db.Context.SaveChangesAsync();
+            _db.Context.Add(new BatchEnrollment { BatchId = batch.Id, ChildId = child.Id });
+            await _db.Context.SaveChangesAsync();
+
+            await CreateAcademicOpsService().CaptureJoinAttendanceAsync(session.Id, parentUser.Id);
+
+            var row = Assert.Single(_db.Context.SessionAttendances.Where(a => a.ClassSessionId == session.Id));
+            Assert.Equal(child.Id, row.ChildId);
+            Assert.Equal(AttendanceStatus.Present, row.Status);
+        }
+
+        [Fact]
+        public async Task CaptureJoinAttendance_ParentWithoutEnrolledChildInThisBatch_RecordsNothing()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var parentUser = await _db.SeedUserAsync($"p2-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var child = new Child { ParentProfile = parentProfile, FirstName = "Kid", LastName = "Two" };
+            _db.Context.AddRange(parentProfile, child);
+            await _db.Context.SaveChangesAsync();
+            // Deliberately no BatchEnrollment for this child in this session's batch.
+
+            await CreateAcademicOpsService().CaptureJoinAttendanceAsync(session.Id, parentUser.Id);
+
+            Assert.Empty(_db.Context.SessionAttendances.Where(a => a.ClassSessionId == session.Id));
+        }
+
+        [Fact]
+        public async Task CaptureJoinAttendance_UnrelatedTeacher_RecordsNothing_AndNeverThrows()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var otherTeacherUser = await _db.SeedUserAsync($"t2-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            _db.Context.TeacherProfiles.Add(new TeacherProfile { UserId = otherTeacherUser.Id });
+            await _db.Context.SaveChangesAsync();
+
+            // A teacher who isn't assigned to this session resolves a TeacherProfile, but it
+            // doesn't match session.TeacherProfileId, so the entry is never built — and even if
+            // it somehow were, CaptureAttendanceCoreAsync has no ownership check to catch it, so
+            // this also proves the ownership filtering lives in CaptureJoinAttendanceAsync itself.
+            await CreateAcademicOpsService().CaptureJoinAttendanceAsync(session.Id, otherTeacherUser.Id);
+
+            Assert.Empty(_db.Context.SessionAttendances.Where(a => a.ClassSessionId == session.Id));
+        }
+
+        [Fact]
         public async Task AddRecording_SetsFifteenDayParentExpiry()
         {
             var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
@@ -1626,6 +1691,48 @@ namespace iucs.readernest.tests
             var reloaded = await _db.Context.Batches.FindAsync(batch.Id);
             Assert.Equal(BatchStatus.Dormant, reloaded!.Status);
             Assert.NotNull(reloaded.CompletedAtUtc);
+        }
+
+        [Fact]
+        public async Task CompleteSession_WithNoTeacherNotes_AutoGeneratesASummary_FromEngagementData()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            await CreateSessionService().RecordEngagementAsync(session.Id, new RecordEngagementRequest
+            {
+                Events =
+                [
+                    new EngagementEntryDto { ParticipantName = "Kid One", Type = EngagementEventType.QuizAttempt, Value = 2 },
+                    new EngagementEntryDto { ParticipantName = "Kid One", Type = EngagementEventType.QuizCorrect, Value = 1 },
+                ],
+            });
+
+            var completed = await CreateSessionService().CompleteAsync(session.Id); // no Summary in the request
+
+            Assert.False(string.IsNullOrWhiteSpace(completed.Summary));
+            // QuizAttempts (per GetEngagementSummaryAsync) sums BOTH QuizAttempt and QuizCorrect
+            // event values, so posting Attempt=2 + Correct=1 totals 3 attempts, 1 correct.
+            Assert.Contains("1/3 quiz answers correct", completed.Summary);
+        }
+
+        [Fact]
+        public async Task CompleteSession_WithNoEngagementAtAll_StillGetsAFallbackSummary()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+
+            var completed = await CreateSessionService().CompleteAsync(session.Id);
+
+            Assert.False(string.IsNullOrWhiteSpace(completed.Summary));
+        }
+
+        [Fact]
+        public async Task CompleteSession_WithTeacherNotes_KeepsThemInsteadOfAutoGenerating()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+
+            var completed = await CreateSessionService().CompleteAsync(
+                session.Id, new CompleteSessionRequest { Summary = "Covered short vowels, both kids engaged well." });
+
+            Assert.Equal("Covered short vowels, both kids engaged well.", completed.Summary);
         }
 
         [Fact]
