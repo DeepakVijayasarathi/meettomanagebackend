@@ -10,6 +10,11 @@ namespace iucs.readernest.domain.Entities.Users
     /// 1:1 profile; students never log in directly (they join via the parent account).
     /// </summary>
     [Index(nameof(Email), IsUnique = true)]
+    // Role (alone) and Role+Status together are the two shapes actually filtered on —
+    // the Users list, teacher/parent lookups, permission backfill, and reminder/digest
+    // background services all query one or both. Leading column Role also serves any
+    // Role-only filter without needing a second single-column index.
+    [Index(nameof(Role), nameof(Status))]
     public class User : AuditEntity
     {
         [MaxLength(256)]
