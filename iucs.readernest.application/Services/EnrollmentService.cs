@@ -61,13 +61,13 @@ namespace iucs.readernest.application.Services
                 var user = await _unitOfWork.Repository<User>().GetByIdAsync(parentUserId, cancellationToken);
                 if (user is not null)
                 {
-                    var alreadyLinkedBookingIds = await _unitOfWork.Repository<EnrollmentForm>().Query()
-                        .Where(f => f.DemoBookingId != null)
-                        .Select(f => f.DemoBookingId!.Value)
-                        .ToListAsync(cancellationToken);
-
+                    // A correlated NOT EXISTS instead of pulling every ever-linked booking id
+                    // into memory first — that list only grows, system-wide, across all-time
+                    // enrollments, on every single submission.
+                    var enrollmentForms = _unitOfWork.Repository<EnrollmentForm>().Query();
                     var matchedBooking = await _unitOfWork.Repository<DemoBooking>().Query()
-                        .Where(b => b.ParentEmail == user.Email && !alreadyLinkedBookingIds.Contains(b.Id))
+                        .Where(b => b.ParentEmail == user.Email
+                            && !enrollmentForms.Any(f => f.DemoBookingId == b.Id))
                         .OrderByDescending(b => b.CreatedAtUtc)
                         .FirstOrDefaultAsync(cancellationToken);
                     form.DemoBookingId = matchedBooking?.Id;

@@ -2,7 +2,6 @@ using iucs.readernest.api.Auth;
 using iucs.readernest.application.Dto.Admission;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 
@@ -65,9 +64,15 @@ namespace iucs.readernest.api.Controllers
     }
 
     /// <summary>Admission-team follow-up queue for public store inquiries.</summary>
+    // No [Authorize(Roles=...)] here, deliberately: gated purely on the Admission permission
+    // claim, same as EnrollmentFormsController's and DemoBookingsController's admin-side
+    // actions for the exact same module. A hard-coded Admin/SubAdmin role list would lock out
+    // AdmissionTeam accounts even though they're granted full Admission access by default and
+    // this queue is literally their job — see RequiredSystemRolePermissions.cs's note that an
+    // Authorize(Roles=...) list must include AdmissionTeam for a permission-gated admission
+    // endpoint to actually be reachable by that role.
     [ApiController]
     [Route("api/store/inquiries")]
-    [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
     public class StoreInquiriesController : ControllerBase
     {
         private readonly IStoreService _storeService;

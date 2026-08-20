@@ -91,22 +91,45 @@ namespace iucs.readernest.application.Services
                 .Select(u => u.Id)
                 .ToListAsync(cancellationToken);
 
+            // Fast path: one query for the whole page instead of one round trip per row. This
+            // only fails if a row in THIS page is corrupt (see the comment above), which is
+            // rare — so it's worth trying as a batch first and only paying for per-row
+            // isolation on the pages that actually contain a bad value.
             var items = new List<UserDto>(pageIds.Count);
-            foreach (var id in pageIds)
+            try
             {
-                try
+                var batch = await _unitOfWork.Repository<User>().Query()
+                    .Include(u => u.TeacherProfile)
+                    .Where(u => pageIds.Contains(u.Id))
+                    .ToListAsync(cancellationToken);
+                var byId = batch.ToDictionary(u => u.Id);
+                foreach (var id in pageIds)
                 {
-                    var user = await _unitOfWork.Repository<User>().Query()
-                        .Include(u => u.TeacherProfile)
-                        .FirstAsync(u => u.Id == id, cancellationToken);
-                    items.Add(user.ToDto());
+                    if (byId.TryGetValue(id, out var user)) items.Add(user.ToDto());
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The batch failed partway through materializing — which row(s) is unknown
+                // (EF surfaces the failure once, not per-row), so fall back to loading this
+                // page one row at a time and skip only the ones that actually don't load.
+                items.Clear();
+                foreach (var id in pageIds)
                 {
-                    // Skipped, not defaulted — this is a corrupt/stale value that needs a real
-                    // data fix, and silently guessing a role or status for it would be worse
-                    // than leaving it off an admin list page.
-                    _logger.LogError(ex, "Failed to load user {UserId} for the Users list; skipping this row.", id);
+                    try
+                    {
+                        var user = await _unitOfWork.Repository<User>().Query()
+                            .Include(u => u.TeacherProfile)
+                            .FirstAsync(u => u.Id == id, cancellationToken);
+                        items.Add(user.ToDto());
+                    }
+                    catch (Exception rowEx) when (rowEx is not OperationCanceledException)
+                    {
+                        // Skipped, not defaulted — this is a corrupt/stale value that needs a real
+                        // data fix, and silently guessing a role or status for it would be worse
+                        // than leaving it off an admin list page.
+                        _logger.LogError(rowEx, "Failed to load user {UserId} for the Users list; skipping this row.", id);
+                    }
                 }
             }
 
