@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using iucs.readernest.domain.Data;
@@ -11,9 +12,11 @@ using iucs.readernest.domain.Data;
 namespace iucs.readernest.domain.Migrations
 {
     [DbContext(typeof(ReaderNestDbContext))]
-    partial class ReaderNestDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260822034221_AddUserLoginLockout")]
+    partial class AddUserLoginLockout
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -186,9 +189,11 @@ namespace iucs.readernest.domain.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at_utc");
 
-                    b.Property<Guid>("DepartmentId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("department_id");
+                    b.Property<string>("Department")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("department");
 
                     b.Property<string>("Description")
                         .HasMaxLength(1000)
@@ -242,9 +247,6 @@ namespace iucs.readernest.domain.Migrations
                     b.HasIndex("CourseCategoryId")
                         .HasDatabaseName("ix_courses_course_category_id");
 
-                    b.HasIndex("DepartmentId")
-                        .HasDatabaseName("ix_courses_department_id");
-
                     b.ToTable("courses");
                 });
 
@@ -267,9 +269,11 @@ namespace iucs.readernest.domain.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at_utc");
 
-                    b.Property<Guid>("DepartmentId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("department_id");
+                    b.Property<string>("Department")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("department");
 
                     b.Property<string>("Description")
                         .HasMaxLength(500)
@@ -297,72 +301,12 @@ namespace iucs.readernest.domain.Migrations
                     b.HasKey("Id")
                         .HasName("pk_course_categories");
 
-                    b.HasIndex("DepartmentId")
-                        .HasDatabaseName("ix_course_categories_department_id");
-
                     b.HasIndex("Name")
                         .IsUnique()
                         .HasDatabaseName("ix_course_categories_name")
                         .HasFilter("\"is_deleted\" = FALSE");
 
                     b.ToTable("course_categories");
-                });
-
-            modelBuilder.Entity("iucs.readernest.domain.Entities.Academics.Department", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at_utc");
-
-                    b.Property<Guid?>("CreatedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("created_by");
-
-                    b.Property<DateTime?>("DeletedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("deleted_at_utc");
-
-                    b.Property<string>("Description")
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)")
-                        .HasColumnName("description");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("boolean")
-                        .HasColumnName("is_active");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean")
-                        .HasColumnName("is_deleted");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)")
-                        .HasColumnName("name");
-
-                    b.Property<DateTime?>("UpdatedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at_utc");
-
-                    b.Property<Guid?>("UpdatedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("updated_by");
-
-                    b.HasKey("Id")
-                        .HasName("pk_departments");
-
-                    b.HasIndex("Name")
-                        .IsUnique()
-                        .HasDatabaseName("ix_departments_name")
-                        .HasFilter("\"is_deleted\" = FALSE");
-
-                    b.ToTable("departments");
                 });
 
             modelBuilder.Entity("iucs.readernest.domain.Entities.Academics.EnrollmentForm", b =>
@@ -624,9 +568,10 @@ namespace iucs.readernest.domain.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at_utc");
 
-                    b.Property<Guid?>("DepartmentId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("department_id");
+                    b.Property<string>("Department")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("department");
 
                     b.Property<string>("FollowUpNotes")
                         .HasMaxLength(2000)
@@ -679,9 +624,6 @@ namespace iucs.readernest.domain.Migrations
 
                     b.HasIndex("ConversionStatus")
                         .HasDatabaseName("ix_demo_bookings_conversion_status");
-
-                    b.HasIndex("DepartmentId")
-                        .HasDatabaseName("ix_demo_bookings_department_id");
 
                     b.HasIndex("InvoiceId")
                         .HasDatabaseName("ix_demo_bookings_invoice_id");
@@ -1107,9 +1049,11 @@ namespace iucs.readernest.domain.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at_utc");
 
-                    b.Property<Guid>("DepartmentId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("department_id");
+                    b.Property<string>("Department")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("department");
 
                     b.Property<DateOnly>("DueDate")
                         .HasColumnType("date")
@@ -1171,9 +1115,6 @@ namespace iucs.readernest.domain.Migrations
 
                     b.HasIndex("CourseId")
                         .HasDatabaseName("ix_invoices_course_id");
-
-                    b.HasIndex("DepartmentId")
-                        .HasDatabaseName("ix_invoices_department_id");
 
                     b.HasIndex("InvoiceNumber")
                         .IsUnique()
@@ -1292,9 +1233,11 @@ namespace iucs.readernest.domain.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at_utc");
 
-                    b.Property<Guid>("DepartmentId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("department_id");
+                    b.Property<string>("Department")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("department");
 
                     b.Property<string>("GatewayAccountRef")
                         .IsRequired()
@@ -1333,9 +1276,9 @@ namespace iucs.readernest.domain.Migrations
                     b.HasKey("Id")
                         .HasName("pk_payment_accounts");
 
-                    b.HasIndex("DepartmentId")
+                    b.HasIndex("Department")
                         .IsUnique()
-                        .HasDatabaseName("ix_payment_accounts_department_id")
+                        .HasDatabaseName("ix_payment_accounts_department")
                         .HasFilter("\"is_deleted\" = FALSE");
 
                     b.ToTable("payment_accounts");
@@ -3352,9 +3295,10 @@ namespace iucs.readernest.domain.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at_utc");
 
-                    b.Property<Guid?>("DepartmentId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("department_id");
+                    b.Property<string>("Department")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("department");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean")
@@ -3375,9 +3319,6 @@ namespace iucs.readernest.domain.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_teacher_profiles");
-
-                    b.HasIndex("DepartmentId")
-                        .HasDatabaseName("ix_teacher_profiles_department_id");
 
                     b.HasIndex("UserId")
                         .IsUnique()
@@ -3558,28 +3499,7 @@ namespace iucs.readernest.domain.Migrations
                         .IsRequired()
                         .HasConstraintName("fk_courses_course_categories_course_category_id");
 
-                    b.HasOne("iucs.readernest.domain.Entities.Academics.Department", "Department")
-                        .WithMany()
-                        .HasForeignKey("DepartmentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_courses_departments_department_id");
-
                     b.Navigation("CourseCategory");
-
-                    b.Navigation("Department");
-                });
-
-            modelBuilder.Entity("iucs.readernest.domain.Entities.Academics.CourseCategory", b =>
-                {
-                    b.HasOne("iucs.readernest.domain.Entities.Academics.Department", "Department")
-                        .WithMany()
-                        .HasForeignKey("DepartmentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_course_categories_departments_department_id");
-
-                    b.Navigation("Department");
                 });
 
             modelBuilder.Entity("iucs.readernest.domain.Entities.Academics.EnrollmentForm", b =>
@@ -3630,12 +3550,6 @@ namespace iucs.readernest.domain.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_demo_bookings_class_sessions_class_session_id");
 
-                    b.HasOne("iucs.readernest.domain.Entities.Academics.Department", "Department")
-                        .WithMany()
-                        .HasForeignKey("DepartmentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_demo_bookings_departments_department_id");
-
                     b.HasOne("iucs.readernest.domain.Entities.Billing.Invoice", "Invoice")
                         .WithMany()
                         .HasForeignKey("InvoiceId")
@@ -3643,8 +3557,6 @@ namespace iucs.readernest.domain.Migrations
                         .HasConstraintName("fk_demo_bookings_invoices_invoice_id");
 
                     b.Navigation("ClassSession");
-
-                    b.Navigation("Department");
 
                     b.Navigation("Invoice");
                 });
@@ -3736,13 +3648,6 @@ namespace iucs.readernest.domain.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_invoices_courses_course_id");
 
-                    b.HasOne("iucs.readernest.domain.Entities.Academics.Department", "Department")
-                        .WithMany()
-                        .HasForeignKey("DepartmentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_invoices_departments_department_id");
-
                     b.HasOne("iucs.readernest.domain.Entities.Users.ParentProfile", "ParentProfile")
                         .WithMany()
                         .HasForeignKey("ParentProfileId")
@@ -3767,8 +3672,6 @@ namespace iucs.readernest.domain.Migrations
 
                     b.Navigation("Course");
 
-                    b.Navigation("Department");
-
                     b.Navigation("ParentProfile");
 
                     b.Navigation("PaymentAccount");
@@ -3785,18 +3688,6 @@ namespace iucs.readernest.domain.Migrations
                         .HasConstraintName("fk_package_plans_courses_course_id");
 
                     b.Navigation("Course");
-                });
-
-            modelBuilder.Entity("iucs.readernest.domain.Entities.Billing.PaymentAccount", b =>
-                {
-                    b.HasOne("iucs.readernest.domain.Entities.Academics.Department", "Department")
-                        .WithMany()
-                        .HasForeignKey("DepartmentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_payment_accounts_departments_department_id");
-
-                    b.Navigation("Department");
                 });
 
             modelBuilder.Entity("iucs.readernest.domain.Entities.Billing.PaymentTransaction", b =>
@@ -4199,20 +4090,12 @@ namespace iucs.readernest.domain.Migrations
 
             modelBuilder.Entity("iucs.readernest.domain.Entities.Users.TeacherProfile", b =>
                 {
-                    b.HasOne("iucs.readernest.domain.Entities.Academics.Department", "Department")
-                        .WithMany()
-                        .HasForeignKey("DepartmentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_teacher_profiles_departments_department_id");
-
                     b.HasOne("iucs.readernest.domain.Entities.Users.User", "User")
                         .WithOne("TeacherProfile")
                         .HasForeignKey("iucs.readernest.domain.Entities.Users.TeacherProfile", "UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_teacher_profiles_users_user_id");
-
-                    b.Navigation("Department");
 
                     b.Navigation("User");
                 });
