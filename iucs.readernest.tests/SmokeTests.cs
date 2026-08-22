@@ -1735,6 +1735,24 @@ namespace iucs.readernest.tests
             }));
         }
 
+        /// <summary>
+        /// Regression test: CreateCategoryAsync only checked the department existed
+        /// (ExistsAsync) instead of fetching it, so the new CourseCategory's Department
+        /// navigation was never set — ToDto() reads Department.Name, so the create response
+        /// silently came back with departmentName "" even though ListCategoriesAsync (which
+        /// does Include(c => c.Department)) shows the real name for the same row a moment
+        /// later. Caught live against production while proving out the course-creation flow.
+        /// </summary>
+        [Fact]
+        public async Task CreateCategory_ResponseIncludesRealDepartmentName_NotEmpty()
+        {
+            var courseService = CreateCourseService();
+            var category = await courseService.CreateCategoryAsync(
+                new CreateCourseCategoryRequest { Name = $"Cat-{Guid.NewGuid():N}", DepartmentId = WellKnownDepartments.Phonics });
+
+            Assert.Equal("Phonics", category.DepartmentName);
+        }
+
         [Fact]
         public async Task Departments_ListAsync_IncludesTheTwoSeededOnesByDefault()
         {

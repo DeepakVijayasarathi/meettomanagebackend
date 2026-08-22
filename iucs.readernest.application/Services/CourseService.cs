@@ -45,16 +45,22 @@ namespace iucs.readernest.application.Services
                 throw new ConflictException($"A course category named '{name}' already exists.");
             }
 
-            if (!await _unitOfWork.Repository<Department>().ExistsAsync(d => d.Id == request.DepartmentId, cancellationToken))
-            {
-                throw new NotFoundException(nameof(Department), request.DepartmentId);
-            }
+            // Fetched (not just checked for existence) so the navigation is set below —
+            // ToDto() reads category.Department.Name directly, and without it the create
+            // response comes back with an empty departmentName even though the same row
+            // shows the real name a moment later from ListCategoriesAsync (which does
+            // Include(c => c.Department)). Two endpoints for the same resource returning a
+            // different shape for the same field is exactly the kind of thing a client can't
+            // work around.
+            var department = await _unitOfWork.Repository<Department>().GetByIdAsync(request.DepartmentId, cancellationToken)
+                ?? throw new NotFoundException(nameof(Department), request.DepartmentId);
 
             var category = new CourseCategory
             {
                 Name = name,
                 Description = request.Description,
                 DepartmentId = request.DepartmentId,
+                Department = department,
             };
             await repository.AddAsync(category, cancellationToken);
             await _auditLog.StageAsync(AuditAction.Create, nameof(CourseCategory), category.Id.ToString(), cancellationToken: cancellationToken);
