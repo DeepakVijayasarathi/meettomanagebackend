@@ -1,5 +1,6 @@
 using iucs.readernest.api.Auth;
 using iucs.readernest.application.Dto.Admission;
+using iucs.readernest.application.Dto.Courses;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
 using Microsoft.AspNetCore.Mvc;
@@ -17,16 +18,25 @@ namespace iucs.readernest.api.Controllers
     public class StoreController : ControllerBase
     {
         private readonly IStoreService _storeService;
+        private readonly IDepartmentService _departmentService;
 
-        public StoreController(IStoreService storeService)
+        public StoreController(IStoreService storeService, IDepartmentService departmentService)
         {
             _storeService = storeService;
+            _departmentService = departmentService;
         }
 
         [HttpGet("plans")]
         public async Task<ActionResult<IReadOnlyList<StorePlanDto>>> Plans(CancellationToken cancellationToken)
         {
             return Ok(await _storeService.ListPublicPlansAsync(cancellationToken));
+        }
+
+        /// <summary>Active departments only, for the public demo-booking form's optional department filter.</summary>
+        [HttpGet("departments")]
+        public async Task<ActionResult<IReadOnlyList<DepartmentDto>>> Departments(CancellationToken cancellationToken)
+        {
+            return Ok(await _departmentService.ListAsync(includeInactive: false, cancellationToken));
         }
 
         [HttpPost("inquiries")]
