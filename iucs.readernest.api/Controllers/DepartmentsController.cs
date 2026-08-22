@@ -27,8 +27,8 @@ namespace iucs.readernest.api.Controllers
         [HttpGet]
         [HasPermission(PermissionModule.CourseBatchManagement, PermissionAction.View)]
         public async Task<ActionResult<IReadOnlyList<DepartmentDto>>> List(
-            [FromQuery] bool includeInactive,
-            CancellationToken cancellationToken)
+            [FromQuery] bool includeInactive = false,
+            CancellationToken cancellationToken = default)
         {
             return Ok(await _departmentService.ListAsync(includeInactive, cancellationToken));
         }

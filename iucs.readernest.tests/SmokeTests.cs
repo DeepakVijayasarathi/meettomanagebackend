@@ -62,6 +62,8 @@ namespace iucs.readernest.tests
 
         private CourseService CreateCourseService() => new(_db.UnitOfWork, _auditLog);
 
+        private DepartmentService CreateDepartmentService() => new(_db.UnitOfWork, _auditLog);
+
         private BatchService CreateBatchService() => new(_db.UnitOfWork, _auditLog, _notifications);
 
         private PayoutService CreatePayoutService() => new(_db.UnitOfWork, _auditLog, _notifications);
@@ -1624,6 +1626,146 @@ namespace iucs.readernest.tests
                 TotalSessions = 1,
                 DepartmentId = WellKnownDepartments.Phonics,
             }));
+        }
+
+        [Fact]
+        public async Task Departments_ListAsync_IncludesTheTwoSeededOnesByDefault()
+        {
+            var departments = CreateDepartmentService();
+            var all = await departments.ListAsync();
+            Assert.Contains(all, d => d.Id == WellKnownDepartments.Phonics && d.Name == "Phonics");
+            Assert.Contains(all, d => d.Id == WellKnownDepartments.Maths && d.Name == "Maths");
+        }
+
+        [Fact]
+        public async Task Departments_ListAsync_DefaultsToActiveOnly_MatchingCourseServicesConvention()
+        {
+            // Pins the exact bug found and fixed during review: DepartmentsController's
+            // [FromQuery] bool with no explicit default binds to false when the query string
+            // omits it, so the service's own default has to be false too or the two layers
+            // silently disagree about what "no includeInactive given" means. ICourseService.
+            // ListAsync's sibling default is false -- match it.
+            var departments = CreateDepartmentService();
+            var inactive = await departments.CreateAsync(new SaveDepartmentRequest { Name = "Retired Department", IsActive = false });
+
+            var defaultList = await departments.ListAsync();
+            Assert.DoesNotContain(defaultList, d => d.Id == inactive.Id);
+
+            var explicitAll = await departments.ListAsync(includeInactive: true);
+            Assert.Contains(explicitAll, d => d.Id == inactive.Id);
+        }
+
+        [Fact]
+        public async Task Departments_CreateAsync_AddsANewOne_ImmediatelyUsableByListAsync()
+        {
+            var departments = CreateDepartmentService();
+            var created = await departments.CreateAsync(new SaveDepartmentRequest { Name = "Hindi", Description = "Read and write Hindi.", IsActive = true });
+
+            Assert.NotEqual(Guid.Empty, created.Id);
+            Assert.Equal("Hindi", created.Name);
+            Assert.True(created.IsActive);
+
+            var all = await departments.ListAsync();
+            Assert.Contains(all, d => d.Id == created.Id && d.Name == "Hindi");
+        }
+
+        [Fact]
+        public async Task Departments_CreateAsync_RejectsADuplicateName()
+        {
+            var departments = CreateDepartmentService();
+            await departments.CreateAsync(new SaveDepartmentRequest { Name = "Abacus" });
+
+            await Assert.ThrowsAsync<ConflictException>(() =>
+                departments.CreateAsync(new SaveDepartmentRequest { Name = "Abacus" }));
+        }
+
+        [Fact]
+        public async Task Departments_CreateAsync_TrimsTheNameBeforeCheckingForADuplicate()
+        {
+            // Guards against the classic bug: " Abacus" and "Abacus" treated as different
+            // names because the duplicate check ran before trimming instead of after.
+            var departments = CreateDepartmentService();
+            await departments.CreateAsync(new SaveDepartmentRequest { Name = "Abacus" });
+
+            await Assert.ThrowsAsync<ConflictException>(() =>
+                departments.CreateAsync(new SaveDepartmentRequest { Name = "  Abacus  " }));
+        }
+
+        [Fact]
+        public async Task Departments_UpdateAsync_RenamesAndCanDeactivate()
+        {
+            var departments = CreateDepartmentService();
+            var created = await departments.CreateAsync(new SaveDepartmentRequest { Name = "Spoken English" });
+
+            var updated = await departments.UpdateAsync(created.Id, new SaveDepartmentRequest
+            {
+                Name = "Public Speaking",
+                Description = "Renamed from Spoken English.",
+                IsActive = false,
+            });
+
+            Assert.Equal("Public Speaking", updated.Name);
+            Assert.False(updated.IsActive);
+
+            var all = await departments.ListAsync(includeInactive: true);
+            Assert.Contains(all, d => d.Id == created.Id && d.Name == "Public Speaking" && !d.IsActive);
+
+            var activeOnly = await departments.ListAsync(includeInactive: false);
+            Assert.DoesNotContain(activeOnly, d => d.Id == created.Id);
+        }
+
+        [Fact]
+        public async Task Departments_UpdateAsync_AllowsSavingWithItsOwnUnchangedName()
+        {
+            // Guards against the classic "duplicate name" false-positive: the update's own
+            // conflict check must exclude the department being updated, not just any row.
+            var departments = CreateDepartmentService();
+            var created = await departments.CreateAsync(new SaveDepartmentRequest { Name = "Grammar" });
+
+            var updated = await departments.UpdateAsync(created.Id, new SaveDepartmentRequest
+            {
+                Name = "Grammar",
+                Description = "Same name, just adding a description.",
+                IsActive = true,
+            });
+
+            Assert.Equal("Grammar", updated.Name);
+        }
+
+        [Fact]
+        public async Task Departments_UpdateAsync_RejectsRenamingToAnotherDepartmentsName()
+        {
+            var departments = CreateDepartmentService();
+            await departments.CreateAsync(new SaveDepartmentRequest { Name = "MathsLab" });
+            var other = await departments.CreateAsync(new SaveDepartmentRequest { Name = "Bright Speakers Club" });
+
+            await Assert.ThrowsAsync<ConflictException>(() =>
+                departments.UpdateAsync(other.Id, new SaveDepartmentRequest { Name = "MathsLab" }));
+        }
+
+        [Fact]
+        public async Task Departments_UpdateAsync_ThrowsNotFound_ForAnUnknownId()
+        {
+            var departments = CreateDepartmentService();
+            await Assert.ThrowsAsync<NotFoundException>(() =>
+                departments.UpdateAsync(Guid.NewGuid(), new SaveDepartmentRequest { Name = "Anything" }));
+        }
+
+        [Fact]
+        public async Task Departments_NewlyCreatedOne_IsImmediatelyUsableForACourseCategory()
+        {
+            // End-to-end across the two services that actually matter for "add a department
+            // and use it": DepartmentService.CreateAsync's row must be visible to
+            // CourseService.CreateCategoryAsync's own lookup in the same unit of work.
+            var departments = CreateDepartmentService();
+            var courses = CreateCourseService();
+            var hindi = await departments.CreateAsync(new SaveDepartmentRequest { Name = "Hindi Ki Pathshala" });
+
+            var category = await courses.CreateCategoryAsync(
+                new CreateCourseCategoryRequest { Name = "Hindi Level 1", DepartmentId = hindi.Id });
+
+            Assert.Equal(hindi.Id, category.DepartmentId);
+            Assert.Equal("Hindi Ki Pathshala", category.DepartmentName);
         }
 
         [Fact]

@@ -18,7 +18,7 @@ namespace iucs.readernest.application.Services
             _auditLog = auditLog;
         }
 
-        public async Task<IReadOnlyList<DepartmentDto>> ListAsync(bool includeInactive = true, CancellationToken cancellationToken = default)
+        public async Task<IReadOnlyList<DepartmentDto>> ListAsync(bool includeInactive = false, CancellationToken cancellationToken = default)
         {
             var query = _unitOfWork.Repository<Department>().Query();
             if (!includeInactive)

@@ -4,7 +4,7 @@ namespace iucs.readernest.application.Services
 {
     public interface IDepartmentService
     {
-        Task<IReadOnlyList<DepartmentDto>> ListAsync(bool includeInactive = true, CancellationToken cancellationToken = default);
+        Task<IReadOnlyList<DepartmentDto>> ListAsync(bool includeInactive = false, CancellationToken cancellationToken = default);
 
         Task<DepartmentDto> CreateAsync(SaveDepartmentRequest request, CancellationToken cancellationToken = default);
 
