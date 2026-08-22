@@ -244,6 +244,28 @@ namespace iucs.readernest.api.Hubs
             await SendLeaderboardAsync(sessionId);
         }
 
+        /// <summary>
+        /// Teacher-initiated star for a named student — the manual counterpart to the
+        /// self-attributed <see cref="AwardStar"/> above (which only ever credits the caller's
+        /// own name), for rewarding participation that doesn't happen to run through the quiz
+        /// or a whiteboard mini-game. Teacher-only: this is the same trust boundary
+        /// GamificationService.GrantAsync already draws server-side (a Parent may only
+        /// self-report their own child's Star; a Teacher/Admin may name anyone in the class),
+        /// mirrored here since this call only touches the ephemeral live leaderboard — the
+        /// durable award is the client's separate POST /api/gamification/awards, which
+        /// re-checks that same rule independently.
+        /// </summary>
+        public async Task AwardStarToParticipant(string sessionId, string participantName)
+        {
+            if (!IsTeacherInRoom(sessionId) || string.IsNullOrWhiteSpace(participantName))
+            {
+                return;
+            }
+
+            AddLiveStar(sessionId, participantName.Trim());
+            await SendLeaderboardAsync(sessionId);
+        }
+
         // ---- celebrations + teacher controls ----
 
         public async Task Celebrate(string sessionId, string? message)

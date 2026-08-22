@@ -12,6 +12,7 @@ using iucs.readernest.application.Dto.Navigation;
 using iucs.readernest.application.Dto.Payouts;
 using iucs.readernest.application.Dto.Resources;
 using iucs.readernest.application.Dto.Portal;
+using iucs.readernest.application.Dto.Quizzes;
 using iucs.readernest.application.Dto.Reports;
 using iucs.readernest.application.Dto.Sessions;
 using iucs.readernest.application.Dto.Settings;
@@ -24,6 +25,7 @@ using iucs.readernest.domain.Entities.Auditing;
 using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Entities.Communication;
 using iucs.readernest.domain.Entities.Payouts;
+using iucs.readernest.domain.Entities.Quizzes;
 using iucs.readernest.domain.Entities.Sessions;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
@@ -91,6 +93,8 @@ namespace iucs.readernest.tests
 
         private DemoBookingService CreateDemoBookingService() =>
             new(_db.UnitOfWork, _auditLog, _emailSender, _emailTemplates, new FakeCrmNotifier(), new FakeJitsiTokenService(), NullLogger<DemoBookingService>.Instance);
+
+        private QuizQuestionService CreateQuizQuestionService() => new(_db.UnitOfWork, _auditLog, CreateSessionService());
 
         // ---- WBS business-rule coverage (Reader_Nest_LMS.pdf pp.28–32) ----
 
@@ -641,6 +645,168 @@ namespace iucs.readernest.tests
             Assert.Equal(SessionStatus.CarriedForward, (await _db.Context.ClassSessions.FindAsync(carried.Id))!.Status);
             var item = Assert.Single(_db.Context.PayoutItems.ToList());
             Assert.Equal(PayoutItemType.StudentNoShowWaiting, item.Type);
+        }
+
+        [Fact]
+        public async Task CreateQuizQuestion_RequiresExactlyOneCorrectOption()
+        {
+            var service = CreateQuizQuestionService();
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => service.CreateAsync(new SaveQuizQuestionRequest
+            {
+                DepartmentId = WellKnownDepartments.Phonics,
+                Prompt = "Which letter is silent in 'knee'?",
+                Options = [new() { Text = "K", IsCorrect = true }, new() { Text = "N", IsCorrect = true }],
+            }));
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => service.CreateAsync(new SaveQuizQuestionRequest
+            {
+                DepartmentId = WellKnownDepartments.Phonics,
+                Prompt = "Which letter is silent in 'knee'?",
+                Options = [new() { Text = "K", IsCorrect = false }, new() { Text = "N", IsCorrect = false }],
+            }));
+
+            Assert.Empty(_db.Context.QuizQuestions.ToList());
+        }
+
+        [Fact]
+        public async Task CreateQuizQuestion_WithCourseId_DerivesDepartmentFromTheCourse_IgnoringAMismatchedClientValue()
+        {
+            var (_, course, _) = await SeedBatchWithSessionAsync(totalSessions: 1); // course's real department is Phonics
+
+            var question = await CreateQuizQuestionService().CreateAsync(new SaveQuizQuestionRequest
+            {
+                CourseId = course.Id,
+                DepartmentId = WellKnownDepartments.Maths, // must be ignored/overridden, not trusted
+                Prompt = "Which word rhymes with 'cat'?",
+                Options = [new() { Text = "Hat", IsCorrect = true }, new() { Text = "Dog", IsCorrect = false }],
+            });
+
+            Assert.Equal(WellKnownDepartments.Phonics, question.DepartmentId);
+            Assert.Equal(course.Id, question.CourseId);
+        }
+
+        [Fact]
+        public async Task GetForSession_RegularBatchSession_ReturnsThisCoursesQuestionsBeforeDepartmentWideOnes_AndExcludesOtherCourses()
+        {
+            var (_, course, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var quizService = CreateQuizQuestionService();
+
+            var departmentWide = await quizService.CreateAsync(new SaveQuizQuestionRequest
+            {
+                DepartmentId = WellKnownDepartments.Phonics,
+                Prompt = "Department-wide question",
+                DisplayOrder = 1,
+                Options = [new() { Text = "A", IsCorrect = true }, new() { Text = "B", IsCorrect = false }],
+            });
+            var courseSpecific = await quizService.CreateAsync(new SaveQuizQuestionRequest
+            {
+                CourseId = course.Id,
+                Prompt = "Course-specific question",
+                DisplayOrder = 1,
+                Options = [new() { Text = "A", IsCorrect = true }, new() { Text = "B", IsCorrect = false }],
+            });
+            // A different department's question must never leak into this session's set.
+            await quizService.CreateAsync(new SaveQuizQuestionRequest
+            {
+                DepartmentId = WellKnownDepartments.Maths,
+                Prompt = "Unrelated maths question",
+                Options = [new() { Text = "A", IsCorrect = true }, new() { Text = "B", IsCorrect = false }],
+            });
+
+            var resolved = await quizService.GetForSessionAsync(session.Id, _db.CurrentUser.UserId!.Value);
+
+            Assert.Equal(2, resolved.Count);
+            Assert.Equal(courseSpecific.Id, resolved[0].Id); // this course's own question first
+            Assert.Equal(departmentWide.Id, resolved[1].Id);
+        }
+
+        [Fact]
+        public async Task GetForSession_DemoSession_ReturnsOnlyDepartmentWideQuestions()
+        {
+            var (session, booking) = await SeedDemoSessionAsync($"lead-{Guid.NewGuid():N}@test.com");
+            booking.DepartmentId = WellKnownDepartments.Phonics;
+            await _db.Context.SaveChangesAsync();
+            var demoTeacherUserId = _db.CurrentUser.UserId!.Value; // SeedBatchWithSessionAsync below reassigns this
+
+            var quizService = CreateQuizQuestionService();
+            var departmentWide = await quizService.CreateAsync(new SaveQuizQuestionRequest
+            {
+                DepartmentId = WellKnownDepartments.Phonics,
+                Prompt = "Department-wide question",
+                Options = [new() { Text = "A", IsCorrect = true }, new() { Text = "B", IsCorrect = false }],
+            });
+            // A real course's own question must not leak into a demo (which has no course).
+            var (_, course, _) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            await quizService.CreateAsync(new SaveQuizQuestionRequest
+            {
+                CourseId = course.Id,
+                Prompt = "Course-specific question",
+                Options = [new() { Text = "A", IsCorrect = true }, new() { Text = "B", IsCorrect = false }],
+            });
+
+            var resolved = await quizService.GetForSessionAsync(session.Id, demoTeacherUserId);
+
+            var only = Assert.Single(resolved);
+            Assert.Equal(departmentWide.Id, only.Id);
+        }
+
+        [Fact]
+        public async Task GetForSession_RejectsNonParticipant()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            await BecomeUnrelatedTeacherAsync();
+
+            await Assert.ThrowsAsync<ForbiddenException>(
+                () => CreateQuizQuestionService().GetForSessionAsync(session.Id, _db.CurrentUser.UserId!.Value));
+        }
+
+        [Fact]
+        public async Task UpdateQuizQuestion_ReplacesTheOptionSetWholesale()
+        {
+            var question = await CreateQuizQuestionService().CreateAsync(new SaveQuizQuestionRequest
+            {
+                DepartmentId = WellKnownDepartments.Phonics,
+                Prompt = "Original prompt",
+                Options = [new() { Text = "A", IsCorrect = true }, new() { Text = "B", IsCorrect = false }],
+            });
+
+            var updated = await CreateQuizQuestionService().UpdateAsync(question.Id, new SaveQuizQuestionRequest
+            {
+                DepartmentId = WellKnownDepartments.Phonics,
+                Prompt = "Edited prompt",
+                Options = [new() { Text = "X", IsCorrect = false }, new() { Text = "Y", IsCorrect = true }, new() { Text = "Z", IsCorrect = false }],
+            });
+
+            Assert.Equal("Edited prompt", updated.Prompt);
+            Assert.Equal(3, updated.Options.Count);
+            Assert.Equal(["X", "Y", "Z"], updated.Options.Select(o => o.Text));
+            Assert.True(updated.Options.Single(o => o.Text == "Y").IsCorrect);
+            // The old two-option set is gone, not left dangling alongside the new three.
+            Assert.Equal(3, _db.Context.QuizQuestionOptions.Where(o => o.QuizQuestionId == question.Id).Count());
+        }
+
+        [Fact]
+        public async Task DeleteQuizQuestion_SoftDeletes_AndNoLongerResolvesForSession()
+        {
+            var (_, course, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var quizService = CreateQuizQuestionService();
+            var question = await quizService.CreateAsync(new SaveQuizQuestionRequest
+            {
+                CourseId = course.Id,
+                Prompt = "Will be deleted",
+                Options = [new() { Text = "A", IsCorrect = true }, new() { Text = "B", IsCorrect = false }],
+            });
+
+            await quizService.DeleteAsync(question.Id);
+
+            Assert.Empty(await quizService.GetForSessionAsync(session.Id, _db.CurrentUser.UserId!.Value));
+            await Assert.ThrowsAsync<NotFoundException>(() => quizService.UpdateAsync(question.Id, new SaveQuizQuestionRequest
+            {
+                CourseId = course.Id,
+                Prompt = "x",
+                Options = [new() { Text = "A", IsCorrect = true }, new() { Text = "B", IsCorrect = false }],
+            }));
         }
 
         [Fact]
