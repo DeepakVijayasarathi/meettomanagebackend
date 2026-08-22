@@ -38,6 +38,7 @@ namespace iucs.readernest.domain.Data
         public DbSet<AccessRequest> AccessRequests => Set<AccessRequest>();
 
         // Academics
+        public DbSet<Department> Departments => Set<Department>();
         public DbSet<CourseCategory> CourseCategories => Set<CourseCategory>();
         public DbSet<Course> Courses => Set<Course>();
         public DbSet<Batch> Batches => Set<Batch>();

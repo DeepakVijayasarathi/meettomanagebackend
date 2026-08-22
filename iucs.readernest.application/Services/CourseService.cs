@@ -26,6 +26,7 @@ namespace iucs.readernest.application.Services
         public async Task<IReadOnlyList<CourseCategoryDto>> ListCategoriesAsync(CancellationToken cancellationToken = default)
         {
             var categories = await _unitOfWork.Repository<CourseCategory>().Query()
+                .Include(c => c.Department)
                 .OrderBy(c => c.Name)
                 .ToListAsync(cancellationToken);
 
@@ -44,11 +45,16 @@ namespace iucs.readernest.application.Services
                 throw new ConflictException($"A course category named '{name}' already exists.");
             }
 
+            if (!await _unitOfWork.Repository<Department>().ExistsAsync(d => d.Id == request.DepartmentId, cancellationToken))
+            {
+                throw new NotFoundException(nameof(Department), request.DepartmentId);
+            }
+
             var category = new CourseCategory
             {
                 Name = name,
                 Description = request.Description,
-                Department = request.Department,
+                DepartmentId = request.DepartmentId,
             };
             await repository.AddAsync(category, cancellationToken);
             await _auditLog.StageAsync(AuditAction.Create, nameof(CourseCategory), category.Id.ToString(), cancellationToken: cancellationToken);
@@ -59,7 +65,10 @@ namespace iucs.readernest.application.Services
 
         public async Task<IReadOnlyList<CourseDto>> ListAsync(bool includeInactive = false, CancellationToken cancellationToken = default)
         {
-            var query = _unitOfWork.Repository<Course>().Query().Include(c => c.CourseCategory).AsQueryable();
+            var query = _unitOfWork.Repository<Course>().Query()
+                .Include(c => c.CourseCategory)
+                .Include(c => c.Department)
+                .AsQueryable();
             if (!includeInactive)
             {
                 query = query.Where(c => c.IsActive);
@@ -122,6 +131,7 @@ namespace iucs.readernest.application.Services
         {
             var course = await _unitOfWork.Repository<Course>().Query()
                 .Include(c => c.CourseCategory)
+                .Include(c => c.Department)
                 .FirstOrDefaultAsync(c => c.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(Course), id);
 
@@ -132,7 +142,7 @@ namespace iucs.readernest.application.Services
 
         public async Task<CourseDto> CreateAsync(SaveCourseRequest request, CancellationToken cancellationToken = default)
         {
-            var category = await ValidateAsync(request, cancellationToken);
+            var (category, department) = await ValidateAsync(request, cancellationToken);
 
             var course = new Course
             {
@@ -144,7 +154,8 @@ namespace iucs.readernest.application.Services
                 DurationMinutes = request.DurationMinutes,
                 Price = request.Price,
                 TotalSessions = request.TotalSessions,
-                Department = request.Department,
+                DepartmentId = request.DepartmentId,
+                Department = department,
                 IsActive = request.IsActive,
             };
             await _unitOfWork.Repository<Course>().AddAsync(course, cancellationToken);
@@ -156,7 +167,7 @@ namespace iucs.readernest.application.Services
 
         public async Task<CourseDto> UpdateAsync(Guid id, SaveCourseRequest request, CancellationToken cancellationToken = default)
         {
-            var category = await ValidateAsync(request, cancellationToken);
+            var (category, department) = await ValidateAsync(request, cancellationToken);
             var course = await _unitOfWork.Repository<Course>().GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(Course), id);
 
@@ -205,7 +216,8 @@ namespace iucs.readernest.application.Services
             course.DurationMinutes = request.DurationMinutes;
             course.Price = request.Price;
             course.TotalSessions = request.TotalSessions;
-            course.Department = request.Department;
+            course.DepartmentId = request.DepartmentId;
+            course.Department = department;
             course.IsActive = request.IsActive;
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(Course), course.Id.ToString(), cancellationToken: cancellationToken);
@@ -214,15 +226,21 @@ namespace iucs.readernest.application.Services
             return course.ToDto();
         }
 
-        private async Task<CourseCategory> ValidateAsync(SaveCourseRequest request, CancellationToken cancellationToken)
+        private async Task<(CourseCategory Category, Department Department)> ValidateAsync(
+            SaveCourseRequest request, CancellationToken cancellationToken)
         {
             if (!AllowedDurations.Contains(request.DurationMinutes))
             {
                 throw new DomainValidationException("Class duration must be 30, 45 or 60 minutes.");
             }
 
-            return await _unitOfWork.Repository<CourseCategory>().GetByIdAsync(request.CourseCategoryId, cancellationToken)
+            var department = await _unitOfWork.Repository<Department>().GetByIdAsync(request.DepartmentId, cancellationToken)
+                ?? throw new NotFoundException(nameof(Department), request.DepartmentId);
+
+            var category = await _unitOfWork.Repository<CourseCategory>().GetByIdAsync(request.CourseCategoryId, cancellationToken)
                 ?? throw new NotFoundException(nameof(CourseCategory), request.CourseCategoryId);
+
+            return (category, department);
         }
     }
 }

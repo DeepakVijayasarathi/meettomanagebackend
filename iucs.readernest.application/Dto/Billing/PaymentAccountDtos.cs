@@ -10,7 +10,9 @@ namespace iucs.readernest.application.Dto.Billing
 
         public string Name { get; set; } = null!;
 
-        public Department Department { get; set; }
+        public Guid DepartmentId { get; set; }
+
+        public string DepartmentName { get; set; } = null!;
 
         public string GatewayProvider { get; set; } = null!;
 

@@ -59,7 +59,8 @@ namespace iucs.readernest.application.Services
         public async Task<IReadOnlyList<PaymentAccountDto>> ListPaymentAccountsAsync(CancellationToken cancellationToken = default)
         {
             var accounts = await _unitOfWork.Repository<PaymentAccount>().Query()
-                .OrderBy(a => a.Department)
+                .Include(a => a.Department)
+                .OrderBy(a => a.Department.Name)
                 .ToListAsync(cancellationToken);
 
             // One aggregate query for every account's totals, instead of pulling each
@@ -94,7 +95,8 @@ namespace iucs.readernest.application.Services
                 {
                     Id = account.Id,
                     Name = account.Name,
-                    Department = account.Department,
+                    DepartmentId = account.DepartmentId,
+                    DepartmentName = account.Department?.Name ?? string.Empty,
                     GatewayProvider = account.GatewayProvider,
                     GatewayAccountRef = account.GatewayAccountRef,
                     IsActive = account.IsActive,
@@ -143,7 +145,9 @@ namespace iucs.readernest.application.Services
             UpdatePaymentAccountRequest request,
             CancellationToken cancellationToken = default)
         {
-            var account = await _unitOfWork.Repository<PaymentAccount>().GetByIdAsync(id, cancellationToken)
+            var account = await _unitOfWork.Repository<PaymentAccount>().TrackedQuery()
+                .Include(a => a.Department)
+                .FirstOrDefaultAsync(a => a.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(PaymentAccount), id);
 
             account.Name = request.Name.Trim();
@@ -160,7 +164,8 @@ namespace iucs.readernest.application.Services
             {
                 Id = account.Id,
                 Name = account.Name,
-                Department = account.Department,
+                DepartmentId = account.DepartmentId,
+                DepartmentName = account.Department?.Name ?? string.Empty,
                 GatewayProvider = account.GatewayProvider,
                 GatewayAccountRef = account.GatewayAccountRef,
                 IsActive = account.IsActive,
@@ -285,9 +290,12 @@ namespace iucs.readernest.application.Services
                     .FirstOrDefaultAsync(a => a.Id == parent.PaymentAccountId.Value && a.IsActive, cancellationToken);
             }
 
+            var department = await _unitOfWork.Repository<Department>().GetByIdAsync(request.DepartmentId, cancellationToken)
+                ?? throw new NotFoundException(nameof(Department), request.DepartmentId);
+
             account ??= await _unitOfWork.Repository<PaymentAccount>()
-                .FirstOrDefaultAsync(a => a.Department == request.Department && a.IsActive, cancellationToken)
-                ?? throw new NotFoundException($"No active payment account is configured for the {request.Department} department.");
+                .FirstOrDefaultAsync(a => a.DepartmentId == request.DepartmentId && a.IsActive, cancellationToken)
+                ?? throw new NotFoundException($"No active payment account is configured for the {department.Name} department.");
 
             var invoice = new Invoice
             {
@@ -297,7 +305,7 @@ namespace iucs.readernest.application.Services
                 SubscriptionId = request.SubscriptionId,
                 CourseId = request.CourseId,
                 PaymentAccountId = account.Id,
-                Department = request.Department,
+                DepartmentId = request.DepartmentId,
                 Amount = request.Amount,
                 DueDate = request.DueDate,
                 IssuedAtUtc = DateTime.UtcNow,
@@ -329,7 +337,7 @@ namespace iucs.readernest.application.Services
                     {
                         ["ParentFirstName"] = parentUser.FirstName,
                         ["InvoiceNumber"] = invoice.InvoiceNumber,
-                        ["Department"] = invoice.Department.ToString(),
+                        ["Department"] = department.Name,
                         ["Amount"] = invoice.Amount.ToString("0.00"),
                         ["Currency"] = invoice.Currency,
                         ["DueDate"] = invoice.DueDate.ToString("yyyy-MM-dd"),
@@ -1496,7 +1504,7 @@ namespace iucs.readernest.application.Services
                         ChildId = request.ChildId,
                         SubscriptionId = subscription.Id,
                         CourseId = plan.CourseId,
-                        Department = await DepartmentForPlanAsync(plan, cancellationToken),
+                        DepartmentId = await DepartmentIdForPlanAsync(plan, cancellationToken),
                         Amount = plan.Price,
                         DueDate = today.AddDays(7),
                     },
@@ -1567,7 +1575,7 @@ namespace iucs.readernest.application.Services
                     ChildId = subscription.ChildId,
                     SubscriptionId = subscription.Id,
                     CourseId = plan.CourseId,
-                    Department = await DepartmentForPlanAsync(plan, cancellationToken),
+                    DepartmentId = await DepartmentIdForPlanAsync(plan, cancellationToken),
                     Amount = plan.Price,
                     DueDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(7),
                 },
@@ -1631,15 +1639,15 @@ namespace iucs.readernest.application.Services
         }
 
         /// <summary>Invoices route to the plan's course department; plans without a course default to Phonics.</summary>
-        private async Task<Department> DepartmentForPlanAsync(PackagePlan plan, CancellationToken cancellationToken)
+        private async Task<Guid> DepartmentIdForPlanAsync(PackagePlan plan, CancellationToken cancellationToken)
         {
             if (plan.CourseId is null)
             {
-                return Department.Phonics;
+                return WellKnownDepartments.Phonics;
             }
 
             var course = await _unitOfWork.Repository<Course>().GetByIdAsync(plan.CourseId.Value, cancellationToken);
-            return course?.Department ?? Department.Phonics;
+            return course?.DepartmentId ?? WellKnownDepartments.Phonics;
         }
 
         private IQueryable<Subscription> SubscriptionQuery()

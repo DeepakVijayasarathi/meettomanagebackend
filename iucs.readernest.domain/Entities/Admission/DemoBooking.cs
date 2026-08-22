@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Entities.Common;
 using iucs.readernest.domain.Entities.Sessions;
@@ -32,6 +33,8 @@ namespace iucs.readernest.domain.Entities.Admission
         public string ChildName { get; set; } = null!;
 
         public int? ChildAge { get; set; }
+
+        public Guid? DepartmentId { get; set; }
 
         public Department? Department { get; set; }
 

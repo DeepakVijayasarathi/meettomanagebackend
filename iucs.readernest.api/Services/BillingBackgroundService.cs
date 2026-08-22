@@ -2,6 +2,7 @@ using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Dto.Billing;
 using iucs.readernest.application.Services;
+using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
@@ -117,7 +118,7 @@ namespace iucs.readernest.api.Services
                                 CourseId = subscription.PackagePlan.CourseId,
                                 // Route to the department's payment account (dual-gateway requirement);
                                 // plans without a course default to Phonics
-                                Department = subscription.PackagePlan.Course?.Department ?? Department.Phonics,
+                                DepartmentId = subscription.PackagePlan.Course?.DepartmentId ?? WellKnownDepartments.Phonics,
                                 Amount = subscription.PackagePlan.Price,
                                 DueDate = DateOnly.FromDateTime(now.AddDays(7)),
                             },

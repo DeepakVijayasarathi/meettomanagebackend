@@ -15,7 +15,8 @@ namespace iucs.readernest.application.Mappings
                 Id = category.Id,
                 Name = category.Name,
                 Description = category.Description,
-                Department = category.Department,
+                DepartmentId = category.DepartmentId,
+                DepartmentName = category.Department?.Name ?? string.Empty,
             };
         }
 
@@ -32,7 +33,8 @@ namespace iucs.readernest.application.Mappings
                 DurationMinutes = course.DurationMinutes,
                 Price = course.Price,
                 TotalSessions = course.TotalSessions,
-                Department = course.Department,
+                DepartmentId = course.DepartmentId,
+                DepartmentName = course.Department?.Name ?? string.Empty,
                 IsActive = course.IsActive,
             };
         }

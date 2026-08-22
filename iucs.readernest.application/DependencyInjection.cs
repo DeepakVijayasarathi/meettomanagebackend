@@ -16,6 +16,7 @@ namespace iucs.readernest.application
             services.AddScoped<IAuthService, AuthService>();
             services.AddScoped<IUserService, UserService>();
             services.AddScoped<ICourseService, CourseService>();
+            services.AddScoped<IDepartmentService, DepartmentService>();
             services.AddScoped<IBatchService, BatchService>();
             services.AddScoped<ISessionService, SessionService>();
             services.AddScoped<IDemoBookingService, DemoBookingService>();

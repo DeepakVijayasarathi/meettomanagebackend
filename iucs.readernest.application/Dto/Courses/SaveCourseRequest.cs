@@ -32,7 +32,7 @@ namespace iucs.readernest.application.Dto.Courses
         public int TotalSessions { get; set; }
 
         [Required]
-        public Department Department { get; set; }
+        public Guid DepartmentId { get; set; }
 
         public bool IsActive { get; set; } = true;
     }

@@ -104,7 +104,7 @@ namespace iucs.readernest.application.Dto.Admission
         [Range(1, 25)]
         public int? ChildAge { get; set; }
 
-        public Department? Department { get; set; }
+        public Guid? DepartmentId { get; set; }
 
         /// <summary>The slot the visitor picked; the service fills in a fixed 30-minute end time.</summary>
         [Required]

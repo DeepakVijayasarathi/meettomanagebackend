@@ -60,7 +60,7 @@ namespace iucs.readernest.application.Services
             page = Math.Max(page, 1);
             pageSize = Math.Clamp(pageSize, 1, 100);
 
-            var query = _unitOfWork.Repository<User>().Query().Include(u => u.TeacherProfile).AsQueryable();
+            var query = _unitOfWork.Repository<User>().Query().Include(u => u.TeacherProfile).ThenInclude(t => t!.Department).AsQueryable();
 
             if (role.HasValue)
             {
@@ -99,7 +99,7 @@ namespace iucs.readernest.application.Services
             try
             {
                 var batch = await _unitOfWork.Repository<User>().Query()
-                    .Include(u => u.TeacherProfile)
+                    .Include(u => u.TeacherProfile).ThenInclude(t => t!.Department)
                     .Where(u => pageIds.Contains(u.Id))
                     .ToListAsync(cancellationToken);
                 var byId = batch.ToDictionary(u => u.Id);
@@ -119,7 +119,7 @@ namespace iucs.readernest.application.Services
                     try
                     {
                         var user = await _unitOfWork.Repository<User>().Query()
-                            .Include(u => u.TeacherProfile)
+                            .Include(u => u.TeacherProfile).ThenInclude(t => t!.Department)
                             .FirstAsync(u => u.Id == id, cancellationToken);
                         items.Add(user.ToDto());
                     }
@@ -145,7 +145,7 @@ namespace iucs.readernest.application.Services
         public async Task<UserDto> GetAsync(Guid id, CancellationToken cancellationToken = default)
         {
             var user = await _unitOfWork.Repository<User>().Query()
-                .Include(u => u.TeacherProfile)
+                .Include(u => u.TeacherProfile).ThenInclude(t => t!.Department)
                 .FirstOrDefaultAsync(u => u.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), id);
 
@@ -156,6 +156,7 @@ namespace iucs.readernest.application.Services
         {
             var teachers = await _unitOfWork.Repository<TeacherProfile>().Query()
                 .Include(t => t.User)
+                .Include(t => t.Department)
                 .Where(t => t.User.Status == UserStatus.Active)
                 .OrderBy(t => t.User.FirstName)
                 .ToListAsync(cancellationToken);
@@ -166,7 +167,8 @@ namespace iucs.readernest.application.Services
                     TeacherProfileId = t.Id,
                     UserId = t.UserId,
                     FullName = $"{t.User.FirstName} {t.User.LastName}".Trim(),
-                    Department = t.Department,
+                    DepartmentId = t.DepartmentId,
+                    DepartmentName = t.Department?.Name,
                 })
                 .ToList();
         }
@@ -222,7 +224,7 @@ namespace iucs.readernest.application.Services
                     break;
                 case UserRole.Teacher:
                     await _unitOfWork.Repository<TeacherProfile>()
-                        .AddAsync(new TeacherProfile { User = user, Department = request.Department }, cancellationToken);
+                        .AddAsync(new TeacherProfile { User = user, DepartmentId = request.DepartmentId }, cancellationToken);
                     break;
             }
 
@@ -270,7 +272,7 @@ namespace iucs.readernest.application.Services
         public async Task<UserDto> UpdateAsync(Guid id, UpdateUserRequest request, CancellationToken cancellationToken = default)
         {
             var user = await _unitOfWork.Repository<User>().TrackedQuery()
-                .Include(u => u.TeacherProfile)
+                .Include(u => u.TeacherProfile).ThenInclude(t => t!.Department)
                 .FirstOrDefaultAsync(u => u.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), id);
 
@@ -282,9 +284,9 @@ namespace iucs.readernest.application.Services
                 user.TimeZoneId = request.TimeZoneId;
             }
 
-            if (request.Department.HasValue && user.TeacherProfile is not null)
+            if (request.DepartmentId.HasValue && user.TeacherProfile is not null)
             {
-                user.TeacherProfile.Department = request.Department.Value;
+                user.TeacherProfile.DepartmentId = request.DepartmentId.Value;
             }
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(User), user.Id.ToString(), cancellationToken: cancellationToken);

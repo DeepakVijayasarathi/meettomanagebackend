@@ -5,6 +5,7 @@ using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Data;
 using iucs.readernest.domain.Data.Interceptors;
+using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Entities.Communication;
 using iucs.readernest.domain.Entities.Users;
@@ -215,6 +216,14 @@ namespace iucs.readernest.tests
             Context = new ReaderNestDbContext(options);
             Context.Database.EnsureCreated();
             UnitOfWork = new UnitOfWork(Context);
+
+            // Departments used to be a fixed 2-value enum; every smoke test that seeds a
+            // Course/CourseCategory/PaymentAccount/etc. still assumes Phonics/Maths exist under
+            // these well-known ids (same as DatabaseInitializer.SeedDepartmentsAsync in the real
+            // app, which this in-memory fixture bypasses entirely via EnsureCreated()).
+            Context.Departments.AddRange(
+                new Department { Id = WellKnownDepartments.Phonics, Name = "Phonics", IsActive = true },
+                new Department { Id = WellKnownDepartments.Maths, Name = "Maths", IsActive = true });
 
             // Same catalog production seeds, so smoke tests exercise real templated
             // content (Subject/HtmlBody) instead of EmailTemplateService's fallback text.

@@ -50,7 +50,7 @@ namespace iucs.readernest.api.Services.Payments
                 link_id = linkId,
                 link_amount = remaining,
                 link_currency = invoice.Currency,
-                link_purpose = $"The Reader Nest — invoice {invoice.InvoiceNumber} ({account.Department})",
+                link_purpose = $"The Reader Nest — invoice {invoice.InvoiceNumber} ({account.Department?.Name ?? account.Name})",
                 customer_details = new
                 {
                     customer_phone = Value(config, "fallbackCustomerPhone") ?? "9999999999",
@@ -58,7 +58,7 @@ namespace iucs.readernest.api.Services.Payments
                 link_notes = new Dictionary<string, string>
                 {
                     ["invoiceId"] = invoice.Id.ToString(),
-                    ["department"] = account.Department.ToString(),
+                    ["department"] = account.Department?.Name ?? account.Name,
                 },
             });
 

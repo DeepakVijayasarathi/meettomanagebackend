@@ -51,8 +51,8 @@ namespace iucs.readernest.api.Services.Payments
                 amount = (long)Math.Round(remaining * 100m), // paise
                 currency = invoice.Currency,
                 reference_id = $"{invoice.InvoiceNumber}-{Guid.NewGuid():N}"[..40],
-                description = $"The Reader Nest — invoice {invoice.InvoiceNumber} ({account.Department})",
-                notes = new { invoiceId = invoice.Id.ToString(), department = account.Department.ToString() },
+                description = $"The Reader Nest — invoice {invoice.InvoiceNumber} ({account.Department?.Name ?? account.Name})",
+                notes = new { invoiceId = invoice.Id.ToString(), department = account.Department?.Name ?? account.Name },
             });
 
             var client = _httpClientFactory.CreateClient(nameof(RazorpayGateway));
@@ -107,7 +107,7 @@ namespace iucs.readernest.api.Services.Payments
                 amount = amountMinor,
                 currency = invoice.Currency,
                 receipt = $"{invoice.InvoiceNumber}-{Guid.NewGuid():N}"[..40],
-                notes = new { invoiceId = invoice.Id.ToString(), department = account.Department.ToString() },
+                notes = new { invoiceId = invoice.Id.ToString(), department = account.Department?.Name ?? account.Name },
             });
 
             var client = _httpClientFactory.CreateClient(nameof(RazorpayGateway));
@@ -136,7 +136,7 @@ namespace iucs.readernest.api.Services.Payments
                 OrderId = json.RootElement.GetProperty("id").GetString()!,
                 AmountMinor = amountMinor,
                 Currency = invoice.Currency,
-                Description = $"The Reader Nest — invoice {invoice.InvoiceNumber} ({account.Department})",
+                Description = $"The Reader Nest — invoice {invoice.InvoiceNumber} ({account.Department?.Name ?? account.Name})",
                 PrefillName = payer.Name,
                 PrefillEmail = payer.Email,
                 PrefillContact = payer.Contact,

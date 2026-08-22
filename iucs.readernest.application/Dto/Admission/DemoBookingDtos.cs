@@ -42,7 +42,7 @@ namespace iucs.readernest.application.Dto.Admission
         [Range(1, 18)]
         public int? ChildAge { get; set; }
 
-        public Department? Department { get; set; }
+        public Guid? DepartmentId { get; set; }
 
         /// <summary>Omit to auto-assign the least-loaded available teacher (department-matched when set).</summary>
         public Guid? TeacherProfileId { get; set; }
@@ -82,7 +82,9 @@ namespace iucs.readernest.application.Dto.Admission
 
         public int? ChildAge { get; set; }
 
-        public Department? Department { get; set; }
+        public Guid? DepartmentId { get; set; }
+
+        public string? DepartmentName { get; set; }
 
         public ConversionStatus ConversionStatus { get; set; }
 

@@ -3,6 +3,7 @@ using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Dto.Admission;
 using iucs.readernest.application.Helper;
 using iucs.readernest.application.Mappings;
+using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Admission;
 using iucs.readernest.domain.Entities.Integrations;
 using iucs.readernest.domain.Entities.Sessions;
@@ -133,7 +134,7 @@ namespace iucs.readernest.application.Services
                     ParentPhone = request.ParentPhone,
                     ChildName = request.ChildName.Trim(),
                     ChildAge = request.ChildAge,
-                    Department = request.Department,
+                    DepartmentId = request.DepartmentId,
                     Participants = request.Participants
                         .Select(p =>
                         {
@@ -227,7 +228,9 @@ namespace iucs.readernest.application.Services
                 booking.ParentEmail,
                 booking.ParentPhone,
                 booking.ChildName,
-                Department = booking.Department?.ToString(),
+                Department = booking.DepartmentId.HasValue
+                    ? (await _unitOfWork.Repository<Department>().GetByIdAsync(booking.DepartmentId.Value, cancellationToken))?.Name
+                    : null,
                 DemoAtUtc = request.ScheduledStartAtUtc,
             }, cancellationToken);
 
@@ -269,9 +272,9 @@ namespace iucs.readernest.application.Services
         {
             IQueryable<TeacherProfile> teachers = _unitOfWork.Repository<TeacherProfile>().Query()
                 .Where(t => t.User.Status == UserStatus.Active);
-            if (request.Department.HasValue)
+            if (request.DepartmentId.HasValue)
             {
-                teachers = teachers.Where(t => t.Department == request.Department.Value);
+                teachers = teachers.Where(t => t.DepartmentId == request.DepartmentId.Value);
             }
 
             var dayStart = request.ScheduledStartAtUtc.Date;
@@ -504,7 +507,8 @@ namespace iucs.readernest.application.Services
         {
             return _unitOfWork.Repository<DemoBooking>().Query()
                 .Include(b => b.ClassSession!).ThenInclude(s => s.TeacherProfile).ThenInclude(t => t.User)
-                .Include(b => b.Participants);
+                .Include(b => b.Participants)
+                .Include(b => b.Department);
         }
     }
 }

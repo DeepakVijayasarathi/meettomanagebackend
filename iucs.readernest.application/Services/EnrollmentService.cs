@@ -282,13 +282,15 @@ namespace iucs.readernest.application.Services
                 return;
             }
 
-            var department = plan.Course?.Department ?? Department.Phonics;
+            var departmentId = plan.Course?.DepartmentId ?? WellKnownDepartments.Phonics;
             var departmentAccountActive = await _unitOfWork.Repository<PaymentAccount>().ExistsAsync(
-                a => a.Department == department && a.IsActive, cancellationToken);
+                a => a.DepartmentId == departmentId && a.IsActive, cancellationToken);
             if (!departmentAccountActive)
             {
+                var departmentName = (await _unitOfWork.Repository<Department>().GetByIdAsync(departmentId, cancellationToken))?.Name
+                    ?? "that";
                 throw new DomainValidationException(
-                    $"Cannot start billing: no active payment account is configured for the {department} department. " +
+                    $"Cannot start billing: no active payment account is configured for the {departmentName} department. " +
                     "Set one up under Payment Gateway Mapping, or approve without a plan and assign it later.");
             }
         }

@@ -3,6 +3,7 @@ using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Dto.Users;
 using iucs.readernest.domain.Data;
+using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Entities.Communication;
 using iucs.readernest.domain.Entities.Integrations;
@@ -33,6 +34,7 @@ namespace iucs.readernest.api.Data
 
             await SeedAdminAsync(scope.ServiceProvider, context, configuration);
             await EnsureAdminPinAsync(scope.ServiceProvider, context, configuration);
+            await SeedDepartmentsAsync(context);
             await SeedPaymentAccountsAsync(context);
             await SeedSettingsAsync(context);
             await SeedRolesAsync(context);
@@ -125,6 +127,25 @@ namespace iucs.readernest.api.Data
             }
         }
 
+        /// <summary>
+        /// Departments used to be a fixed 2-value enum (Phonics, Maths); now they're an
+        /// admin-manageable table (Settings/Departments screen can add more, e.g. Hindi,
+        /// Abacus, Spoken English) but the two original ones still seed under fixed, known
+        /// ids (<see cref="WellKnownDepartments"/>) so the handful of "default to Phonics"
+        /// fallbacks elsewhere (BillingService, EnrollmentService) have a stable id to use.
+        /// </summary>
+        private static async Task SeedDepartmentsAsync(ReaderNestDbContext context)
+        {
+            if (await context.Departments.AnyAsync())
+            {
+                return;
+            }
+
+            context.Departments.AddRange(
+                new Department { Id = WellKnownDepartments.Phonics, Name = "Phonics", IsActive = true },
+                new Department { Id = WellKnownDepartments.Maths, Name = "Maths", IsActive = true });
+        }
+
         private static async Task SeedPaymentAccountsAsync(ReaderNestDbContext context)
         {
             if (await context.PaymentAccounts.AnyAsync())
@@ -140,14 +161,14 @@ namespace iucs.readernest.api.Data
                 new PaymentAccount
                 {
                     Name = "Phonics Department Account",
-                    Department = Department.Phonics,
+                    DepartmentId = WellKnownDepartments.Phonics,
                     GatewayProvider = "razorpay",
                     GatewayAccountRef = "phonics-account",
                 },
                 new PaymentAccount
                 {
                     Name = "Maths Department Account",
-                    Department = Department.Maths,
+                    DepartmentId = WellKnownDepartments.Maths,
                     GatewayProvider = "cashfree",
                     GatewayAccountRef = "maths-account",
                 });

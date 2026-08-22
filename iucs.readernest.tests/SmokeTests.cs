@@ -479,15 +479,15 @@ namespace iucs.readernest.tests
         {
             var parentUser = await _db.SeedUserAsync($"dept-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
-            var phonics = new PaymentAccount { Name = "Phonics", Department = Department.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "ph" };
-            var maths = new PaymentAccount { Name = "Maths", Department = Department.Maths, GatewayProvider = "cashfree", GatewayAccountRef = "ma" };
+            var phonics = new PaymentAccount { Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "ph" };
+            var maths = new PaymentAccount { Name = "Maths", DepartmentId = WellKnownDepartments.Maths, GatewayProvider = "cashfree", GatewayAccountRef = "ma" };
             _db.Context.AddRange(parentProfile, phonics, maths);
             await _db.Context.SaveChangesAsync();
 
             var invoice = await CreateBillingService().CreateInvoiceAsync(new CreateInvoiceRequest
             {
                 ParentProfileId = parentProfile.Id,
-                Department = Department.Maths,
+                DepartmentId = WellKnownDepartments.Maths,
                 Amount = 500,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
@@ -501,7 +501,7 @@ namespace iucs.readernest.tests
         {
             var parentUser = await _db.SeedUserAsync($"page-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
-            var phonics = new PaymentAccount { Name = "Phonics", Department = Department.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "ph" };
+            var phonics = new PaymentAccount { Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "ph" };
             _db.Context.AddRange(parentProfile, phonics);
             await _db.Context.SaveChangesAsync();
 
@@ -511,7 +511,7 @@ namespace iucs.readernest.tests
                 await billing.CreateInvoiceAsync(new CreateInvoiceRequest
                 {
                     ParentProfileId = parentProfile.Id,
-                    Department = Department.Phonics,
+                    DepartmentId = WellKnownDepartments.Phonics,
                     Amount = 100 + i,
                     DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
                 });
@@ -569,12 +569,12 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"part-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             _db.Context.AddRange(parentProfile,
-                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
             await _db.Context.SaveChangesAsync();
             var billing = CreateBillingService();
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 1000,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
 
@@ -591,12 +591,12 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"inline-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             _db.Context.AddRange(parentProfile,
-                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "p" });
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "p" });
             await _db.Context.SaveChangesAsync();
             var billing = CreateBillingService();
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 1000,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
 
@@ -629,12 +629,12 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"susp-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             _db.Context.AddRange(parentProfile,
-                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
             await _db.Context.SaveChangesAsync();
             var billing = CreateBillingService();
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 800,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 800,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
             });
             _db.Context.FeeSuspensions.Add(new FeeSuspension
@@ -660,18 +660,18 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"multi-susp-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             _db.Context.AddRange(parentProfile,
-                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
             await _db.Context.SaveChangesAsync();
             var billing = CreateBillingService();
 
             var invoiceA = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 500,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 500,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-3)),
             });
             var invoiceB = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 300,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 300,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-3)),
             });
             // Simulates BillingBackgroundService's overdue sweep + suspension, without
@@ -699,12 +699,12 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"ref-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             _db.Context.AddRange(parentProfile,
-                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
             await _db.Context.SaveChangesAsync();
             var billing = CreateBillingService();
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 1000,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
             await billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1000 });
@@ -728,13 +728,13 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"ref-race-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             _db.Context.AddRange(parentProfile,
-                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
             await _db.Context.SaveChangesAsync();
 
             var billing = CreateBillingService(gateway);
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 1000,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
             await billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1000 });
@@ -876,12 +876,12 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"txn-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             _db.Context.AddRange(parentProfile,
-                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
             await _db.Context.SaveChangesAsync();
             var billing = CreateBillingService();
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 1000,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
             await billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1000 });
@@ -914,7 +914,7 @@ namespace iucs.readernest.tests
             var plan = new PackagePlan { Name = "Monthly", BillingType = BillingType.Subscription, BillingCycle = BillingCycle.Monthly, Price = 2000 };
             // Starting/renewing a subscription now issues its first invoice immediately,
             // which routes through the department's payment account.
-            var account = new PaymentAccount { Name = "Phonics", Department = Department.Phonics, GatewayProvider = "simulated", GatewayAccountRef = "ph" };
+            var account = new PaymentAccount { Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "simulated", GatewayAccountRef = "ph" };
             _db.Context.AddRange(parentProfile, plan, account);
             await _db.Context.SaveChangesAsync();
             var child = new Child { ParentProfileId = parentProfile.Id, FirstName = "Kid", LastName = "One", IsActive = true };
@@ -938,7 +938,7 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             var plan = new PackagePlan { Name = "Monthly", BillingType = BillingType.Subscription, BillingCycle = BillingCycle.Monthly, Price = 2000 };
-            var account = new PaymentAccount { Name = "Phonics", Department = Department.Phonics, GatewayProvider = "simulated", GatewayAccountRef = "ph" };
+            var account = new PaymentAccount { Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "simulated", GatewayAccountRef = "ph" };
             _db.Context.AddRange(parentProfile, plan, account);
             await _db.Context.SaveChangesAsync();
             var child = new Child { ParentProfileId = parentProfile.Id, FirstName = "Kid", LastName = "One", IsActive = true };
@@ -961,7 +961,7 @@ namespace iucs.readernest.tests
                 ParentProfileId = parentProfile.Id,
                 ChildId = child.Id,
                 SubscriptionId = sub.Id,
-                Department = Department.Phonics,
+                DepartmentId = WellKnownDepartments.Phonics,
                 Amount = 2000,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
@@ -1612,7 +1612,7 @@ namespace iucs.readernest.tests
         {
             var courseService = CreateCourseService();
             var category = await courseService.CreateCategoryAsync(
-                new CreateCourseCategoryRequest { Name = "Phonics", Department = Department.Phonics });
+                new CreateCourseCategoryRequest { Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics });
 
             await Assert.ThrowsAsync<DomainValidationException>(() => courseService.CreateAsync(new SaveCourseRequest
             {
@@ -1622,7 +1622,7 @@ namespace iucs.readernest.tests
                 DurationMinutes = 50,
                 Price = 1,
                 TotalSessions = 1,
-                Department = Department.Phonics,
+                DepartmentId = WellKnownDepartments.Phonics,
             }));
         }
 
@@ -1744,7 +1744,7 @@ namespace iucs.readernest.tests
             _db.Context.PaymentAccounts.Add(new PaymentAccount
             {
                 Name = "Phonics",
-                Department = Department.Phonics,
+                DepartmentId = WellKnownDepartments.Phonics,
                 GatewayProvider = "test",
                 GatewayAccountRef = "acc-1",
             });
@@ -1754,7 +1754,7 @@ namespace iucs.readernest.tests
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
                 ParentProfileId = parentProfile.Id,
-                Department = Department.Phonics,
+                DepartmentId = WellKnownDepartments.Phonics,
                 Amount = 1000,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
@@ -1770,8 +1770,8 @@ namespace iucs.readernest.tests
         public async Task CreateInvoice_RoutesThroughParentAccountOverride_WhenSet()
         {
             var parentUser = await _db.SeedUserAsync($"map-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
-            var phonics = new PaymentAccount { Name = "Phonics", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "ph" };
-            var maths = new PaymentAccount { Name = "Maths", Department = Department.Maths, GatewayProvider = "t", GatewayAccountRef = "ma" };
+            var phonics = new PaymentAccount { Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "ph" };
+            var maths = new PaymentAccount { Name = "Maths", DepartmentId = WellKnownDepartments.Maths, GatewayProvider = "t", GatewayAccountRef = "ma" };
             // Parent is pinned to the Maths account even though the invoice is a Phonics one.
             var parentProfile = new ParentProfile { UserId = parentUser.Id, PaymentAccount = maths };
             _db.Context.AddRange(phonics, maths, parentProfile);
@@ -1780,14 +1780,14 @@ namespace iucs.readernest.tests
             var invoice = await CreateBillingService().CreateInvoiceAsync(new CreateInvoiceRequest
             {
                 ParentProfileId = parentProfile.Id,
-                Department = Department.Phonics,
+                DepartmentId = WellKnownDepartments.Phonics,
                 Amount = 500,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
 
             var stored = await _db.Context.Invoices.FirstAsync(i => i.Id == invoice.Id);
             Assert.Equal(maths.Id, stored.PaymentAccountId); // override wins over the department account
-            Assert.Equal(Department.Phonics, stored.Department); // department still reflects the course
+            Assert.Equal(WellKnownDepartments.Phonics, stored.DepartmentId); // department still reflects the course
         }
 
         [Fact]
@@ -1799,7 +1799,7 @@ namespace iucs.readernest.tests
             _db.Context.PaymentAccounts.Add(new PaymentAccount
             {
                 Name = "Maths",
-                Department = Department.Maths,
+                DepartmentId = WellKnownDepartments.Maths,
                 GatewayProvider = "test",
                 GatewayAccountRef = "acc-2",
             });
@@ -1809,7 +1809,7 @@ namespace iucs.readernest.tests
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
                 ParentProfileId = parentProfile.Id,
-                Department = Department.Maths,
+                DepartmentId = WellKnownDepartments.Maths,
                 Amount = 2500,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
@@ -1830,7 +1830,7 @@ namespace iucs.readernest.tests
             _db.Context.PaymentAccounts.Add(new PaymentAccount
             {
                 Name = "Phonics",
-                Department = Department.Phonics,
+                DepartmentId = WellKnownDepartments.Phonics,
                 GatewayProvider = "razorpay",
                 GatewayAccountRef = "acc-1",
             });
@@ -1840,7 +1840,7 @@ namespace iucs.readernest.tests
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
                 ParentProfileId = parentProfile.Id,
-                Department = Department.Phonics,
+                DepartmentId = WellKnownDepartments.Phonics,
                 Amount = 800,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
@@ -1879,14 +1879,14 @@ namespace iucs.readernest.tests
             _db.Context.ParentProfiles.Add(parentProfile);
             _db.Context.PaymentAccounts.Add(new PaymentAccount
             {
-                Name = "Phonics", Department = Department.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "acc-1",
+                Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "acc-1",
             });
             await _db.Context.SaveChangesAsync();
 
             var billing = CreateBillingService();
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 1000,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
 
@@ -1915,7 +1915,7 @@ namespace iucs.readernest.tests
             _db.Context.PaymentAccounts.Add(new PaymentAccount
             {
                 Name = "Phonics",
-                Department = Department.Phonics,
+                DepartmentId = WellKnownDepartments.Phonics,
                 GatewayProvider = "razorpay",
                 GatewayAccountRef = "acc-1",
             });
@@ -1926,7 +1926,7 @@ namespace iucs.readernest.tests
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
                 ParentProfileId = parentProfile.Id,
-                Department = Department.Phonics,
+                DepartmentId = WellKnownDepartments.Phonics,
                 Amount = 950,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
@@ -1962,7 +1962,7 @@ namespace iucs.readernest.tests
             _db.Context.PaymentAccounts.Add(new PaymentAccount
             {
                 Name = "Maths",
-                Department = Department.Maths,
+                DepartmentId = WellKnownDepartments.Maths,
                 GatewayProvider = "cashfree",
                 GatewayAccountRef = "acc-2",
             });
@@ -1972,7 +1972,7 @@ namespace iucs.readernest.tests
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
                 ParentProfileId = parentProfile.Id,
-                Department = Department.Maths,
+                DepartmentId = WellKnownDepartments.Maths,
                 Amount = 1200,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
@@ -2195,13 +2195,13 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"ref-pending-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             _db.Context.AddRange(parentProfile,
-                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
             await _db.Context.SaveChangesAsync();
 
             var billing = CreateBillingService();
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 1000,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
 
@@ -2295,7 +2295,7 @@ namespace iucs.readernest.tests
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             var plan = new PackagePlan { Name = "Phonics Monthly", BillingType = BillingType.Subscription, BillingCycle = BillingCycle.Monthly, Price = 2500 };
             _db.Context.AddRange(parentProfile, plan,
-                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
             await _db.Context.SaveChangesAsync();
 
             var service = CreateEnrollmentService();
@@ -2374,8 +2374,8 @@ namespace iucs.readernest.tests
         {
             var teacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
             var teacher = new TeacherProfile { UserId = teacherUser.Id };
-            var category = new CourseCategory { Name = $"Cat-{Guid.NewGuid():N}", Department = Department.Phonics };
-            var course = new Course { CourseCategory = category, Name = "Course", Type = CourseType.Group, DurationMinutes = 45, Price = 100, TotalSessions = 1, Department = Department.Phonics };
+            var category = new CourseCategory { Name = $"Cat-{Guid.NewGuid():N}", DepartmentId = WellKnownDepartments.Phonics };
+            var course = new Course { CourseCategory = category, Name = "Course", Type = CourseType.Group, DurationMinutes = 45, Price = 100, TotalSessions = 1, DepartmentId = WellKnownDepartments.Phonics };
             var batch = new Batch { Course = course, TeacherProfile = teacher, Name = "Full Batch", Capacity = 1 };
             var parentProfile = new ParentProfile { UserId = (await _db.SeedUserAsync($"p1-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent)).Id };
             var seatedChild = new Child { ParentProfile = parentProfile, FirstName = "Seated", LastName = "Kid", IsActive = true };
@@ -2659,7 +2659,7 @@ namespace iucs.readernest.tests
             {
                 attempts++;
                 await _db.UnitOfWork.Repository<CourseCategory>().AddAsync(
-                    new CourseCategory { Name = "Retry Category", Department = Department.Phonics }, ct);
+                    new CourseCategory { Name = "Retry Category", DepartmentId = WellKnownDepartments.Phonics }, ct);
 
                 if (attempts == 1)
                 {
@@ -2688,7 +2688,7 @@ namespace iucs.readernest.tests
                 {
                     attempts++;
                     await _db.UnitOfWork.Repository<CourseCategory>().AddAsync(
-                        new CourseCategory { Name = "Doomed Category", Department = Department.Phonics }, ct);
+                        new CourseCategory { Name = "Doomed Category", DepartmentId = WellKnownDepartments.Phonics }, ct);
                     await _db.UnitOfWork.SaveChangesAsync(ct);
                     throw new DomainValidationException("business rule said no");
                 }));
@@ -3152,14 +3152,14 @@ namespace iucs.readernest.tests
         {
             var parentUser = await _db.SeedUserAsync($"susp-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
-            var account = new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" };
+            var account = new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" };
             _db.Context.AddRange(parentProfile, account);
             await _db.Context.SaveChangesAsync();
 
             var billing = CreateBillingService();
             var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 500,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 500,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
             });
             var suspension = new FeeSuspension
@@ -3286,13 +3286,13 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"ref-stack-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             _db.Context.AddRange(parentProfile,
-                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
             await _db.Context.SaveChangesAsync();
 
             var billing1 = CreateBillingService(gateway);
             var invoice = await billing1.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = 1000,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 1000,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
             await billing1.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1000 });
@@ -3359,7 +3359,7 @@ namespace iucs.readernest.tests
             };
             var account = new PaymentAccount
             {
-                Name = "Phonics", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p",
+                Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p",
             };
             _db.Context.AddRange(parentProfile, plan, account);
             await _db.Context.SaveChangesAsync();
@@ -3563,13 +3563,13 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"inv-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             _db.Context.AddRange(parentProfile,
-                new PaymentAccount { Name = "P", Department = Department.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
             await _db.Context.SaveChangesAsync();
 
             var billing = CreateBillingService();
             var dto = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
             {
-                ParentProfileId = parentProfile.Id, Department = Department.Phonics, Amount = amount,
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = amount,
                 DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
             });
             return (billing, await _db.Context.Invoices.AsNoTracking().FirstAsync(i => i.Id == dto.Id));
@@ -3629,7 +3629,7 @@ namespace iucs.readernest.tests
         {
             var teacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
             var teacher = new TeacherProfile { UserId = teacherUser.Id };
-            var category = new CourseCategory { Name = $"Cat-{Guid.NewGuid():N}", Department = Department.Phonics };
+            var category = new CourseCategory { Name = $"Cat-{Guid.NewGuid():N}", DepartmentId = WellKnownDepartments.Phonics };
             var course = new Course
             {
                 CourseCategory = category,
@@ -3638,7 +3638,7 @@ namespace iucs.readernest.tests
                 DurationMinutes = 45,
                 Price = 100,
                 TotalSessions = totalSessions,
-                Department = Department.Phonics,
+                DepartmentId = WellKnownDepartments.Phonics,
             };
             var batch = new Batch { Course = course, TeacherProfile = teacher, Name = "Batch", Capacity = 5 };
             _db.Context.AddRange(teacher, category, course, batch);
@@ -3851,7 +3851,7 @@ namespace iucs.readernest.tests
                 var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
                 {
                     ParentProfileId = mine.Id,
-                    Department = Department.Phonics,
+                    DepartmentId = WellKnownDepartments.Phonics,
                     Amount = 100 + i,
                     DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
                 });
@@ -3863,7 +3863,7 @@ namespace iucs.readernest.tests
                 await billing.CreateInvoiceAsync(new CreateInvoiceRequest
                 {
                     ParentProfileId = other.Id,
-                    Department = Department.Phonics,
+                    DepartmentId = WellKnownDepartments.Phonics,
                     Amount = 900,
                     DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
                 });
@@ -3925,7 +3925,7 @@ namespace iucs.readernest.tests
                 await billing.CreateInvoiceAsync(new CreateInvoiceRequest
                 {
                     ParentProfileId = parentProfile.Id,
-                    Department = Department.Phonics,
+                    DepartmentId = WellKnownDepartments.Phonics,
                     Amount = 100 + i,
                     DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
                 });
@@ -4079,7 +4079,7 @@ namespace iucs.readernest.tests
                     DurationMinutes = durationMinutes,
                     Price = course.Price,
                     TotalSessions = totalSessions,
-                    Department = course.Department,
+                    DepartmentId = course.DepartmentId,
                     IsActive = true,
                 });
 
@@ -4564,12 +4564,12 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"inv-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             _db.Context.Add(parentProfile);
-            if (!await _db.Context.PaymentAccounts.AnyAsync(a => a.Department == Department.Phonics))
+            if (!await _db.Context.PaymentAccounts.AnyAsync(a => a.DepartmentId == WellKnownDepartments.Phonics))
             {
                 _db.Context.Add(new PaymentAccount
                 {
                     Name = "Phonics",
-                    Department = Department.Phonics,
+                    DepartmentId = WellKnownDepartments.Phonics,
                     GatewayProvider = "razorpay",
                     GatewayAccountRef = "ph",
                 });
@@ -4584,7 +4584,7 @@ namespace iucs.readernest.tests
             var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
             var parentProfile = new ParentProfile { UserId = parentUser.Id };
             var child = new Child { ParentProfile = parentProfile, FirstName = "Kid", LastName = "One" };
-            var category = new CourseCategory { Name = $"Cat-{Guid.NewGuid():N}", Department = Department.Phonics };
+            var category = new CourseCategory { Name = $"Cat-{Guid.NewGuid():N}", DepartmentId = WellKnownDepartments.Phonics };
             var course = new Course
             {
                 CourseCategory = category,
@@ -4593,7 +4593,7 @@ namespace iucs.readernest.tests
                 DurationMinutes = 45,
                 Price = 100,
                 TotalSessions = 8,
-                Department = Department.Phonics,
+                DepartmentId = WellKnownDepartments.Phonics,
             };
             var plan = new PackagePlan
             {
@@ -4606,7 +4606,7 @@ namespace iucs.readernest.tests
             var account = new PaymentAccount
             {
                 Name = "Phonics",
-                Department = Department.Phonics,
+                DepartmentId = WellKnownDepartments.Phonics,
                 GatewayProvider = "razorpay",
                 GatewayAccountRef = "ph",
             };

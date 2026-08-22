@@ -69,7 +69,9 @@ namespace iucs.readernest.application.Dto.Billing
 
         public string? ParentEmail { get; set; }
 
-        public Department Department { get; set; }
+        public Guid DepartmentId { get; set; }
+
+        public string DepartmentName { get; set; } = null!;
 
         public decimal Amount { get; set; }
 
@@ -100,7 +102,7 @@ namespace iucs.readernest.application.Dto.Billing
 
         /// <summary>Routes the invoice to the department's payment account (dual-gateway requirement).</summary>
         [Required]
-        public Department Department { get; set; }
+        public Guid DepartmentId { get; set; }
 
         [Required]
         [Range(0.01, 9_999_999)]

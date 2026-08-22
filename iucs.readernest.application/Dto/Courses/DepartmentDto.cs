@@ -2,7 +2,7 @@ using System.ComponentModel.DataAnnotations;
 
 namespace iucs.readernest.application.Dto.Courses
 {
-    public class CourseCategoryDto
+    public class DepartmentDto
     {
         public Guid Id { get; set; }
 
@@ -10,21 +10,19 @@ namespace iucs.readernest.application.Dto.Courses
 
         public string? Description { get; set; }
 
-        public Guid DepartmentId { get; set; }
-
-        public string DepartmentName { get; set; } = null!;
+        public bool IsActive { get; set; }
     }
 
-    public class CreateCourseCategoryRequest
+    /// <summary>Shared shape for create and update of a department.</summary>
+    public class SaveDepartmentRequest
     {
         [Required]
-        [MaxLength(150)]
+        [MaxLength(100)]
         public string Name { get; set; } = null!;
 
         [MaxLength(500)]
         public string? Description { get; set; }
 
-        [Required]
-        public Guid DepartmentId { get; set; }
+        public bool IsActive { get; set; } = true;
     }
 }

@@ -27,7 +27,9 @@ namespace iucs.readernest.domain.Entities.Academics
         public int TotalSessions { get; set; }
 
         /// <summary>Determines which payment gateway account invoices are routed to.</summary>
-        public Department Department { get; set; }
+        public Guid DepartmentId { get; set; }
+
+        public Department Department { get; set; } = null!;
 
         public bool IsActive { get; set; } = true;
     }

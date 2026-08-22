@@ -101,7 +101,7 @@ namespace iucs.readernest.application.Services
                     ParentPhone = request.ParentPhone.Trim(),
                     ChildName = request.ChildName.Trim(),
                     ChildAge = request.ChildAge,
-                    Department = request.Department,
+                    DepartmentId = request.DepartmentId,
                     TeacherProfileId = null,
                     ScheduledStartAtUtc = request.PreferredStartAtUtc,
                     ScheduledEndAtUtc = request.PreferredStartAtUtc.AddMinutes(DemoDurationMinutes),
@@ -119,7 +119,7 @@ namespace iucs.readernest.application.Services
 
         public async Task<IReadOnlyList<AvailableDemoSlotDto>> ListAvailableDemoSlotsAsync(
             DateOnly date,
-            Department? department,
+            Guid? departmentId,
             CancellationToken cancellationToken = default)
         {
             var zone = TimeZoneInfo.FindSystemTimeZoneById(DateTimeDisplay.DefaultTimeZoneId);
@@ -138,9 +138,9 @@ namespace iucs.readernest.application.Services
 
             IQueryable<TeacherProfile> teachers = _unitOfWork.Repository<TeacherProfile>().Query()
                 .Where(t => t.User.Status == UserStatus.Active);
-            if (department.HasValue)
+            if (departmentId.HasValue)
             {
-                teachers = teachers.Where(t => t.Department == department.Value);
+                teachers = teachers.Where(t => t.DepartmentId == departmentId.Value);
             }
             var teacherIds = await teachers.Select(t => t.Id).ToListAsync(cancellationToken);
             if (teacherIds.Count == 0)

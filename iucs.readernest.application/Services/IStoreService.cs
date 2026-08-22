@@ -22,7 +22,7 @@ namespace iucs.readernest.application.Services
         /// </summary>
         Task<IReadOnlyList<AvailableDemoSlotDto>> ListAvailableDemoSlotsAsync(
             DateOnly date,
-            Department? department,
+            Guid? departmentId,
             CancellationToken cancellationToken = default);
 
         Task<IReadOnlyList<StoreInquiryDto>> ListInquiriesAsync(StoreInquiryStatus? status, CancellationToken cancellationToken = default);

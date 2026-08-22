@@ -56,10 +56,10 @@ namespace iucs.readernest.api.Controllers
         [EnableRateLimiting("store-inquiry")]
         public async Task<ActionResult<IReadOnlyList<AvailableDemoSlotDto>>> DemoAvailability(
             [FromQuery] DateOnly date,
-            [FromQuery] Department? department,
+            [FromQuery] Guid? departmentId,
             CancellationToken cancellationToken)
         {
-            return Ok(await _storeService.ListAvailableDemoSlotsAsync(date, department, cancellationToken));
+            return Ok(await _storeService.ListAvailableDemoSlotsAsync(date, departmentId, cancellationToken));
         }
     }
 

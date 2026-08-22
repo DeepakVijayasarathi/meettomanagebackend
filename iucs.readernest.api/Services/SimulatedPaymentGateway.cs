@@ -31,7 +31,7 @@ namespace iucs.readernest.api.Services
             var reference = $"SIM-{Guid.NewGuid():N}";
             _logger.LogInformation(
                 "Simulated payment link for invoice {InvoiceNumber} via {Method}/{Provider}/{AccountRef} ({Department}): ref {Reference}",
-                invoice.InvoiceNumber, preferredMethodKey, account.GatewayProvider, account.GatewayAccountRef, account.Department, reference);
+                invoice.InvoiceNumber, preferredMethodKey, account.GatewayProvider, account.GatewayAccountRef, account.Department?.Name ?? account.Name, reference);
 
             return Task.FromResult(new PaymentLinkResult
             {
