@@ -1710,15 +1710,39 @@ namespace iucs.readernest.tests
             var service = CreateUserService();
             var admin = await _db.SeedUserAsync($"solo-admin-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
             var otherAdmin = await _db.SeedUserAsync($"other-admin-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
-            var subAdmin = await _db.SeedUserAsync($"sa-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
 
             await Assert.ThrowsAsync<DomainValidationException>(() => service.DeleteAsync(admin.Id, admin.Id));
 
-            // Two admins exist — deleting one is fine.
+            // Two admins exist — deleting one, called by another Admin, is fine.
             await service.DeleteAsync(otherAdmin.Id, admin.Id);
 
-            // Now only one admin remains — deleting it is blocked.
-            await Assert.ThrowsAsync<ConflictException>(() => service.DeleteAsync(admin.Id, subAdmin.Id));
+            // Only "admin" remains now. Its own DeleteAsync(admin.Id, admin.Id) is blocked by
+            // the self-delete guard above before it ever reaches the "last admin" ceiling — with
+            // the caller-must-be-Admin rule this file also adds (see the test below), that
+            // ceiling can no longer be reached via any other legitimate caller either, since a
+            // distinct Admin caller always implies at least one admin besides the target still
+            // exists. It stays in the code as a defense-in-depth backstop, not dead weight to
+            // delete, but there is no longer a legitimate call shape left to pin it against.
+        }
+
+        /// <summary>
+        /// BUG (authorization audit, 2026-08-22): DeleteAsync's "last admin" guard checked
+        /// only how many Admin rows existed, never who was calling — a Sub Admin holding
+        /// nothing more than UserManagement:Delete could remove any *non-last* Admin account
+        /// outright. Only a genuine Admin caller may delete another Admin account at all.
+        /// </summary>
+        [Fact]
+        public async Task DeleteUser_RefusesANonAdminCaller_DeletingAnAdminAccount()
+        {
+            var service = CreateUserService();
+            var admin = await _db.SeedUserAsync($"admin-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
+            var otherAdmin = await _db.SeedUserAsync($"other-admin-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
+            var subAdmin = await _db.SeedUserAsync($"sa-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
+
+            await Assert.ThrowsAsync<ForbiddenException>(() => service.DeleteAsync(otherAdmin.Id, subAdmin.Id));
+
+            // The rejected attempt must not have deleted anything.
+            Assert.NotNull(await _db.Context.Users.FirstOrDefaultAsync(u => u.Id == otherAdmin.Id));
         }
 
         [Fact]
@@ -4671,6 +4695,90 @@ namespace iucs.readernest.tests
             Assert.True(_hasher.Verify(temporaryPin, stored.PinHash)); // and it's the one actually returned
             Assert.False(_hasher.Verify("old-pin", stored.PinHash)); // the old PIN no longer works
             verifyContext.Dispose();
+        }
+
+        /// <summary>
+        /// BUG (authorization audit, 2026-08-22): every account — Admin included — logs in
+        /// with email+PIN alone, and ResetPinAsync hands the new PIN straight back in the
+        /// response. Without this guard, anyone holding UserManagement:Edit (a routine,
+        /// mid-tier grant) could reset the Admin account's PIN and read it off the screen —
+        /// a full account takeover. ChangeRoleAsync already refused to touch Admin accounts;
+        /// this closes the same hole for the reset/status/delete actions.
+        /// </summary>
+        [Fact]
+        public async Task ResetPin_RefusesAnAdminTarget()
+        {
+            var admin = await _db.SeedUserAsync($"admin-{Guid.NewGuid():N}@test.com", "old-pin", UserRole.Admin);
+            var originalHash = admin.PinHash;
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => CreateUserService().ResetPinAsync(admin.Id));
+
+            var stored = await _db.Context.Users.FirstAsync(u => u.Id == admin.Id);
+            Assert.Equal(originalHash, stored.PinHash); // untouched
+        }
+
+        [Fact]
+        public async Task SetStatus_RefusesAnAdminTarget()
+        {
+            var admin = await _db.SeedUserAsync($"admin-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin, status: UserStatus.Active);
+
+            await Assert.ThrowsAsync<DomainValidationException>(
+                () => CreateUserService().SetStatusAsync(admin.Id, UserStatus.Suspended));
+
+            var stored = await _db.Context.Users.FirstAsync(u => u.Id == admin.Id);
+            Assert.Equal(UserStatus.Active, stored.Status); // untouched
+        }
+
+        /// <summary>
+        /// BUG (authorization audit, 2026-08-22): SetPermissionsAsync let any caller holding
+        /// UserManagement:Edit hand a Sub Admin colleague a bigger permission matrix than the
+        /// caller holds themselves — e.g. a Sub Admin with only UserManagement:Edit granting
+        /// BillingFinance:Approve or Settings:Edit to a colleague, escalating privilege by
+        /// proxy. A genuine Admin caller is unaffected (bypasses the SubAdminPermission table
+        /// entirely per PermissionAuthorizationHandler) and can still grant anything.
+        /// </summary>
+        [Fact]
+        public async Task SetPermissions_RefusesGrantingAModuleTheCallerDoesNotHoldThemselves()
+        {
+            var caller = await _db.SeedUserAsync($"caller-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
+            var target = await _db.SeedUserAsync($"target-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
+            _db.Context.SubAdminPermissions.Add(new SubAdminPermission
+            {
+                UserId = caller.Id,
+                Module = PermissionModule.UserManagement,
+                CanView = true,
+                CanEdit = true,
+            });
+            await _db.Context.SaveChangesAsync();
+            _db.Context.ChangeTracker.Clear();
+
+            var service = CreateUserService();
+            await Assert.ThrowsAsync<ForbiddenException>(() => service.SetPermissionsAsync(
+                target.Id, caller.Id,
+                [new PermissionDto { Module = PermissionModule.BillingFinance, CanApprove = true }]));
+
+            // Nothing was granted — the target's permission set is untouched.
+            Assert.Empty(await _db.Context.SubAdminPermissions.Where(p => p.UserId == target.Id).ToListAsync());
+
+            // Granting exactly what the caller already holds (or less) still works.
+            await service.SetPermissionsAsync(
+                target.Id, caller.Id,
+                [new PermissionDto { Module = PermissionModule.UserManagement, CanView = true }]);
+            Assert.True(await _db.Context.SubAdminPermissions.AnyAsync(
+                p => p.UserId == target.Id && p.Module == PermissionModule.UserManagement && p.CanView));
+            // Production hands each request its own DbContext; this test's shared one still
+            // tracks the row SetPermissionsAsync just added above, so the next call's own
+            // Query()/Remove() on that same row needs a clean slate (mirrors the established
+            // pattern for repeated SetPermissionsAsync calls against one context elsewhere).
+            _db.Context.ChangeTracker.Clear();
+
+            // An Admin caller is unrestricted by their own (nonexistent) SubAdminPermission rows.
+            var admin = await _db.SeedUserAsync($"admin-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
+            await service.SetPermissionsAsync(
+                target.Id, admin.Id,
+                [new PermissionDto { Module = PermissionModule.BillingFinance, CanApprove = true }]);
+            Assert.True(await _db.Context.SubAdminPermissions.AnyAsync(
+                p => p.UserId == target.Id && p.Module == PermissionModule.BillingFinance && p.CanApprove));
         }
 
         /// <summary>
