@@ -43,6 +43,7 @@ namespace iucs.readernest.api.Data
             await RemoveRetiredMenusAsync(context);
             await EnsureSubAdminIntegrationsMenuAsync(context);
             await EnsurePackagesAndStudentViewMenusAsync(context);
+            await EnsureAdminDepartmentsMenuAsync(context);
             await BackfillMenuRequiredModulesAsync(context);
             await SeedIntegrationsAsync(context);
             await EnsureCashPaymentMethodAsync(context);
@@ -461,6 +462,7 @@ namespace iucs.readernest.api.Data
         [
             ("admin", null, "Dashboard", "/admin", "LayoutDashboard", null),
             ("admin", "Academics", "Courses", "/admin/courses", "BookOpen", PermissionModule.CourseBatchManagement),
+            ("admin", "Academics", "Departments", "/admin/departments", "Building2", PermissionModule.CourseBatchManagement),
             ("admin", "Academics", "Batches", "/admin/batches", "Layers", PermissionModule.CourseBatchManagement),
             ("admin", "Academics", "Academic Calendar", "/admin/calendar", "CalendarDays", PermissionModule.SessionCalendarManagement),
             ("admin", "Academics", "Sessions", "/admin/sessions", "CalendarClock", PermissionModule.SessionCalendarManagement),
@@ -640,6 +642,46 @@ namespace iucs.readernest.api.Data
                     RequiredModule = null,
                 });
             }
+        }
+
+        /// <summary>
+        /// Inserts the Admin "Departments" menu item into a database that was seeded before
+        /// the dynamic Department feature existed (SeedMenusAsync only ever creates rows
+        /// once). Slotted directly after "Courses" in Academics, nudging Batches/Calendar/
+        /// Sessions down a slot so nothing collides. Mirrors EnsureSubAdminIntegrationsMenuAsync.
+        /// </summary>
+        private static async Task EnsureAdminDepartmentsMenuAsync(ReaderNestDbContext context)
+        {
+            const string path = "/admin/departments";
+            if (context.MenuItems.Local.Any(m => m.Portal == "admin" && m.Path == path) ||
+                await context.MenuItems.AnyAsync(m => m.Portal == "admin" && m.Path == path))
+            {
+                return;
+            }
+
+            var courses = await context.MenuItems
+                .FirstOrDefaultAsync(m => m.Portal == "admin" && m.Path == "/admin/courses");
+            var academicsItems = await context.MenuItems
+                .Where(m => m.Portal == "admin" && m.Section == "Academics")
+                .ToListAsync();
+            var insertAt = (courses?.SortOrder ?? -1) + 1;
+            foreach (var item in academicsItems.Where(m => m.SortOrder >= insertAt))
+            {
+                item.SortOrder += 1;
+            }
+
+            context.MenuItems.Add(new MenuItem
+            {
+                Portal = "admin",
+                Section = "Academics",
+                SectionOrder = courses?.SectionOrder ?? 1,
+                Label = "Departments",
+                Path = path,
+                Icon = "Building2",
+                SortOrder = insertAt,
+                IsActive = true,
+                RequiredModule = PermissionModule.CourseBatchManagement,
+            });
         }
 
         private static async Task SeedMenusAsync(ReaderNestDbContext context)
