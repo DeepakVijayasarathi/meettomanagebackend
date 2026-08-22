@@ -57,6 +57,18 @@ namespace iucs.readernest.domain.Entities.Users
         public DateTime? LastLoginAtUtc { get; set; }
 
         /// <summary>
+        /// Consecutive failed login attempts since the last success. The login endpoint's
+        /// rate limit (see Program.cs's "login" policy) partitions by IP only — with a 4-digit
+        /// PIN's 10,000-value keyspace, an attacker who knows one target's email can spread
+        /// attempts across a modest number of source IPs and brute-force that one account with
+        /// no server-side signal it's under attack. This adds a per-account lockout on top.
+        /// </summary>
+        public int FailedLoginAttempts { get; set; }
+
+        /// <summary>Set once FailedLoginAttempts crosses AuthService's threshold; null once cleared by a successful login.</summary>
+        public DateTime? LockoutEndUtc { get; set; }
+
+        /// <summary>
         /// Named role (preset) currently assigned; drives the post-login default
         /// route. Only meaningful for Sub Admin accounts today.
         /// </summary>

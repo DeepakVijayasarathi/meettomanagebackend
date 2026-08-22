@@ -19,6 +19,8 @@ namespace iucs.readernest.api.Hubs
     {
         private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ParticipantState>> Rooms = new();
         private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, int>> Scores = new();
+        // Keyed "{sessionId}:{connectionId}:{questionIndex}" — see AnswerQuiz for why this exists.
+        private static readonly ConcurrentDictionary<string, byte> AnsweredQuestions = new();
 
         private readonly ISessionService _sessionService;
         private readonly IGamificationService _gamificationService;
@@ -189,10 +191,26 @@ namespace iucs.readernest.api.Hubs
             await Clients.Group(Group(sessionId)).SendAsync("QuizEnded");
         }
 
-        /// <summary>Student answer: correct answers score a star; the leaderboard broadcasts live.</summary>
+        /// <summary>
+        /// Student answer: correct answers score a star; the leaderboard broadcasts live.
+        /// `correct` is reported by the client and isn't independently verifiable here — the
+        /// quiz question bank lives entirely in the frontend, so the server has no way to look
+        /// up the actual right answer for a given questionIndex. That means a single dishonest
+        /// claim per question can't be ruled out architecturally, but this method used to be
+        /// callable directly (bypassing the UI's own one-answer-per-question guard) any number
+        /// of times for the same question, letting one participant repeatedly credit themselves
+        /// and inflate the whole class's live leaderboard. The dedup below caps the exposure at
+        /// one claim per (connection, question) — matching what the UI already enforces — rather
+        /// than leaving it fully open to a direct hub invoke.
+        /// </summary>
         public async Task AnswerQuiz(string sessionId, int questionIndex, int selectedIndex, bool correct)
         {
             if (!IsJoined(sessionId))
+            {
+                return;
+            }
+
+            if (!AnsweredQuestions.TryAdd($"{sessionId}:{Context.ConnectionId}:{questionIndex}", 0))
             {
                 return;
             }
@@ -279,6 +297,10 @@ namespace iucs.readernest.api.Hubs
                 {
                     Rooms.TryRemove(sessionId, out _);
                     Scores.TryRemove(sessionId, out _); // class over — scoreboard resets
+                    foreach (var key in AnsweredQuestions.Keys.Where(k => k.StartsWith($"{sessionId}:", StringComparison.Ordinal)))
+                    {
+                        AnsweredQuestions.TryRemove(key, out _);
+                    }
                 }
                 else
                 {

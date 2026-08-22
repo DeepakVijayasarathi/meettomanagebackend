@@ -1212,6 +1212,51 @@ namespace iucs.readernest.tests
                 CreateAuthService().LoginAsync(new LoginRequest { Email = "admin@test.com", Pin = "0000" }));
         }
 
+        /// <summary>
+        /// The login endpoint's rate limit (Program.cs) partitions by IP only — with no
+        /// per-account counter, an attacker who knows one target's email and spreads attempts
+        /// across a few source IPs could otherwise brute-force a 4-digit PIN's full 10,000-value
+        /// keyspace against that one account with no server-side signal it's under attack.
+        /// </summary>
+        [Fact]
+        public async Task Login_LocksAccount_AfterRepeatedWrongPin_EvenWithTheCorrectPinAfterward()
+        {
+            var email = $"lockout-{Guid.NewGuid():N}@test.com";
+            await _db.SeedUserAsync(email, _hasher.Hash("4821"), UserRole.Admin);
+
+            for (var i = 0; i < 5; i++)
+            {
+                await Assert.ThrowsAsync<UnauthorizedException>(() =>
+                    CreateAuthService().LoginAsync(new LoginRequest { Email = email, Pin = "0000" }));
+            }
+
+            // The 5th wrong attempt above crossed the threshold — even the genuinely correct
+            // PIN is now rejected until the lockout window passes.
+            var ex = await Assert.ThrowsAsync<UnauthorizedException>(() =>
+                CreateAuthService().LoginAsync(new LoginRequest { Email = email, Pin = "4821" }));
+            Assert.Contains("Too many failed attempts", ex.Message);
+        }
+
+        [Fact]
+        public async Task Login_Succeeding_ResetsThePriorFailedAttemptCount()
+        {
+            var email = $"reset-{Guid.NewGuid():N}@test.com";
+            await _db.SeedUserAsync(email, _hasher.Hash("4821"), UserRole.Admin);
+
+            // A few wrong attempts, but never enough to cross the lockout threshold.
+            for (var i = 0; i < 3; i++)
+            {
+                await Assert.ThrowsAsync<UnauthorizedException>(() =>
+                    CreateAuthService().LoginAsync(new LoginRequest { Email = email, Pin = "0000" }));
+            }
+
+            await CreateAuthService().LoginAsync(new LoginRequest { Email = email, Pin = "4821" });
+
+            var user = await _db.Context.Users.SingleAsync(u => u.Email == email);
+            Assert.Equal(0, user.FailedLoginAttempts);
+            Assert.Null(user.LockoutEndUtc);
+        }
+
         [Fact]
         public async Task GetCurrentAccess_ReflectsAPermissionRevokedAfterLogin_WithoutANewLogin()
         {
@@ -3552,6 +3597,57 @@ namespace iucs.readernest.tests
                 gamification.GrantAsync(outsiderUser.Id, new GrantAwardRequest
                 {
                     ParticipantName = "Kid", Kind = AwardKind.Star, Points = 1,
+                }));
+
+            Assert.Empty(await _db.Context.StudentAwards.ToListAsync());
+        }
+
+        [Fact]
+        public async Task Gamification_ParentReportsStarForOwnEnrolledChild_Succeeds()
+        {
+            var (batch, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var parentUser = await _db.SeedUserAsync($"p-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var child = new Child { ParentProfile = parentProfile, FirstName = "Aarav", LastName = "Kapoor" };
+            _db.Context.AddRange(parentProfile, child);
+            await _db.Context.SaveChangesAsync();
+            _db.Context.Add(new BatchEnrollment { BatchId = batch.Id, ChildId = child.Id });
+            await _db.Context.SaveChangesAsync();
+
+            var gamification = CreateGamificationService();
+            var granted = await gamification.GrantAsync(parentUser.Id, new GrantAwardRequest
+            {
+                SessionId = session.Id, ParticipantName = "Aarav Kapoor", Kind = AwardKind.Star, Points = 1,
+            });
+
+            Assert.Single(granted);
+            Assert.Equal("Aarav Kapoor", Assert.Single(await _db.Context.StudentAwards.ToListAsync()).ParticipantName);
+        }
+
+        /// <summary>
+        /// A live-quiz self-report used to take ParticipantName as free text with no check it
+        /// was actually the caller's own child — any parent with a child in the batch could post
+        /// a Star under a classmate's name, inflating that classmate's persisted award history
+        /// and leaderboard rank.
+        /// </summary>
+        [Fact]
+        public async Task Gamification_ParentReportsStarUnderAnotherChildsName_IsForbidden()
+        {
+            var (batch, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var parentUser = await _db.SeedUserAsync($"p-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var ownChild = new Child { ParentProfile = parentProfile, FirstName = "Aarav", LastName = "Kapoor" };
+            _db.Context.AddRange(parentProfile, ownChild);
+            await _db.Context.SaveChangesAsync();
+            _db.Context.Add(new BatchEnrollment { BatchId = batch.Id, ChildId = ownChild.Id });
+            await _db.Context.SaveChangesAsync();
+
+            var gamification = CreateGamificationService();
+            await Assert.ThrowsAsync<ForbiddenException>(() =>
+                gamification.GrantAsync(parentUser.Id, new GrantAwardRequest
+                {
+                    // A genuinely-enrolled parent, but naming a different child than their own.
+                    SessionId = session.Id, ParticipantName = "Some Classmate", Kind = AwardKind.Star, Points = 1,
                 }));
 
             Assert.Empty(await _db.Context.StudentAwards.ToListAsync());
