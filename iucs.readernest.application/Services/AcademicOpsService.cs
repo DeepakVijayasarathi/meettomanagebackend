@@ -4,6 +4,7 @@ using iucs.readernest.application.Dto.Academics;
 using iucs.readernest.application.Helper;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Entities.Academics;
+using iucs.readernest.domain.Entities.Admission;
 using iucs.readernest.domain.Entities.Sessions;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
@@ -117,6 +118,17 @@ namespace iucs.readernest.application.Services
                             JoinedAtUtc = DateTime.UtcNow,
                         }));
                     }
+                    else if (!string.IsNullOrWhiteSpace(user.Email))
+                    {
+                        // Demo session (no batch): there is no Child/BatchEnrollment row to hang
+                        // a SessionAttendance entry off of (that table requires a real Child or
+                        // TeacherProfile FK — see SessionAttendance's own doc comment), so this
+                        // is recorded directly on the booking instead. Returns here rather than
+                        // falling into the entries-based path below, which has nothing to do for
+                        // a demo join.
+                        await CaptureDemoJoinAsync(session.Id, user.Email, cancellationToken);
+                        return;
+                    }
                 }
 
                 if (entries.Count == 0)
@@ -129,6 +141,45 @@ namespace iucs.readernest.application.Services
             catch
             {
                 // Best-effort: joining the class must never fail because attendance capture did.
+            }
+        }
+
+        /// <summary>
+        /// Demo-session counterpart of the SessionAttendance path above: matches the joining
+        /// account's email (case-insensitive) against the booking's primary contact
+        /// (<see cref="DemoBooking.ParentEmail"/>) or an additional invitee
+        /// (<see cref="DemoParticipant.Email"/>), and timestamps/flags whichever matched. A
+        /// demo lead has no account requirement, so a parent who registered and joined under a
+        /// different email than the one the demo was booked with is a silent no-op — same
+        /// "never block the join" contract as the rest of this method.
+        /// </summary>
+        private async Task CaptureDemoJoinAsync(Guid sessionId, string email, CancellationToken cancellationToken)
+        {
+            var booking = await _unitOfWork.Repository<DemoBooking>().TrackedQuery()
+                .Include(b => b.Participants)
+                .FirstOrDefaultAsync(b => b.ClassSessionId == sessionId, cancellationToken);
+            if (booking is null)
+            {
+                return;
+            }
+
+            var matched = false;
+            if (string.Equals(booking.ParentEmail, email, StringComparison.OrdinalIgnoreCase))
+            {
+                booking.ParentJoinedAtUtc ??= DateTime.UtcNow;
+                matched = true;
+            }
+
+            foreach (var participant in booking.Participants.Where(
+                p => p.Email != null && string.Equals(p.Email, email, StringComparison.OrdinalIgnoreCase)))
+            {
+                participant.HasJoined = true;
+                matched = true;
+            }
+
+            if (matched)
+            {
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
             }
         }
 

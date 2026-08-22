@@ -495,6 +495,154 @@ namespace iucs.readernest.tests
             Assert.Empty(_db.Context.SessionAttendances.Where(a => a.ClassSessionId == session.Id));
         }
 
+        /// <summary>Seeds a Demo (no batch) session + its DemoBooking, mirroring how the store
+        /// flow and admission team create one — used by the demo-join tests below.</summary>
+        private async Task<(ClassSession Session, DemoBooking Booking)> SeedDemoSessionAsync(
+            string parentEmail, string? participantEmail = null, DateTime? startAtUtc = null)
+        {
+            var teacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var teacher = new TeacherProfile { UserId = teacherUser.Id };
+            _db.Context.TeacherProfiles.Add(teacher);
+            await _db.Context.SaveChangesAsync();
+
+            var demoStart = startAtUtc ?? DateTime.UtcNow.AddDays(1);
+            var session = new ClassSession
+            {
+                BatchId = null,
+                TeacherProfile = teacher,
+                Type = SessionType.Demo,
+                Status = SessionStatus.Scheduled,
+                ScheduledStartAtUtc = demoStart,
+                ScheduledEndAtUtc = demoStart.AddMinutes(30),
+            };
+            _db.Context.ClassSessions.Add(session);
+
+            var booking = new DemoBooking
+            {
+                ClassSession = session,
+                ParentName = "Lead Parent",
+                ParentEmail = parentEmail,
+                ChildName = "Prospective Kid",
+            };
+            if (participantEmail is not null)
+            {
+                booking.Participants.Add(new DemoParticipant { Name = "Invited Guardian", Email = participantEmail });
+            }
+            _db.Context.DemoBookings.Add(booking);
+            await _db.Context.SaveChangesAsync();
+
+            _db.CurrentUser.UserId = teacherUser.Id;
+            return (session, booking);
+        }
+
+        [Fact]
+        public async Task CaptureJoinAttendance_ParentOnDemoSession_PrimaryContactEmailMatch_SetsParentJoinedAtUtc()
+        {
+            // Regression: a demo lead has no Child/BatchEnrollment row, so the regular
+            // batch-based capture branch had nothing to do for a demo session — this parent's
+            // join was silently dropped even though they are a registered, signed-in account.
+            var parentEmail = $"lead-{Guid.NewGuid():N}@test.com";
+            var (session, booking) = await SeedDemoSessionAsync(parentEmail);
+            var parentUser = await _db.SeedUserAsync(parentEmail, "x", UserRole.Parent);
+            _db.Context.ParentProfiles.Add(new ParentProfile { UserId = parentUser.Id });
+            await _db.Context.SaveChangesAsync();
+
+            await CreateAcademicOpsService().CaptureJoinAttendanceAsync(session.Id, parentUser.Id);
+
+            var reloaded = await _db.Context.DemoBookings.FindAsync(booking.Id);
+            Assert.NotNull(reloaded!.ParentJoinedAtUtc);
+            // No SessionAttendance row is created (there is no Child to attach it to) —
+            // the demo join is tracked entirely on the booking itself.
+            Assert.Empty(_db.Context.SessionAttendances.Where(a => a.ClassSessionId == session.Id));
+        }
+
+        [Fact]
+        public async Task CaptureJoinAttendance_ParentOnDemoSession_InvitedParticipantEmailMatch_SetsHasJoined()
+        {
+            var primaryEmail = $"lead-{Guid.NewGuid():N}@test.com";
+            var participantEmail = $"guardian-{Guid.NewGuid():N}@test.com";
+            var (session, booking) = await SeedDemoSessionAsync(primaryEmail, participantEmail);
+            var participantUser = await _db.SeedUserAsync(participantEmail, "x", UserRole.Parent);
+            _db.Context.ParentProfiles.Add(new ParentProfile { UserId = participantUser.Id });
+            await _db.Context.SaveChangesAsync();
+
+            await CreateAcademicOpsService().CaptureJoinAttendanceAsync(session.Id, participantUser.Id);
+
+            var reloaded = await _db.Context.DemoBookings.Include(b => b.Participants).FirstAsync(b => b.Id == booking.Id);
+            Assert.Null(reloaded.ParentJoinedAtUtc); // primary contact never joined
+            Assert.True(Assert.Single(reloaded.Participants).HasJoined);
+        }
+
+        [Fact]
+        public async Task CaptureJoinAttendance_ParentOnDemoSession_NoMatchingEmail_RecordsNothing_AndNeverThrows()
+        {
+            var (session, booking) = await SeedDemoSessionAsync($"lead-{Guid.NewGuid():N}@test.com");
+            var unrelatedParent = await _db.SeedUserAsync($"other-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            _db.Context.ParentProfiles.Add(new ParentProfile { UserId = unrelatedParent.Id });
+            await _db.Context.SaveChangesAsync();
+
+            await CreateAcademicOpsService().CaptureJoinAttendanceAsync(session.Id, unrelatedParent.Id);
+
+            Assert.Null((await _db.Context.DemoBookings.FindAsync(booking.Id))!.ParentJoinedAtUtc);
+        }
+
+        [Fact]
+        public async Task IsSessionParticipant_ParentOnDemoSession_MatchedByEmail_CanReachTheJitsiJoinEndpoint()
+        {
+            // The same email match gates the classroom hub's JoinSession/GetJitsiJoin path —
+            // without it, a registered parent joining their own demo got "You do not have
+            // access to this session" from the hub even though the raw Jitsi call still
+            // connected (JitsiLive.tsx's route-state fallback), so the interactive layer
+            // (and this attendance capture) never engaged at all.
+            var parentEmail = $"lead-{Guid.NewGuid():N}@test.com";
+            var (session, _) = await SeedDemoSessionAsync(parentEmail, startAtUtc: DateTime.UtcNow.AddMinutes(5));
+            session.MeetingRoomId = "demo-room";
+            var parentUser = await _db.SeedUserAsync(parentEmail, "x", UserRole.Parent);
+            _db.Context.ParentProfiles.Add(new ParentProfile { UserId = parentUser.Id });
+            await _db.Context.SaveChangesAsync();
+
+            var join = await CreateSessionService().GetJitsiJoinAsync(session.Id, parentUser.Id);
+            Assert.Equal("demo-room", join.Room);
+        }
+
+        [Fact]
+        public async Task IsSessionParticipant_ParentWithWithdrawnEnrollment_Rejected()
+        {
+            // Consistency/security fix: the participant gate used to admit ANY enrollment
+            // status for this batch, while attendance capture already required Active — a
+            // withdrawn parent could still get into the live room even though their join was
+            // never going to be recorded as attendance.
+            var (batch, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var parentUser = await _db.SeedUserAsync($"p-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var child = new Child { ParentProfile = parentProfile, FirstName = "Kid", LastName = "Withdrawn" };
+            _db.Context.AddRange(parentProfile, child);
+            await _db.Context.SaveChangesAsync();
+            _db.Context.Add(new BatchEnrollment { BatchId = batch.Id, ChildId = child.Id, Status = EnrollmentStatus.Withdrawn });
+            await _db.Context.SaveChangesAsync();
+
+            var isParticipant = await CreateSessionService().IsSessionParticipantAsync(session.Id, parentUser.Id);
+            Assert.False(isParticipant);
+        }
+
+        [Fact]
+        public async Task MarkNoShowSystemAsync_AppliesSameCarryForwardAndPayout_ButSkipsTheOwnershipCheck()
+        {
+            // The background no-show detector has no signed-in caller to check — this is the
+            // method it calls instead of the human-facing MarkNoShowAsync.
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 2);
+            _db.CurrentUser.UserId = null; // no "current user" at all, as in a background job
+
+            var carried = await CreateSessionService().MarkNoShowSystemAsync(
+                session.Id, NoShowParty.Student, "Auto-detected: no student/parent joined.");
+
+            var original = await _db.Context.ClassSessions.FindAsync(session.Id);
+            Assert.Equal(SessionStatus.StudentNoShow, original!.Status);
+            Assert.Equal(SessionStatus.CarriedForward, (await _db.Context.ClassSessions.FindAsync(carried.Id))!.Status);
+            var item = Assert.Single(_db.Context.PayoutItems.ToList());
+            Assert.Equal(PayoutItemType.StudentNoShowWaiting, item.Type);
+        }
+
         [Fact]
         public async Task AddRecording_SetsFifteenDayParentExpiry()
         {

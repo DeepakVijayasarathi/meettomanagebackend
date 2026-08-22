@@ -46,6 +46,14 @@ namespace iucs.readernest.application.Services
         /// </summary>
         Task<ClassSessionDto> MarkNoShowAsync(Guid id, MarkNoShowRequest request, CancellationToken cancellationToken = default);
 
+        /// <summary>
+        /// System-initiated equivalent of <see cref="MarkNoShowAsync"/> for
+        /// <c>NoShowDetectionBackgroundService</c>: identical carry-forward/payout behaviour,
+        /// but skips the caller-ownership check since there is no signed-in caller. Not exposed
+        /// on any controller.
+        /// </summary>
+        Task<ClassSessionDto> MarkNoShowSystemAsync(Guid id, NoShowParty party, string note, CancellationToken cancellationToken = default);
+
         Task<SessionRecordingDto> AddRecordingAsync(
             Guid sessionId,
             RegisterRecordingRequest request,
