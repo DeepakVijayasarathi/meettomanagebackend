@@ -623,6 +623,44 @@ namespace iucs.readernest.tests
             Assert.Equal(InvoiceStatus.Paid, full.Status);
         }
 
+        /// <summary>
+        /// The two-step case above only exercises a single AmountPaid increment. Real parents
+        /// pay in dribs and drabs (a UPI part-payment, then cash, then a top-up), so this
+        /// chains three, checking AmountPaid accumulates correctly — not just overwritten by
+        /// the last call — and that status only flips to Paid once the sum truly clears Amount.
+        /// </summary>
+        [Fact]
+        public async Task ThreeStepPartialPayment_AccumulatesAmountPaidCorrectly_AndOnlyFinalStepPays()
+        {
+            var parentUser = await _db.SeedUserAsync($"part3-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.AddRange(parentProfile,
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+            await _db.Context.SaveChangesAsync();
+            var billing = CreateBillingService();
+            var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 1000,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+
+            var step1 = await billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 250 });
+            Assert.Equal(InvoiceStatus.PartiallyPaid, step1.Status);
+            Assert.Equal(250, step1.AmountPaid);
+
+            var step2 = await billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 350 });
+            Assert.Equal(InvoiceStatus.PartiallyPaid, step2.Status);
+            Assert.Equal(600, step2.AmountPaid);
+
+            var step3 = await billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 400 });
+            Assert.Equal(InvoiceStatus.Paid, step3.Status);
+            Assert.Equal(1000, step3.AmountPaid);
+
+            // Three separate transactions were recorded, not one overwritten total.
+            var transactionCount = await _db.Context.PaymentTransactions.CountAsync(t => t.InvoiceId == invoice.Id);
+            Assert.Equal(3, transactionCount);
+        }
+
         [Fact]
         public async Task InlineCheckout_SettlesOnlyWithVerifiedSignature()
         {
@@ -4279,6 +4317,47 @@ namespace iucs.readernest.tests
                 Assert.NotNull(stored.NextBillingAtUtc);
                 // One invoice from the original start, one from the renewal.
                 Assert.Equal(2, await context.Invoices.CountAsync(i => i.SubscriptionId == subscription.Id));
+            }
+        }
+
+        /// <summary>
+        /// RenewSubscriptionAsync bills the renewal at the plan's *current* price
+        /// (Amount = plan.Price, no proration) — none of the other renewal tests actually
+        /// assert the amount, only status/counts. Pins that both the original and the renewal
+        /// invoice were raised for exactly the plan price, and that the renewal invoice is a
+        /// distinct, still-open row rather than a mutation of the first one.
+        /// </summary>
+        [Fact]
+        public async Task RenewSubscription_InvoicesTheRenewalForExactlyThePlanPrice()
+        {
+            var (parentProfile, child, plan) = await SeedSubscriptionFixtureAsync();
+            var billing = CreateBillingService();
+
+            var subscription = await billing.CreateSubscriptionAsync(new CreateSubscriptionRequest
+            {
+                ParentProfileId = parentProfile.Id,
+                ChildId = child.Id,
+                PackagePlanId = plan.Id,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            });
+            await billing.CancelSubscriptionAsync(subscription.Id);
+            await billing.RenewSubscriptionAsync(subscription.Id);
+
+            var (context, _) = _db.CreateConcurrentSession();
+            using (context)
+            {
+                var invoices = await context.Invoices
+                    .Where(i => i.SubscriptionId == subscription.Id)
+                    .OrderBy(i => i.CreatedAtUtc)
+                    .ToListAsync();
+                Assert.Equal(2, invoices.Count);
+                Assert.All(invoices, i => Assert.Equal(plan.Price, i.Amount));
+
+                // The renewal must be its own fresh, unpaid invoice — not the original row
+                // relabeled — so the parent is billed once per cycle, not once total.
+                Assert.NotEqual(invoices[0].Id, invoices[1].Id);
+                Assert.Equal(InvoiceStatus.Pending, invoices[1].Status);
+                Assert.Equal(0, invoices[1].AmountPaid);
             }
         }
 
