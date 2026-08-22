@@ -90,10 +90,10 @@ namespace iucs.readernest.application.Common.Interfaces
     }
 
     /// <summary>
-    /// Payment gateway abstraction behind the dual-account requirement: every call
-    /// carries the department's PaymentAccount so Phonics and Maths revenue stays
-    /// separated at the gateway. Production swaps in the real provider via DI +
-    /// configuration; no service-layer change is needed.
+    /// Payment gateway abstraction behind the per-department-account requirement: every
+    /// call carries the department's PaymentAccount so each department's revenue stays
+    /// separated at the gateway, regardless of how many departments exist. Production
+    /// swaps in the real provider via DI + configuration; no service-layer change is needed.
     /// </summary>
     public interface IPaymentGateway
     {

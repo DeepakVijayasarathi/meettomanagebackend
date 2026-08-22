@@ -27,7 +27,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
-        // Enums travel as their names ("Teacher", "Phonics"), matching how they are stored
+        // Enums travel as their names ("Teacher", "Overdue"), matching how they are stored
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddOpenApi();
 
