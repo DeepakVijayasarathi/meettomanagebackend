@@ -200,6 +200,16 @@ namespace iucs.readernest.application.Services
                     .Include(r => r.Permissions)
                     .FirstOrDefaultAsync(r => r.Id == request.RoleDefinitionId.Value, cancellationToken)
                     ?? throw new NotFoundException(nameof(RoleDefinition), request.RoleDefinitionId.Value);
+
+                // Mirrors UsersController.ApplyPermissionPreset's guard — that endpoint only
+                // covers re-assigning an existing Sub Admin's preset, not creating a brand new
+                // one with a RoleDefinitionId already set in the request body, which this was
+                // missing entirely (how a real account once ended up on the "student" preset).
+                if (NonSubAdminPresetNames.Names.Contains(assignedRole.Name))
+                {
+                    throw new DomainValidationException(
+                        $"'{assignedRole.DisplayName}' is a fixed-portal system role, not a Sub Admin preset, and can't be assigned to a new account.");
+                }
             }
 
             var temporaryPin = TemporaryPinGenerator.Generate();
@@ -470,6 +480,19 @@ namespace iucs.readernest.application.Services
             // named role; hand-editing individual checkboxes leaves it as-is.
             if (roleDefinitionId.HasValue)
             {
+                // UsersController.ApplyPermissionPreset already checks the preset name before
+                // it ever gets here, but that's this method's only caller today, not a
+                // guarantee for its next one — CreateAsync had the identical class of gap
+                // until this same reserved-name set was pushed down there too. Enforcing it
+                // here as well means the invariant holds regardless of which caller forgets.
+                var assignedRole = await _unitOfWork.Repository<RoleDefinition>().GetByIdAsync(roleDefinitionId.Value, cancellationToken)
+                    ?? throw new NotFoundException(nameof(RoleDefinition), roleDefinitionId.Value);
+                if (NonSubAdminPresetNames.Names.Contains(assignedRole.Name))
+                {
+                    throw new DomainValidationException(
+                        $"'{assignedRole.DisplayName}' is a fixed-portal system role, not a Sub Admin preset, and can't be assigned to an account.");
+                }
+
                 user.RoleDefinitionId = roleDefinitionId;
             }
 

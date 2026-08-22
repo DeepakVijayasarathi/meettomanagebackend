@@ -1417,6 +1417,68 @@ namespace iucs.readernest.tests
             await Assert.ThrowsAsync<ConflictException>(() => service.CreateAsync(request));
         }
 
+        /// <summary>
+        /// Regression test: CreateAsync used to accept any existing RoleDefinitionId for a
+        /// new Sub Admin account without checking it against NonSubAdminPresetNames — the
+        /// same reserved-name guard UsersController.ApplyPermissionPreset already enforced
+        /// for re-assigning an *existing* account's preset. A real production account ended
+        /// up with the zero-permission "student" system role (seeded only to back the
+        /// Parent's own "Student View" preview) stamped on at creation time as a result.
+        /// </summary>
+        [Fact]
+        public async Task CreateUser_SubAdminWithReservedSystemRolePreset_Throws()
+        {
+            var studentRole = new RoleDefinition
+            {
+                Name = "student",
+                DisplayName = "Student",
+                DefaultRoute = "/student",
+                IsSystem = true,
+            };
+            _db.Context.Add(studentRole);
+            await _db.Context.SaveChangesAsync();
+            _db.Context.ChangeTracker.Clear();
+
+            var service = CreateUserService();
+            await Assert.ThrowsAsync<DomainValidationException>(() => service.CreateAsync(new CreateUserRequest
+            {
+                Email = $"reserved-preset-{Guid.NewGuid():N}@test.com",
+                FirstName = "Someone",
+                LastName = "Staff",
+                Role = UserRole.SubAdmin,
+                RoleDefinitionId = studentRole.Id,
+            }));
+        }
+
+        /// <summary>
+        /// Same reserved-name guard, exercised directly against SetPermissionsAsync rather
+        /// than through UsersController.ApplyPermissionPreset — proves the invariant holds at
+        /// the service layer itself, not only for the one controller action that currently
+        /// remembers to check first.
+        /// </summary>
+        [Fact]
+        public async Task SetPermissions_ReservedSystemRolePreset_Throws()
+        {
+            var adminUser = await _db.SeedUserAsync($"admin-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
+            var subAdmin = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.SubAdmin);
+            var studentRole = new RoleDefinition
+            {
+                Name = "student",
+                DisplayName = "Student",
+                DefaultRoute = "/student",
+                IsSystem = true,
+            };
+            _db.Context.Add(studentRole);
+            await _db.Context.SaveChangesAsync();
+
+            var service = CreateUserService();
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                service.SetPermissionsAsync(subAdmin.Id, adminUser.Id, [], studentRole.Id));
+
+            var reloaded = await _db.Context.Users.FirstAsync(u => u.Id == subAdmin.Id);
+            Assert.Null(reloaded.RoleDefinitionId);
+        }
+
         [Fact]
         public async Task DeleteUser_SoftDeletes_AndFreesUpEmailForReuse()
         {
