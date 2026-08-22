@@ -156,8 +156,18 @@ namespace iucs.readernest.application.Services
             // Business rule: a class never runs on a holiday. Any session already scheduled
             // on this date is automatically carried forward to the next available same-weekday
             // slot (skipping further holidays), keeping the traceability link.
-            var dayStart = request.Date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-            var dayEnd = dayStart.AddDays(1);
+            //
+            // request.Date is a local (DefaultTimeZoneId, Asia/Kolkata) calendar date, but
+            // treating its midnight as UTC midnight offset the whole matching window by +5:30 —
+            // a session genuinely on the holiday (e.g. 02:00 IST) fell just before the window
+            // and was never detected, running as normal, while a session the FOLLOWING day in
+            // that same 00:00-05:29 IST slot fell just inside it and was wrongly auto-cancelled
+            // and carried forward a week as if it were on the holiday. Mirrors
+            // StoreService.ListAvailableDemoSlotsAsync's own correct local-to-UTC conversion.
+            var zone = TimeZoneInfo.FindSystemTimeZoneById(DateTimeDisplay.DefaultTimeZoneId);
+            var dayStartLocal = request.Date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified);
+            var dayStart = TimeZoneInfo.ConvertTimeToUtc(dayStartLocal, zone);
+            var dayEnd = TimeZoneInfo.ConvertTimeToUtc(dayStartLocal.AddDays(1), zone);
             var clashingSessions = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
                 .Where(s => (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward)
                             && s.ScheduledStartAtUtc >= dayStart

@@ -240,6 +240,42 @@ namespace iucs.readernest.tests
             Assert.Contains("150% of session rate", item.Note);
         }
 
+        /// <summary>
+        /// TeacherNoShowPenaltyPercent is deliberately allowed above 100% (see the test above),
+        /// so a teacher whose only accrued item this period is one heavily-penalized no-show
+        /// finalizes to a genuinely negative raw sum. FinalizeAsync must floor the payout's
+        /// bottom-line TotalAmount at zero — that exact value is the "Total" token in the
+        /// payout-statement email, so an unfloored negative total would read to the teacher as
+        /// "you owe us money," never the intent of a deduction. The line item itself stays the
+        /// true, unfloored -1500 — only the finalized total is floored, so the detail an admin
+        /// or teacher can audit still shows the real math.
+        /// </summary>
+        [Fact]
+        public async Task Payout_Finalize_FloorsAHeavyNoShowPenaltyAtZero_NotNegative()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var payouts = CreatePayoutService();
+            await payouts.SetRateAsync(new SavePayoutRateRequest
+            {
+                TeacherProfileId = session.TeacherProfileId,
+                DurationMinutes = 45,
+                RatePerSession = 1000,
+                TeacherNoShowPenaltyPercent = 150,
+                EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
+            });
+
+            await CreateSessionService().MarkNoShowAsync(
+                session.Id, new MarkNoShowRequest { Party = NoShowParty.Teacher });
+
+            var item = Assert.Single(_db.Context.PayoutItems.ToList());
+            Assert.Equal(-1500m, item.Amount); // the raw, honest line-item deduction
+
+            var payout = await _db.Context.Payouts.AsNoTracking().FirstAsync();
+            var finalized = await payouts.FinalizeAsync(payout.Id);
+
+            Assert.Equal(0m, finalized.TotalAmount); // floored, never emailed as a debt
+        }
+
         [Fact]
         public async Task DefaultRateCard_PaysTeachersWithoutOwnRates_AndTeacherRateOverridesIt()
         {
@@ -802,6 +838,65 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task RecordPayment_ConcurrentPaymentsOnSameInvoice_MustNotLoseEitherPayment()
+        {
+            // SCOPE NOTE — same limitation as Store_BookDemo_ConcurrentRequestsForSameSlot above:
+            // both DbContexts here share one SqliteConnection, which serializes command execution
+            // at the ADO.NET level, so this cannot force the genuinely-overlapping-transactions
+            // case SSI is designed for. What it proves: the code path is correct end-to-end and
+            // both payments land — before RecordPaymentAsync wrapped the balance read+write in
+            // ExecuteInSerializableTransactionAsync (re-reading the invoice fresh inside instead
+            // of closing over a value read before the transaction started), this exact scenario —
+            // a gateway checkout and a cash payment both settling the same invoice within
+            // moments of each other — would let whichever commits second silently overwrite the
+            // first's AmountPaid with its own, losing ₹500 of real, collected money from the
+            // invoice's balance despite both PaymentTransaction rows correctly showing Success.
+            // The concurrent guarantee itself rests on Postgres SSI aborting a genuinely
+            // overlapping second attempt with SQLSTATE 40001 and retrying it against the
+            // committed balance — documented semantics, not observed here (see
+            // UnitOfWork_SerializableTransaction_* for the retry machinery itself).
+            var parentUser = await _db.SeedUserAsync($"pay-race-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.AddRange(parentProfile,
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+            await _db.Context.SaveChangesAsync();
+
+            var billing1 = CreateBillingService();
+            var invoice = await billing1.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 1000,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+
+            // Request 2's own service graph on its own DbContext, exactly as ASP.NET Core would
+            // hand a second concurrent caller — here, a parent's gateway checkout settling around
+            // the same time an admin confirms a cash payment on the same invoice.
+            var (context2, uow2) = _db.CreateConcurrentSession();
+            var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
+            var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
+            var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, NullLogger<NotificationService>.Instance);
+            var billing2 = new BillingService(uow2, auditLog2, new FakePaymentGateway(), notifications2, _db.CurrentUser);
+
+            var task1 = billing1.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 500, Method = PaymentMethod.Card });
+            var task2 = billing2.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 500, Method = PaymentMethod.Cash });
+
+            await Task.WhenAll(task1, task2);
+
+            var (verifyContext, _) = _db.CreateConcurrentSession();
+            var stored = await verifyContext.Invoices.FirstAsync(i => i.Id == invoice.Id);
+            Assert.Equal(1000m, stored.AmountPaid); // both ₹500 payments actually reflected, not just one
+            Assert.Equal(InvoiceStatus.Paid, stored.Status);
+
+            var successfulTotal = await verifyContext.PaymentTransactions
+                .Where(t => t.InvoiceId == invoice.Id && t.Status == TransactionStatus.Success)
+                .SumAsync(t => t.Amount);
+            Assert.Equal(1000m, successfulTotal);
+
+            context2.Dispose();
+            verifyContext.Dispose();
+        }
+
+        [Fact]
         public async Task Refund_ApprovalFailingAtTheGateway_StaysClaimed_AndIsNotApprovableAgain()
         {
             // Fail-closed by design: the refund is claimed out of Requested BEFORE the gateway is
@@ -995,6 +1090,38 @@ namespace iucs.readernest.tests
                 }));
         }
 
+        /// <summary>
+        /// Holiday.Date is a local (Asia/Kolkata) calendar date. A session at 02:00 IST is
+        /// 20:30 UTC the PRIOR day — DateOnly.FromDateTime(startUtc) used to truncate the raw
+        /// UTC instant instead of converting through the org's own timezone first, so a session
+        /// genuinely scheduled during the holiday's early-morning IST hours computed the wrong
+        /// (previous) calendar day and slipped past this check entirely.
+        /// </summary>
+        [Fact]
+        public async Task ScheduleSession_OnHolidayInEarlyMorningIst_IsBlocked()
+        {
+            var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 1, includeSession: false);
+            var teacher = await _db.Context.TeacherProfiles.FirstAsync();
+            // Comfortably in the future regardless of exact current time, so ValidateWindow's
+            // own "cannot be in the past" check never fires ahead of the holiday check below.
+            var holiday = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(10));
+            _db.Context.Holidays.Add(new Holiday { Name = "Independence Day", Date = holiday });
+            await _db.Context.SaveChangesAsync();
+
+            // 02:00 IST on the holiday itself == 20:30 UTC the day before.
+            var start = holiday.AddDays(-1).ToDateTime(new TimeOnly(20, 30), DateTimeKind.Utc);
+            var ex = await Assert.ThrowsAsync<DomainValidationException>(() =>
+                CreateSessionService().ScheduleAsync(new ScheduleSessionRequest
+                {
+                    BatchId = batch.Id,
+                    TeacherProfileId = teacher.Id,
+                    Type = SessionType.Regular,
+                    ScheduledStartAtUtc = start,
+                    ScheduledEndAtUtc = start.AddMinutes(45),
+                }));
+            Assert.Contains("holiday", ex.Message);
+        }
+
         [Fact]
         public async Task ScheduleSession_RejectsAStartTimeInThePast()
         {
@@ -1055,6 +1182,43 @@ namespace iucs.readernest.tests
                 .FirstAsync(s => s.CarriedForwardFromSessionId == session.Id);
             Assert.Equal(SessionStatus.CarriedForward, carried.Status);
             Assert.Equal(session.ScheduledStartAtUtc.AddDays(7), carried.ScheduledStartAtUtc); // next available week
+        }
+
+        /// <summary>
+        /// The clash window used to be [holidayDate 00:00 UTC, +1 day) — treating the holiday's
+        /// own local calendar date as if it were already a UTC boundary. A session at 02:00 IST
+        /// the day AFTER the holiday is 20:30 UTC ON the holiday's own date, which fell inside
+        /// that UTC-naive window and was wrongly auto-cancelled and carried forward a week, even
+        /// though in local (real) calendar terms it was never on the holiday at all.
+        /// </summary>
+        [Fact]
+        public async Task CreateHoliday_DoesNotWronglyCancelTheFollowingDaysEarlyMorningSession()
+        {
+            var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 1, includeSession: false);
+            var teacher = await _db.Context.TeacherProfiles.FirstAsync();
+            var holidayDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(10));
+
+            // 02:00 IST the day AFTER the holiday == 20:30 UTC on the holiday's own date.
+            var sessionStart = holidayDate.ToDateTime(new TimeOnly(20, 30), DateTimeKind.Utc);
+            await CreateSessionService().ScheduleAsync(new ScheduleSessionRequest
+            {
+                BatchId = batch.Id,
+                TeacherProfileId = teacher.Id,
+                Type = SessionType.Regular,
+                ScheduledStartAtUtc = sessionStart,
+                ScheduledEndAtUtc = sessionStart.AddMinutes(45),
+            });
+            var session = await _db.Context.ClassSessions.FirstAsync();
+            _db.Context.ChangeTracker.Clear();
+
+            await CreateAcademicOpsService().CreateHolidayAsync(new SaveHolidayRequest
+            {
+                Name = "Independence Day",
+                Date = holidayDate,
+            });
+
+            var untouched = await _db.Context.ClassSessions.FirstAsync(s => s.Id == session.Id);
+            Assert.Equal(SessionStatus.Scheduled, untouched.Status); // never touched — it was never actually on the holiday
         }
 
         [Fact]
@@ -3178,6 +3342,59 @@ namespace iucs.readernest.tests
             Assert.Equal(1, bobDto.ClassesCompleted);
             Assert.Equal(0, bobDto.ClassesRemaining);
             Assert.Equal(0, bobDto.AttendancePercent);
+        }
+
+        /// <summary>
+        /// ClassesCompleted used to count a batch's ENTIRE completed-session history, with no
+        /// check against when the child's own enrollment actually started — a child who
+        /// transfers into (or is newly assigned to) a batch that's already been running for
+        /// weeks would immediately show every session that ran before they ever joined, on a
+        /// dashboard the parent has no reason to doubt. A child enrolled BEFORE a session
+        /// existed must be credited with it; one enrolled AFTER must not be.
+        /// </summary>
+        [Fact]
+        public async Task ParentDashboard_ClassesCompleted_ExcludesSessionsBeforeTheChildJoinedTheBatch()
+        {
+            var parentUser = await _db.SeedUserAsync($"latejoin-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.ParentProfiles.Add(parentProfile);
+            await _db.Context.SaveChangesAsync();
+
+            var (batch, _, _) = await SeedBatchWithSessionAsync(10, includeSession: false);
+
+            var early = new Child { ParentProfileId = parentProfile.Id, FirstName = "Early", LastName = "Bird", IsActive = true };
+            _db.Context.Add(early);
+            await _db.Context.SaveChangesAsync();
+            // Early's enrollment CreatedAtUtc (auto-stamped "now" on insert) predates the session below.
+            _db.Context.Add(new BatchEnrollment { BatchId = batch.Id, ChildId = early.Id, Status = EnrollmentStatus.Active });
+            await _db.Context.SaveChangesAsync();
+
+            // A class that ran while only Early was enrolled.
+            _db.Context.Add(new ClassSession
+            {
+                BatchId = batch.Id,
+                TeacherProfileId = batch.TeacherProfileId,
+                Status = SessionStatus.Completed,
+                ScheduledStartAtUtc = DateTime.UtcNow,
+                ScheduledEndAtUtc = DateTime.UtcNow.AddMinutes(45),
+            });
+            await _db.Context.SaveChangesAsync();
+
+            // Late transfers into the SAME already-running batch after that class already happened.
+            var late = new Child { ParentProfileId = parentProfile.Id, FirstName = "Late", LastName = "Comer", IsActive = true };
+            _db.Context.Add(late);
+            await _db.Context.SaveChangesAsync();
+            _db.Context.Add(new BatchEnrollment { BatchId = batch.Id, ChildId = late.Id, Status = EnrollmentStatus.Active });
+            await _db.Context.SaveChangesAsync();
+            _db.Context.ChangeTracker.Clear();
+
+            var dashboard = await new ParentPortalService(_db.UnitOfWork).GetDashboardAsync(parentUser.Id);
+
+            var earlyDto = dashboard.Children.Single(c => c.ChildId == early.Id);
+            Assert.Equal(1, earlyDto.ClassesCompleted); // was enrolled for it
+
+            var lateDto = dashboard.Children.Single(c => c.ChildId == late.Id);
+            Assert.Equal(0, lateDto.ClassesCompleted); // joined after it already ran — must not inherit the batch's history
         }
 
         [Fact]

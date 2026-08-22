@@ -354,63 +354,79 @@ namespace iucs.readernest.application.Services
             RecordPaymentRequest request,
             CancellationToken cancellationToken = default)
         {
-            var invoice = await _unitOfWork.Repository<Invoice>().GetByIdAsync(invoiceId, cancellationToken)
-                ?? throw new NotFoundException(nameof(Invoice), invoiceId);
-
-            if (invoice.Status is InvoiceStatus.Paid or InvoiceStatus.Cancelled)
+            // The balance read-then-write below (remaining = Amount - AmountPaid, then
+            // AmountPaid += amount) is the same check-then-act shape RequestRefundAsync's own
+            // comment documents: two concurrent settlements on the same invoice (a realistic
+            // scenario — a parent can start a gateway checkout and then also pay cash at the
+            // centre before it settles) can both read the same AmountPaid, both compute
+            // "remaining" against it, and both commit their own absolute AmountPaid value —
+            // the second commit silently overwrites the first's contribution, e.g. two real
+            // ₹500 payments collected but the invoice ends up showing only ₹500 paid instead
+            // of ₹1000. SERIALIZABLE (with the invoice re-read fresh inside, not the value
+            // fetched before this block started) makes PostgreSQL abort one of two truly
+            // concurrent attempts instead of letting them silently clobber each other.
+            var invoice = await _unitOfWork.ExecuteInSerializableTransactionAsync(async ct =>
             {
-                throw new DomainValidationException($"Invoice '{invoice.InvoiceNumber}' is already {invoice.Status}.");
-            }
+                var inv = await _unitOfWork.Repository<Invoice>().GetByIdAsync(invoiceId, ct)
+                    ?? throw new NotFoundException(nameof(Invoice), invoiceId);
 
-            var remaining = invoice.Amount - invoice.AmountPaid;
-            if (request.Amount > remaining)
-            {
-                throw new DomainValidationException($"Payment of {request.Amount} exceeds the outstanding balance of {remaining}.");
-            }
+                if (inv.Status is InvoiceStatus.Paid or InvoiceStatus.Cancelled)
+                {
+                    throw new DomainValidationException($"Invoice '{inv.InvoiceNumber}' is already {inv.Status}.");
+                }
 
-            // A cash recording settles the parent's pending cash intent when one exists,
-            // so the intent doesn't linger Pending next to a duplicate Success row.
-            var pendingIntent = request.Method == PaymentMethod.Cash
-                ? await _unitOfWork.Repository<PaymentTransaction>()
-                    .FirstOrDefaultAsync(
-                        t => t.InvoiceId == invoice.Id
-                            && t.Method == PaymentMethod.Cash
-                            && t.Status == TransactionStatus.Pending,
-                        cancellationToken)
-                : null;
+                var remaining = inv.Amount - inv.AmountPaid;
+                if (request.Amount > remaining)
+                {
+                    throw new DomainValidationException($"Payment of {request.Amount} exceeds the outstanding balance of {remaining}.");
+                }
 
-            if (pendingIntent is not null)
-            {
-                pendingIntent.Amount = request.Amount;
-                pendingIntent.Status = TransactionStatus.Success;
-                pendingIntent.PaidAtUtc = DateTime.UtcNow;
-                pendingIntent.ReceiptNumber = GenerateNumber("RCP");
-                _unitOfWork.Repository<PaymentTransaction>().Update(pendingIntent);
-            }
-            else
-            {
-                await _unitOfWork.Repository<PaymentTransaction>().AddAsync(
-                    new PaymentTransaction
-                    {
-                        InvoiceId = invoice.Id,
-                        PaymentAccountId = invoice.PaymentAccountId,
-                        Amount = request.Amount,
-                        Currency = invoice.Currency,
-                        Status = TransactionStatus.Success,
-                        GatewayTransactionId = request.GatewayTransactionId,
-                        Method = request.Method,
-                        PaidAtUtc = DateTime.UtcNow,
-                        ReceiptNumber = GenerateNumber("RCP"),
-                    },
-                    cancellationToken);
-            }
+                // A cash recording settles the parent's pending cash intent when one exists,
+                // so the intent doesn't linger Pending next to a duplicate Success row.
+                var pendingIntent = request.Method == PaymentMethod.Cash
+                    ? await _unitOfWork.Repository<PaymentTransaction>()
+                        .FirstOrDefaultAsync(
+                            t => t.InvoiceId == inv.Id
+                                && t.Method == PaymentMethod.Cash
+                                && t.Status == TransactionStatus.Pending,
+                            ct)
+                    : null;
 
-            await ApplyPaymentToInvoiceAsync(invoice, request.Amount, cancellationToken);
+                if (pendingIntent is not null)
+                {
+                    pendingIntent.Amount = request.Amount;
+                    pendingIntent.Status = TransactionStatus.Success;
+                    pendingIntent.PaidAtUtc = DateTime.UtcNow;
+                    pendingIntent.ReceiptNumber = GenerateNumber("RCP");
+                    _unitOfWork.Repository<PaymentTransaction>().Update(pendingIntent);
+                }
+                else
+                {
+                    await _unitOfWork.Repository<PaymentTransaction>().AddAsync(
+                        new PaymentTransaction
+                        {
+                            InvoiceId = inv.Id,
+                            PaymentAccountId = inv.PaymentAccountId,
+                            Amount = request.Amount,
+                            Currency = inv.Currency,
+                            Status = TransactionStatus.Success,
+                            GatewayTransactionId = request.GatewayTransactionId,
+                            Method = request.Method,
+                            PaidAtUtc = DateTime.UtcNow,
+                            ReceiptNumber = GenerateNumber("RCP"),
+                        },
+                        ct);
+                }
 
-            await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
-                changesJson: $"{{\"amount\":{request.Amount}}}", cancellationToken: cancellationToken);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
+                await ApplyPaymentToInvoiceAsync(inv, request.Amount, ct);
 
+                await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), inv.Id.ToString(),
+                    changesJson: $"{{\"amount\":{request.Amount}}}", cancellationToken: ct);
+                await _unitOfWork.SaveChangesAsync(ct);
+                return inv;
+            }, cancellationToken);
+
+            // Outside the transaction: a retried attempt must not re-send this email.
             await NotifyAdminsAsync(
                 NotificationType.PaymentReceived,
                 "payment-received-admin",
@@ -766,109 +782,123 @@ namespace iucs.readernest.application.Services
             string? failureReason,
             CancellationToken cancellationToken = default)
         {
-            // Idempotency: webhooks retry — an already-settled reference is a no-op.
-            // A settled row's reference becomes "ref|paymentId", so match the prefix too.
-            var prefix = gatewayReference + "|";
-            var transaction = await _unitOfWork.Repository<PaymentTransaction>()
-                .FirstOrDefaultAsync(
-                    t => t.GatewayTransactionId == gatewayReference
-                        || (t.GatewayTransactionId != null && t.GatewayTransactionId.StartsWith(prefix)),
-                    cancellationToken)
-                ?? throw new NotFoundException($"No payment transaction matches gateway reference '{gatewayReference}'.");
-
-            if (transaction.Status != TransactionStatus.Pending)
+            // Same lost-update shape as RecordPaymentAsync/ConfirmCashIntentAsync — a webhook
+            // settling this transaction can race a concurrent cash confirmation or a second
+            // webhook delivery for a *different* transaction on the same invoice. Wrapped from
+            // the transaction fetch through the balance write; every read inside is fresh per
+            // attempt so a detected conflict retries against the truly-committed state. Returns
+            // null for every early-exit branch that never touches the invoice balance (nothing
+            // to notify about); non-null only once a payment was actually applied.
+            var settled = await _unitOfWork.ExecuteInSerializableTransactionAsync<(PaymentTransaction Transaction, Invoice Invoice, decimal Amount)?>(async ct =>
             {
-                if (succeeded && transaction.Status == TransactionStatus.Failed)
+                // Idempotency: webhooks retry — an already-settled reference is a no-op.
+                // A settled row's reference becomes "ref|paymentId", so match the prefix too.
+                var prefix = gatewayReference + "|";
+                var transaction = await _unitOfWork.Repository<PaymentTransaction>()
+                    .FirstOrDefaultAsync(
+                        t => t.GatewayTransactionId == gatewayReference
+                            || (t.GatewayTransactionId != null && t.GatewayTransactionId.StartsWith(prefix)),
+                        ct)
+                    ?? throw new NotFoundException($"No payment transaction matches gateway reference '{gatewayReference}'.");
+
+                if (transaction.Status != TransactionStatus.Pending)
                 {
-                    // The gateway reports a paid link/order we'd already given up on (expired,
-                    // or superseded by a later payment attempt on the same invoice) — real
-                    // money may have arrived after the fact. Flag it instead of a silent no-op
-                    // so someone reconciles it by hand; don't touch the invoice balance here.
-                    await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), transaction.InvoiceId.ToString(),
-                        changesJson: $"{{\"lateSuccessOnSupersededTransaction\":\"{gatewayReference}\"}}",
-                        cancellationToken: cancellationToken);
-                    await _unitOfWork.SaveChangesAsync(cancellationToken);
+                    if (succeeded && transaction.Status == TransactionStatus.Failed)
+                    {
+                        // The gateway reports a paid link/order we'd already given up on (expired,
+                        // or superseded by a later payment attempt on the same invoice) — real
+                        // money may have arrived after the fact. Flag it instead of a silent no-op
+                        // so someone reconciles it by hand; don't touch the invoice balance here.
+                        await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), transaction.InvoiceId.ToString(),
+                            changesJson: $"{{\"lateSuccessOnSupersededTransaction\":\"{gatewayReference}\"}}",
+                            cancellationToken: ct);
+                        await _unitOfWork.SaveChangesAsync(ct);
+                    }
+
+                    return null;
                 }
 
-                return;
-            }
+                if (!succeeded)
+                {
+                    transaction.Status = TransactionStatus.Failed;
+                    transaction.FailureReason = failureReason?.Length > 500 ? failureReason[..500] : failureReason;
+                    _unitOfWork.Repository<PaymentTransaction>().Update(transaction);
+                    await _unitOfWork.SaveChangesAsync(ct);
+                    return null;
+                }
 
-            if (!succeeded)
-            {
-                transaction.Status = TransactionStatus.Failed;
-                transaction.FailureReason = failureReason?.Length > 500 ? failureReason[..500] : failureReason;
+                transaction.Status = TransactionStatus.Success;
+                transaction.PaidAtUtc = DateTime.UtcNow;
+                transaction.ReceiptNumber = GenerateNumber("RCP");
+                if (!string.IsNullOrWhiteSpace(gatewayPaymentId))
+                {
+                    // Keep the link reference (webhook correlation key) and append the concrete payment id
+                    transaction.GatewayTransactionId = $"{gatewayReference}|{gatewayPaymentId}";
+                }
+
                 _unitOfWork.Repository<PaymentTransaction>().Update(transaction);
-                await _unitOfWork.SaveChangesAsync(cancellationToken);
-                return;
-            }
 
-            transaction.Status = TransactionStatus.Success;
-            transaction.PaidAtUtc = DateTime.UtcNow;
-            transaction.ReceiptNumber = GenerateNumber("RCP");
-            if (!string.IsNullOrWhiteSpace(gatewayPaymentId))
-            {
-                // Keep the link reference (webhook correlation key) and append the concrete payment id
-                transaction.GatewayTransactionId = $"{gatewayReference}|{gatewayPaymentId}";
-            }
+                var invoice = await _unitOfWork.Repository<Invoice>().GetByIdAsync(transaction.InvoiceId, ct)
+                    ?? throw new NotFoundException(nameof(Invoice), transaction.InvoiceId);
 
-            _unitOfWork.Repository<PaymentTransaction>().Update(transaction);
+                if (invoice.Status == InvoiceStatus.Cancelled)
+                {
+                    // A cancelled invoice never accepts payment, regardless of balance.
+                    await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
+                        changesJson: $"{{\"overpayment\":{transaction.Amount},\"gatewayRef\":\"{gatewayReference}\",\"invoiceStatus\":\"{invoice.Status}\"}}",
+                        cancellationToken: ct);
+                    await _unitOfWork.SaveChangesAsync(ct);
+                    return null;
+                }
 
-            var invoice = await _unitOfWork.Repository<Invoice>().GetByIdAsync(transaction.InvoiceId, cancellationToken)
-                ?? throw new NotFoundException(nameof(Invoice), transaction.InvoiceId);
+                var remaining = invoice.Amount - invoice.AmountPaid;
+                if (remaining <= 0)
+                {
+                    // Another payment (a parallel checkout attempt, or a manual cash entry) already
+                    // settled this invoice before this gateway transaction confirmed. The money did
+                    // arrive at the gateway — the transaction is still recorded as Success above —
+                    // but it must not be double-applied to an invoice that's already covered.
+                    // Flagged in the audit trail since it now needs a manual refund.
+                    await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
+                        changesJson: $"{{\"overpayment\":{transaction.Amount},\"gatewayRef\":\"{gatewayReference}\",\"invoiceStatus\":\"{invoice.Status}\"}}",
+                        cancellationToken: ct);
+                    await _unitOfWork.SaveChangesAsync(ct);
+                    return null;
+                }
 
-            if (invoice.Status == InvoiceStatus.Cancelled)
-            {
-                // A cancelled invoice never accepts payment, regardless of balance.
+                // Same idea, partial case: another payment landed on part of the balance while
+                // this gateway transaction was in flight. Apply only what's actually still owed —
+                // never let AmountPaid run past Amount — and flag the excess for reconciliation
+                // instead of silently inflating the invoice past 100% paid.
+                var amountToApply = transaction.Amount;
+                if (amountToApply > remaining)
+                {
+                    await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
+                        changesJson: $"{{\"partialOverpayment\":{amountToApply - remaining},\"gatewayRef\":\"{gatewayReference}\"}}",
+                        cancellationToken: ct);
+                    amountToApply = remaining;
+                }
+
+                await ApplyPaymentToInvoiceAsync(invoice, amountToApply, ct);
+
                 await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
-                    changesJson: $"{{\"overpayment\":{transaction.Amount},\"gatewayRef\":\"{gatewayReference}\",\"invoiceStatus\":\"{invoice.Status}\"}}",
-                    cancellationToken: cancellationToken);
-                await _unitOfWork.SaveChangesAsync(cancellationToken);
-                return;
-            }
+                    changesJson: $"{{\"amount\":{amountToApply},\"gatewayRef\":\"{gatewayReference}\"}}", cancellationToken: ct);
+                await _unitOfWork.SaveChangesAsync(ct);
+                return (transaction, invoice, amountToApply);
+            }, cancellationToken);
 
-            var remaining = invoice.Amount - invoice.AmountPaid;
-            if (remaining <= 0)
-            {
-                // Another payment (a parallel checkout attempt, or a manual cash entry) already
-                // settled this invoice before this gateway transaction confirmed. The money did
-                // arrive at the gateway — the transaction is still recorded as Success above —
-                // but it must not be double-applied to an invoice that's already covered.
-                // Flagged in the audit trail since it now needs a manual refund.
-                await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
-                    changesJson: $"{{\"overpayment\":{transaction.Amount},\"gatewayRef\":\"{gatewayReference}\",\"invoiceStatus\":\"{invoice.Status}\"}}",
-                    cancellationToken: cancellationToken);
-                await _unitOfWork.SaveChangesAsync(cancellationToken);
-                return;
-            }
+            if (settled is null) return;
 
-            // Same idea, partial case: another payment landed on part of the balance while
-            // this gateway transaction was in flight. Apply only what's actually still owed —
-            // never let AmountPaid run past Amount — and flag the excess for reconciliation
-            // instead of silently inflating the invoice past 100% paid.
-            var amountToApply = transaction.Amount;
-            if (amountToApply > remaining)
-            {
-                await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
-                    changesJson: $"{{\"partialOverpayment\":{amountToApply - remaining},\"gatewayRef\":\"{gatewayReference}\"}}",
-                    cancellationToken: cancellationToken);
-                amountToApply = remaining;
-            }
-
-            await ApplyPaymentToInvoiceAsync(invoice, amountToApply, cancellationToken);
-
-            await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
-                changesJson: $"{{\"amount\":{amountToApply},\"gatewayRef\":\"{gatewayReference}\"}}", cancellationToken: cancellationToken);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
-
+            // Outside the transaction: a retried attempt must not re-send this email.
             await NotifyAdminsAsync(
                 NotificationType.PaymentReceived,
                 "payment-received-admin",
                 new Dictionary<string, string>
                 {
-                    ["Amount"] = transaction.Amount.ToString("0.00"),
-                    ["Currency"] = invoice.Currency,
-                    ["InvoiceNumber"] = invoice.InvoiceNumber,
-                    ["Status"] = invoice.Status.ToString(),
+                    ["Amount"] = settled.Value.Transaction.Amount.ToString("0.00"),
+                    ["Currency"] = settled.Value.Invoice.Currency,
+                    ["InvoiceNumber"] = settled.Value.Invoice.InvoiceNumber,
+                    ["Status"] = settled.Value.Invoice.Status.ToString(),
                 },
                 cancellationToken);
         }
@@ -895,45 +925,55 @@ namespace iucs.readernest.application.Services
             ConfirmCashIntentRequest request,
             CancellationToken cancellationToken = default)
         {
-            var transaction = await LoadPendingCashIntentAsync(transactionId, cancellationToken);
-            var invoice = await _unitOfWork.Repository<Invoice>().GetByIdAsync(transaction.InvoiceId, cancellationToken)
-                ?? throw new NotFoundException(nameof(Invoice), transaction.InvoiceId);
-
-            var amount = request.Amount ?? transaction.Amount;
-            var remaining = invoice.Amount - invoice.AmountPaid;
-
-            // Stale intent: the invoice was settled by another payment while this intent sat
-            // pending (older data predating the auto-close in ApplyPaymentToInvoiceAsync).
-            // Close it here so it leaves the confirmation queue instead of erroring forever.
-            if (remaining <= 0)
+            // See RecordPaymentAsync's own comment: the balance read-then-write here has the
+            // exact same lost-update shape, and a cash confirmation racing a gateway payment
+            // settling the same invoice moments apart is a realistic way to hit it. Re-fetch
+            // fresh inside the transaction (not the values from before this block) so a retry
+            // after a detected conflict sees the truly-committed balance.
+            var (transaction, invoice, amount) = await _unitOfWork.ExecuteInSerializableTransactionAsync(async ct =>
             {
-                transaction.Status = TransactionStatus.Failed;
-                transaction.FailureReason = "Invoice was already fully paid; cash intent closed without collection.";
-                _unitOfWork.Repository<PaymentTransaction>().Update(transaction);
-                await _unitOfWork.SaveChangesAsync(cancellationToken);
-                throw new DomainValidationException(
-                    "This invoice is already fully paid — the cash intent has been closed. Do not collect the cash.");
-            }
+                var txn = await LoadPendingCashIntentAsync(transactionId, ct);
+                var inv = await _unitOfWork.Repository<Invoice>().GetByIdAsync(txn.InvoiceId, ct)
+                    ?? throw new NotFoundException(nameof(Invoice), txn.InvoiceId);
 
-            if (amount > remaining)
-            {
-                throw new DomainValidationException($"Confirmed amount {amount} exceeds the outstanding balance of {remaining}.");
-            }
+                var amt = request.Amount ?? txn.Amount;
+                var remaining = inv.Amount - inv.AmountPaid;
 
-            transaction.Amount = amount;
-            transaction.Status = TransactionStatus.Success;
-            transaction.PaidAtUtc = DateTime.UtcNow;
-            transaction.ReceiptNumber = GenerateNumber("RCP");
-            _unitOfWork.Repository<PaymentTransaction>().Update(transaction);
+                // Stale intent: the invoice was settled by another payment while this intent sat
+                // pending (older data predating the auto-close in ApplyPaymentToInvoiceAsync).
+                // Close it here so it leaves the confirmation queue instead of erroring forever.
+                if (remaining <= 0)
+                {
+                    txn.Status = TransactionStatus.Failed;
+                    txn.FailureReason = "Invoice was already fully paid; cash intent closed without collection.";
+                    _unitOfWork.Repository<PaymentTransaction>().Update(txn);
+                    await _unitOfWork.SaveChangesAsync(ct);
+                    throw new DomainValidationException(
+                        "This invoice is already fully paid — the cash intent has been closed. Do not collect the cash.");
+                }
 
-            await ApplyPaymentToInvoiceAsync(invoice, amount, cancellationToken);
+                if (amt > remaining)
+                {
+                    throw new DomainValidationException($"Confirmed amount {amt} exceeds the outstanding balance of {remaining}.");
+                }
 
-            await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), invoice.Id.ToString(),
-                changesJson: $"{{\"cashConfirmed\":{amount},\"reference\":\"{transaction.GatewayTransactionId}\"}}",
-                cancellationToken: cancellationToken);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
+                txn.Amount = amt;
+                txn.Status = TransactionStatus.Success;
+                txn.PaidAtUtc = DateTime.UtcNow;
+                txn.ReceiptNumber = GenerateNumber("RCP");
+                _unitOfWork.Repository<PaymentTransaction>().Update(txn);
+
+                await ApplyPaymentToInvoiceAsync(inv, amt, ct);
+
+                await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), inv.Id.ToString(),
+                    changesJson: $"{{\"cashConfirmed\":{amt},\"reference\":\"{txn.GatewayTransactionId}\"}}",
+                    cancellationToken: ct);
+                await _unitOfWork.SaveChangesAsync(ct);
+                return (txn, inv, amt);
+            }, cancellationToken);
 
             // Close the loop with the parent: their portal invoice flips as soon as staff confirm.
+            // Outside the transaction: a retried attempt must not re-send this email.
             var parentUser = await _unitOfWork.Repository<ParentProfile>().Query()
                 .Where(p => p.Id == invoice.ParentProfileId)
                 .Select(p => p.User)

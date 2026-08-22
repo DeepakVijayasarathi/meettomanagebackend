@@ -962,7 +962,14 @@ namespace iucs.readernest.application.Services
         /// <summary>Business rule: no class is ever scheduled — or rescheduled — onto a holiday.</summary>
         private async Task EnsureNotHolidayAsync(DateTime startUtc, CancellationToken cancellationToken)
         {
-            var sessionDate = DateOnly.FromDateTime(startUtc);
+            // Holiday.Date is an org-wide calendar date meant in local (DefaultTimeZoneId,
+            // Asia/Kolkata) terms, not UTC — DateOnly.FromDateTime(startUtc) truncated the raw
+            // UTC instant instead, which is off by a full calendar day for any session starting
+            // in the 00:00-05:29 IST window (18:30-23:59 UTC the PRIOR day): a session actually
+            // on the holiday would compute the day before it and slip past this check entirely.
+            // Mirrors StoreService.ListAvailableDemoSlotsAsync's own correct conversion.
+            var zone = TimeZoneInfo.FindSystemTimeZoneById(DateTimeDisplay.DefaultTimeZoneId);
+            var sessionDate = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(startUtc, zone));
             var holiday = await _unitOfWork.Repository<Holiday>()
                 .FirstOrDefaultAsync(h => h.Date == sessionDate, cancellationToken);
             if (holiday is not null)
