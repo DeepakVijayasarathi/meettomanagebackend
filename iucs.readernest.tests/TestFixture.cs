@@ -203,6 +203,13 @@ namespace iucs.readernest.tests
             string? participantEmail,
             bool moderator,
             DateTime expiresAtUtc) => null;
+
+        /// <summary>Defaults to false (mirrors "unconfigured"/invalid); a test that needs the
+        /// finalize-recording path to succeed sets this true first.</summary>
+        public bool ValidateFinalizeTokenResult { get; set; }
+
+        public bool ValidateFinalizeToken(string? bearerToken, string? jitsiConfigJson, string expectedRoom)
+            => ValidateFinalizeTokenResult;
     }
 
     /// <summary>

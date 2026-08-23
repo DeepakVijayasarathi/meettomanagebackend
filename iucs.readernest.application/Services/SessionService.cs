@@ -455,6 +455,51 @@ namespace iucs.readernest.application.Services
             return ToRecordingDto(recording);
         }
 
+        public async Task<SessionRecordingDto?> FinalizeJibriRecordingAsync(
+            string roomName,
+            string? bearerToken,
+            string storageUrl,
+            int? durationSeconds,
+            CancellationToken cancellationToken = default)
+        {
+            var jitsiConfigJson = await _unitOfWork.Repository<Integration>().Query()
+                .Where(i => i.Key == "jitsi")
+                .Select(i => i.ConfigJson)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (!_jitsiTokenService.ValidateFinalizeToken(bearerToken, jitsiConfigJson, roomName))
+            {
+                throw new UnauthorizedException("Invalid or missing recording-finalize token.");
+            }
+
+            // Not every room maps to a ClassSession (personal rooms, demo bookings) — Jibri
+            // records those the same as any other room, but there's no session row here to
+            // attach the recording to, so this is a no-op rather than a NotFoundException: the
+            // finalize script has no session id to have gotten wrong, only a room name that's
+            // legitimately outside this feature's scope.
+            var session = await _unitOfWork.Repository<ClassSession>().Query()
+                .FirstOrDefaultAsync(s => s.MeetingRoomId == roomName, cancellationToken);
+            if (session is null)
+            {
+                return null;
+            }
+
+            var recording = new SessionRecording
+            {
+                ClassSessionId = session.Id,
+                StorageUrl = storageUrl,
+                DurationSeconds = durationSeconds,
+                // Same 15-day parent visibility window as AddRecordingAsync (the teacher-facing
+                // manual-upload path) — one policy regardless of how the recording got attached.
+                ExpiresAtUtc = DateTime.UtcNow.AddDays(15),
+            };
+            await _unitOfWork.Repository<SessionRecording>().AddAsync(recording, cancellationToken);
+            await _auditLog.StageAsync(AuditAction.Create, nameof(SessionRecording), recording.Id.ToString(), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            return ToRecordingDto(recording);
+        }
+
         public async Task<IReadOnlyList<SessionRecordingDto>> ListRecordingsAsync(
             Guid sessionId,
             CancellationToken cancellationToken = default)
