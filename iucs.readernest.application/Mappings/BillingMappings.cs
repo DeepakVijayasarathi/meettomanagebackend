@@ -34,7 +34,7 @@ namespace iucs.readernest.application.Mappings
                 InvoiceNumber = invoice.InvoiceNumber,
                 ParentProfileId = invoice.ParentProfileId,
                 ChildId = invoice.ChildId,
-                ChildName = invoice.Child is null ? null : $"{invoice.Child.FirstName} {invoice.Child.LastName}",
+                ChildName = invoice.Child is null ? null : $"{invoice.Child.FirstName} {invoice.Child.LastName}".Trim(),
                 CourseId = invoice.CourseId,
                 CourseName = invoice.Course?.Name ?? invoice.Subscription?.PackagePlan?.Course?.Name,
                 ParentName = invoice.ParentProfile?.User is null ? null : $"{invoice.ParentProfile.User.FirstName} {invoice.ParentProfile.User.LastName}",
