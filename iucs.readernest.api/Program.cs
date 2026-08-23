@@ -7,6 +7,7 @@ using iucs.readernest.api.Middleware;
 using iucs.readernest.api.Services;
 using iucs.readernest.application;
 using iucs.readernest.application.Common.Interfaces;
+using iucs.readernest.application.Common.Options;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Data;
@@ -73,6 +74,10 @@ builder.Services.AddSingleton<IBulkFileReader, BulkFileReader>();
 // Signs room-scoped Jitsi join tokens from the DB "jitsi" integration's appId/appSecret;
 // no-ops (null token, unsigned join) until an admin sets them — see JITSI_ARCHITECTURE.md.
 builder.Services.AddSingleton<IJitsiTokenService, JitsiTokenService>();
+// Server Monitoring dashboard: polls each server's rn-status agent (Monitoring:Servers config).
+// Short timeout so one down/slow server can't stall the whole summary request.
+builder.Services.AddHttpClient("Prometheus", client => client.Timeout = TimeSpan.FromSeconds(5));
+builder.Services.AddScoped<IPrometheusClient, PrometheusClient>();
 // Dual-gateway abstraction: the dispatcher routes to Razorpay/Cashfree using live
 // credentials from Settings → Integrations, and falls back to the simulated gateway
 // while an integration is disabled or its keys are blank.
@@ -97,6 +102,7 @@ builder.Services.AddHostedService<ProgressReportsBackgroundService>();
 
 // Authentication: JWT bearer
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
+builder.Services.Configure<MonitoringOptions>(builder.Configuration.GetSection(MonitoringOptions.SectionName));
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
     ?? throw new InvalidOperationException("Missing 'Jwt' configuration section.");
 if (string.IsNullOrWhiteSpace(jwt.SigningKey) || Encoding.UTF8.GetByteCount(jwt.SigningKey) < 32)
