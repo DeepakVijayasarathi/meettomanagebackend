@@ -19,6 +19,9 @@ namespace iucs.readernest.application.Dto.Admission
 
         /// <summary>True marks an additional child attending the demo.</summary>
         public bool IsChild { get; set; }
+
+        /// <summary>Join-based attendance capture: set once a matching email joins the demo's classroom hub.</summary>
+        public bool HasJoined { get; set; }
     }
 
     public class CreateDemoBookingRequest
@@ -101,6 +104,10 @@ namespace iucs.readernest.application.Dto.Admission
 
         /// <summary>Auto-calculated demo fee: ₹50 per demo, ₹100 once the lead is Enrolled.</summary>
         public decimal PayableAmount { get; set; }
+
+        /// <summary>Join-based attendance capture for the primary parent — set the first time a
+        /// signed-in account matching <see cref="ParentEmail"/> joins this demo's classroom hub.</summary>
+        public DateTime? ParentJoinedAtUtc { get; set; }
 
         public IReadOnlyList<DemoParticipantDto> Participants { get; set; } = [];
     }

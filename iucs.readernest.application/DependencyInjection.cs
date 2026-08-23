@@ -36,6 +36,7 @@ namespace iucs.readernest.application
             services.AddScoped<IIntegrationService, IntegrationService>();
             services.AddScoped<IFloatingNoteService, FloatingNoteService>();
             services.AddScoped<IAccessRequestService, AccessRequestService>();
+            services.AddScoped<IQuizQuestionService, QuizQuestionService>();
             return services;
         }
     }

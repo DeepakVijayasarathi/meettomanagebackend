@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using iucs.readernest.domain.Data;
@@ -11,9 +12,11 @@ using iucs.readernest.domain.Data;
 namespace iucs.readernest.domain.Migrations
 {
     [DbContext(typeof(ReaderNestDbContext))]
-    partial class ReaderNestDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260822154441_DemoBookingParentJoinedAt")]
+    partial class DemoBookingParentJoinedAt
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2246,117 +2249,6 @@ namespace iucs.readernest.domain.Migrations
                     b.ToTable("payout_rates");
                 });
 
-            modelBuilder.Entity("iucs.readernest.domain.Entities.Quizzes.QuizQuestion", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<Guid?>("CourseId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("course_id");
-
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at_utc");
-
-                    b.Property<Guid?>("CreatedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("created_by");
-
-                    b.Property<DateTime?>("DeletedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("deleted_at_utc");
-
-                    b.Property<Guid>("DepartmentId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("department_id");
-
-                    b.Property<int>("DisplayOrder")
-                        .HasColumnType("integer")
-                        .HasColumnName("display_order");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean")
-                        .HasColumnName("is_deleted");
-
-                    b.Property<string>("Prompt")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)")
-                        .HasColumnName("prompt");
-
-                    b.Property<DateTime?>("UpdatedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at_utc");
-
-                    b.Property<Guid?>("UpdatedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("updated_by");
-
-                    b.HasKey("Id")
-                        .HasName("pk_quiz_questions");
-
-                    b.HasIndex("CourseId")
-                        .HasDatabaseName("ix_quiz_questions_course_id");
-
-                    b.HasIndex("DepartmentId")
-                        .HasDatabaseName("ix_quiz_questions_department_id");
-
-                    b.ToTable("quiz_questions");
-                });
-
-            modelBuilder.Entity("iucs.readernest.domain.Entities.Quizzes.QuizQuestionOption", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at_utc");
-
-                    b.Property<DateTime?>("DeletedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("deleted_at_utc");
-
-                    b.Property<int>("DisplayOrder")
-                        .HasColumnType("integer")
-                        .HasColumnName("display_order");
-
-                    b.Property<bool>("IsCorrect")
-                        .HasColumnType("boolean")
-                        .HasColumnName("is_correct");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean")
-                        .HasColumnName("is_deleted");
-
-                    b.Property<Guid>("QuizQuestionId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("quiz_question_id");
-
-                    b.Property<string>("Text")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)")
-                        .HasColumnName("text");
-
-                    b.Property<DateTime?>("UpdatedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at_utc");
-
-                    b.HasKey("Id")
-                        .HasName("pk_quiz_question_options");
-
-                    b.HasIndex("QuizQuestionId")
-                        .HasDatabaseName("ix_quiz_question_options_quiz_question_id");
-
-                    b.ToTable("quiz_question_options");
-                });
-
             modelBuilder.Entity("iucs.readernest.domain.Entities.Resources.Resource", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4056,38 +3948,6 @@ namespace iucs.readernest.domain.Migrations
                     b.Navigation("TeacherProfile");
                 });
 
-            modelBuilder.Entity("iucs.readernest.domain.Entities.Quizzes.QuizQuestion", b =>
-                {
-                    b.HasOne("iucs.readernest.domain.Entities.Academics.Course", "Course")
-                        .WithMany()
-                        .HasForeignKey("CourseId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_quiz_questions_courses_course_id");
-
-                    b.HasOne("iucs.readernest.domain.Entities.Academics.Department", "Department")
-                        .WithMany()
-                        .HasForeignKey("DepartmentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_quiz_questions_departments_department_id");
-
-                    b.Navigation("Course");
-
-                    b.Navigation("Department");
-                });
-
-            modelBuilder.Entity("iucs.readernest.domain.Entities.Quizzes.QuizQuestionOption", b =>
-                {
-                    b.HasOne("iucs.readernest.domain.Entities.Quizzes.QuizQuestion", "QuizQuestion")
-                        .WithMany("Options")
-                        .HasForeignKey("QuizQuestionId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_quiz_question_options_quiz_questions_quiz_question_id");
-
-                    b.Navigation("QuizQuestion");
-                });
-
             modelBuilder.Entity("iucs.readernest.domain.Entities.Resources.Resource", b =>
                 {
                     b.HasOne("iucs.readernest.domain.Entities.Academics.Batch", "Batch")
@@ -4393,11 +4253,6 @@ namespace iucs.readernest.domain.Migrations
             modelBuilder.Entity("iucs.readernest.domain.Entities.Payouts.Payout", b =>
                 {
                     b.Navigation("Items");
-                });
-
-            modelBuilder.Entity("iucs.readernest.domain.Entities.Quizzes.QuizQuestion", b =>
-                {
-                    b.Navigation("Options");
                 });
 
             modelBuilder.Entity("iucs.readernest.domain.Entities.Users.ParentProfile", b =>

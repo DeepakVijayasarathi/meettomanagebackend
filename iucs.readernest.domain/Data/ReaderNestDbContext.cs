@@ -9,6 +9,7 @@ using iucs.readernest.domain.Entities.Integrations;
 using iucs.readernest.domain.Entities.Navigation;
 using iucs.readernest.domain.Entities.Notes;
 using iucs.readernest.domain.Entities.Payouts;
+using iucs.readernest.domain.Entities.Quizzes;
 using iucs.readernest.domain.Entities.Resources;
 using iucs.readernest.domain.Entities.Settings;
 using iucs.readernest.domain.Entities.Sessions;
@@ -53,6 +54,10 @@ namespace iucs.readernest.domain.Data
         public DbSet<SessionRecording> SessionRecordings => Set<SessionRecording>();
         public DbSet<EngagementEvent> EngagementEvents => Set<EngagementEvent>();
         public DbSet<StudentAward> StudentAwards => Set<StudentAward>();
+
+        // Quizzes
+        public DbSet<QuizQuestion> QuizQuestions => Set<QuizQuestion>();
+        public DbSet<QuizQuestionOption> QuizQuestionOptions => Set<QuizQuestionOption>();
 
         // Admission
         public DbSet<DemoBooking> DemoBookings => Set<DemoBooking>();

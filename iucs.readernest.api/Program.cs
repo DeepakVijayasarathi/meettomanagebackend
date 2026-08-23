@@ -81,6 +81,9 @@ builder.Services.AddScoped<IPaymentGateway, iucs.readernest.api.Services.Payment
 builder.Services.AddHostedService<BillingBackgroundService>();
 // Session reminders, delayed-session alerts
 builder.Services.AddHostedService<SessionReminderBackgroundService>();
+// Automatic no-show detection: flags a session once its grace period elapses with one
+// side never having joined, instead of relying solely on a human clicking "Mark No-Show"
+builder.Services.AddHostedService<NoShowDetectionBackgroundService>();
 // CRM integration: lead webhooks, no-op until Integrations:CrmWebhookUrl is set
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ICrmNotifier, WebhookCrmNotifier>();

@@ -242,7 +242,16 @@ namespace iucs.readernest.application.Services
                 .ToListAsync(cancellationToken);
 
             payout.Status = PayoutStatus.Finalized;
-            payout.TotalAmount = items.Sum(i => i.Amount);
+            // Floored at zero: TeacherNoShowPenaltyPercent is deliberately allowed up to 1000%
+            // (SetRateAsync's own comment — "centres can deduct... more than the missed session
+            // was worth"), so a teacher whose only accrued item this period is one heavily
+            // penalized no-show can otherwise finalize to a genuinely negative total. Nothing
+            // downstream expects that: this exact value is the "Total" token in the
+            // payout-statement email below and the salary-slip email MarkPaidAsync sends later,
+            // so an unfloored negative total would be emailed to the teacher as if it meant
+            // "you owe us money" — never the intent of a deduction, which should read as "you
+            // earned nothing this period," not a debt.
+            payout.TotalAmount = Math.Max(0m, items.Sum(i => i.Amount));
             payout.FinalizedAtUtc = DateTime.UtcNow;
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(Payout), payout.Id.ToString(), cancellationToken: cancellationToken);

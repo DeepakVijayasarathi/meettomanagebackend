@@ -44,6 +44,7 @@ namespace iucs.readernest.api.Data
             await EnsureSubAdminIntegrationsMenuAsync(context);
             await EnsurePackagesAndStudentViewMenusAsync(context);
             await EnsureAdminDepartmentsMenuAsync(context);
+            await EnsureAdminQuizBankMenuAsync(context);
             await BackfillMenuRequiredModulesAsync(context);
             await SeedIntegrationsAsync(context);
             await EnsureCashPaymentMethodAsync(context);
@@ -466,6 +467,7 @@ namespace iucs.readernest.api.Data
             ("admin", "Academics", "Batches", "/admin/batches", "Layers", PermissionModule.CourseBatchManagement),
             ("admin", "Academics", "Academic Calendar", "/admin/calendar", "CalendarDays", PermissionModule.SessionCalendarManagement),
             ("admin", "Academics", "Sessions", "/admin/sessions", "CalendarClock", PermissionModule.SessionCalendarManagement),
+            ("admin", "Academics", "Quiz Bank", "/admin/quiz-bank", "Sparkles", PermissionModule.CourseBatchManagement),
             ("admin", "People", "Users", "/admin/users", "Users", PermissionModule.UserManagement),
             ("admin", "People", "Roles & Permissions", "/admin/permissions", "ShieldCheck", PermissionModule.UserManagement),
             ("admin", "People", "Enrollment Review", "/admin/enrollments", "ClipboardCheck", PermissionModule.Admission),
@@ -679,6 +681,46 @@ namespace iucs.readernest.api.Data
                 Path = path,
                 Icon = "Building2",
                 SortOrder = insertAt,
+                IsActive = true,
+                RequiredModule = PermissionModule.CourseBatchManagement,
+            });
+        }
+
+        /// <summary>
+        /// Inserts the Admin "Quiz Bank" menu item into a database that was seeded before the
+        /// admin-authored quiz bank existed (SeedMenusAsync only ever creates rows once).
+        /// Appended after whatever the Academics section's last item currently is, rather than
+        /// shifted in like EnsureAdminDepartmentsMenuAsync — nothing after it in that section
+        /// needs to move.
+        /// </summary>
+        private static async Task EnsureAdminQuizBankMenuAsync(ReaderNestDbContext context)
+        {
+            const string path = "/admin/quiz-bank";
+            if (context.MenuItems.Local.Any(m => m.Portal == "admin" && m.Path == path) ||
+                await context.MenuItems.AnyAsync(m => m.Portal == "admin" && m.Path == path))
+            {
+                return;
+            }
+
+            var academicsItems = await context.MenuItems
+                .Where(m => m.Portal == "admin" && m.Section == "Academics")
+                .ToListAsync();
+            if (academicsItems.Count == 0)
+            {
+                return; // no Academics section at all (unexpected) — nothing sensible to append after
+            }
+
+            var last = academicsItems.OrderByDescending(m => m.SortOrder).First();
+
+            context.MenuItems.Add(new MenuItem
+            {
+                Portal = "admin",
+                Section = "Academics",
+                SectionOrder = last.SectionOrder,
+                Label = "Quiz Bank",
+                Path = path,
+                Icon = "Sparkles",
+                SortOrder = last.SortOrder + 1,
                 IsActive = true,
                 RequiredModule = PermissionModule.CourseBatchManagement,
             });

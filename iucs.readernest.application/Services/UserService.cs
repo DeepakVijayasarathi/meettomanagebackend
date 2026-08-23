@@ -310,6 +310,16 @@ namespace iucs.readernest.application.Services
             var user = await _unitOfWork.Repository<User>().GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), id);
 
+            // Same blanket rule as ChangeRoleAsync/CreateAsync: Admin accounts are untouchable
+            // through this generic action. Without it, anyone holding UserManagement:Edit — a
+            // routine grant for e.g. a Relationship Manager Sub Admin — could suspend the real
+            // Admin account outright (self-preservation after a privilege-escalation attempt,
+            // or standalone sabotage/denial of service).
+            if (user.Role == UserRole.Admin)
+            {
+                throw new DomainValidationException("Admin accounts can't be changed through this action.");
+            }
+
             var wasActive = user.Status == UserStatus.Active;
             user.Status = status;
 
@@ -464,6 +474,36 @@ namespace iucs.readernest.application.Services
             if (user.Role != UserRole.SubAdmin)
             {
                 throw new DomainValidationException("Module permissions can only be assigned to Sub Admin users.");
+            }
+
+            // Ceiling check: a Sub Admin holding only UserManagement:Edit could otherwise grant
+            // a colleague — or, combined with ResetPinAsync, a colleague's account they then
+            // take over — any module/action neither of them was ever given, including
+            // BillingFinance:Approve or Settings:Edit. PermissionAuthorizationHandler already
+            // lets a real Admin caller through every [HasPermission] check regardless of the
+            // SubAdminPermission table, so only non-Admin callers need this comparison.
+            var currentUser = await _unitOfWork.Repository<User>().GetByIdAsync(currentUserId, cancellationToken)
+                ?? throw new NotFoundException(nameof(User), currentUserId);
+            if (currentUser.Role != UserRole.Admin)
+            {
+                var callerGrants = await _unitOfWork.Repository<SubAdminPermission>().Query()
+                    .Where(p => p.UserId == currentUserId)
+                    .ToDictionaryAsync(p => p.Module, cancellationToken);
+
+                static bool Exceeds(bool requested, bool held) => requested && !held;
+
+                foreach (var dto in permissions)
+                {
+                    callerGrants.TryGetValue(dto.Module, out var callerGrant);
+                    if (Exceeds(dto.CanView, callerGrant?.CanView ?? false)
+                        || Exceeds(dto.CanCreate, callerGrant?.CanCreate ?? false)
+                        || Exceeds(dto.CanEdit, callerGrant?.CanEdit ?? false)
+                        || Exceeds(dto.CanDelete, callerGrant?.CanDelete ?? false)
+                        || Exceeds(dto.CanApprove, callerGrant?.CanApprove ?? false))
+                    {
+                        throw new ForbiddenException($"You can't grant '{dto.Module}' permissions you don't hold yourself.");
+                    }
+                }
             }
 
             // SubAdminPermission is uniquely indexed on (UserId, Module), so the same module
@@ -640,6 +680,18 @@ namespace iucs.readernest.application.Services
             var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), userId);
 
+            // Every account — Admin included — authenticates with email+PIN alone (see
+            // AuthService.LoginAsync), so the PIN this method hands back in the HTTP response
+            // IS the full credential. Without this guard, anyone holding UserManagement:Edit
+            // could reset the Admin account's PIN, read the new one straight off the screen,
+            // and log in as Admin: a full account takeover from a routine, mid-tier grant.
+            // Same blanket "Admin accounts can't be touched through this action" rule as
+            // ChangeRoleAsync/SetStatusAsync.
+            if (user.Role == UserRole.Admin)
+            {
+                throw new DomainValidationException("Admin accounts can't be reset through this action.");
+            }
+
             var temporaryPin = TemporaryPinGenerator.Generate();
             user.PinHash = _passwordHasher.Hash(temporaryPin);
             _unitOfWork.Repository<User>().Update(user);
@@ -681,6 +733,19 @@ namespace iucs.readernest.application.Services
 
             if (user.Role == UserRole.Admin)
             {
+                // Unlike ChangeRoleAsync/SetStatusAsync/ResetPinAsync's blanket "never touch an
+                // Admin" rule, removing one Admin account is a legitimate Admin-to-Admin
+                // offboarding action — but only when the CALLER is also an Admin. The
+                // [HasPermission(UserManagement, Delete)] attribute on this endpoint doesn't
+                // restrict to Admin callers, so without this a Sub Admin holding only
+                // UserManagement:Delete could remove any non-last Admin account outright.
+                var currentUser = await repository.GetByIdAsync(currentUserId, cancellationToken)
+                    ?? throw new NotFoundException(nameof(User), currentUserId);
+                if (currentUser.Role != UserRole.Admin)
+                {
+                    throw new ForbiddenException("Only an Admin can delete another Admin account.");
+                }
+
                 var otherAdminExists = await repository.ExistsAsync(
                     u => u.Role == UserRole.Admin && u.Id != id, cancellationToken);
                 if (!otherAdminExists)
