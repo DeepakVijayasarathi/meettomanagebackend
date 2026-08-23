@@ -32,19 +32,22 @@ namespace iucs.readernest.application.Services
 
         /// <summary>Only for hand-stamping UpdatedBy on writes that bypass the audit interceptor.</summary>
         private readonly ICurrentUserService _currentUser;
+        private readonly IBulkFileReader _bulkFileReader;
 
         public BillingService(
             IUnitOfWork unitOfWork,
             IAuditLogService auditLog,
             IPaymentGateway paymentGateway,
             INotificationService notificationService,
-            ICurrentUserService currentUser)
+            ICurrentUserService currentUser,
+            IBulkFileReader bulkFileReader)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _paymentGateway = paymentGateway;
             _notificationService = notificationService;
             _currentUser = currentUser;
+            _bulkFileReader = bulkFileReader;
         }
 
         public async Task<IReadOnlyList<PackagePlanDto>> ListPlansAsync(CancellationToken cancellationToken = default)
@@ -213,6 +216,105 @@ namespace iucs.readernest.application.Services
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return plan.ToDto();
+        }
+
+        public async Task<BulkImportResult> BulkImportPlansAsync(Stream file, string fileName, CancellationToken cancellationToken = default)
+        {
+            var rows = _bulkFileReader.ReadRows(file, fileName);
+            var result = new BulkImportResult { TotalRows = rows.Count };
+
+            for (var i = 0; i < rows.Count; i++)
+            {
+                var rowNumber = i + 2;
+                try
+                {
+                    var row = rows[i];
+                    var name = row.GetOrNull("Name") ?? throw new DomainValidationException("Name is required.");
+
+                    Guid? courseId = null;
+                    var courseName = row.GetOrNull("CourseName");
+                    if (courseName is not null)
+                    {
+                        var course = await _unitOfWork.Repository<Course>().FirstOrDefaultAsync(c => c.Name == courseName, cancellationToken)
+                            ?? throw new NotFoundException($"No course named '{courseName}'.");
+                        courseId = course.Id;
+                    }
+
+                    var billingTypeText = row.GetOrNull("BillingType")
+                        ?? throw new DomainValidationException("BillingType is required (Subscription, SessionBased or OneTime).");
+                    if (!Enum.TryParse<BillingType>(billingTypeText, true, out var billingType))
+                    {
+                        throw new DomainValidationException($"BillingType '{billingTypeText}' is not valid — use Subscription, SessionBased or OneTime.");
+                    }
+
+                    var billingCycleText = row.GetOrNull("BillingCycle")
+                        ?? throw new DomainValidationException("BillingCycle is required (Monthly, Quarterly, Yearly or OneTime).");
+                    if (!Enum.TryParse<BillingCycle>(billingCycleText, true, out var billingCycle))
+                    {
+                        throw new DomainValidationException($"BillingCycle '{billingCycleText}' is not valid — use Monthly, Quarterly, Yearly or OneTime.");
+                    }
+
+                    var priceText = row.GetOrNull("Price") ?? throw new DomainValidationException("Price is required.");
+                    if (!decimal.TryParse(priceText, out var price))
+                    {
+                        throw new DomainValidationException($"Price '{priceText}' is not a number.");
+                    }
+
+                    int? sessionsIncluded = null;
+                    var sessionsText = row.GetOrNull("SessionsIncluded");
+                    if (sessionsText is not null)
+                    {
+                        if (!int.TryParse(sessionsText, out var parsedSessions))
+                        {
+                            throw new DomainValidationException($"SessionsIncluded '{sessionsText}' is not a whole number.");
+                        }
+                        sessionsIncluded = parsedSessions;
+                    }
+
+                    await CreatePlanAsync(
+                        new SavePackagePlanRequest
+                        {
+                            Name = name,
+                            CourseId = courseId,
+                            BillingType = billingType,
+                            BillingCycle = billingCycle,
+                            Price = price,
+                            SessionsIncluded = sessionsIncluded,
+                            IsActive = row.GetBool("IsActive"),
+                        },
+                        cancellationToken);
+                    result.SucceededCount++;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    result.FailedCount++;
+                    result.Errors.Add(new BulkImportRowError { RowNumber = rowNumber, Message = ex.Message });
+                }
+            }
+
+            return result;
+        }
+
+        public async Task<string> ExportPlansCsvAsync(CancellationToken cancellationToken = default)
+        {
+            var plans = await ListPlansAsync(cancellationToken);
+            var courseIds = plans.Where(p => p.CourseId.HasValue).Select(p => p.CourseId!.Value).Distinct().ToList();
+            var courseNames = await _unitOfWork.Repository<Course>().Query()
+                .Where(c => courseIds.Contains(c.Id))
+                .ToDictionaryAsync(c => c.Id, c => c.Name, cancellationToken);
+
+            string[] headers = ["Name", "CourseName", "BillingType", "BillingCycle", "Price", "SessionsIncluded", "IsActive"];
+            var rows = plans.Select(p => new List<string?>
+            {
+                p.Name,
+                p.CourseId.HasValue ? courseNames.GetValueOrDefault(p.CourseId.Value) : null,
+                p.BillingType.ToString(),
+                p.BillingCycle.ToString(),
+                p.Price.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                p.SessionsIncluded?.ToString(),
+                p.IsActive ? "true" : "false",
+            });
+            return CsvWriter.BuildCsv(headers, rows);
         }
 
         /// <summary>

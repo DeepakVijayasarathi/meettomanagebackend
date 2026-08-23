@@ -67,6 +67,9 @@ builder.Services.AddScoped<ISmsSender, SmsSender>();
 // of silently depending on which environment you're in. Configured via Storage:S3:* (real
 // credentials come from user-secrets locally, environment variables in prod — never committed).
 builder.Services.AddSingleton<IFileStorage, S3FileStorage>();
+// Parses uploaded bulk-import spreadsheets (.csv/.xlsx) for Users/Students/Departments/
+// Courses/Package Plans/Quiz Questions — stateless, so singleton is fine.
+builder.Services.AddSingleton<IBulkFileReader, BulkFileReader>();
 // Signs room-scoped Jitsi join tokens from the DB "jitsi" integration's appId/appSecret;
 // no-ops (null token, unsigned join) until an admin sets them — see JITSI_ARCHITECTURE.md.
 builder.Services.AddSingleton<IJitsiTokenService, JitsiTokenService>();

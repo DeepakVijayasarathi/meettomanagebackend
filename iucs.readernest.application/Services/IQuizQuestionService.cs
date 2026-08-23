@@ -1,3 +1,4 @@
+using iucs.readernest.application.Dto.Common;
 using iucs.readernest.application.Dto.Quizzes;
 
 namespace iucs.readernest.application.Services
@@ -22,5 +23,12 @@ namespace iucs.readernest.application.Services
         /// </summary>
         Task<IReadOnlyList<QuizQuestionDto>> GetForSessionAsync(
             Guid sessionId, Guid userId, CancellationToken cancellationToken = default);
+
+        /// <summary>Row-by-row. Columns: DepartmentName (required unless CourseName is set),
+        /// CourseName (optional — narrows to one course), Prompt, Option1..Option6 (2-6 filled),
+        /// CorrectOptionNumber (1-based index into the filled options).</summary>
+        Task<BulkImportResult> BulkImportAsync(Stream file, string fileName, CancellationToken cancellationToken = default);
+
+        Task<string> ExportCsvAsync(Guid? departmentId, Guid? courseId, CancellationToken cancellationToken = default);
     }
 }

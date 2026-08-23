@@ -1,6 +1,9 @@
 using System.Text.Json;
+using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
+using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Dto.Billing;
+using iucs.readernest.application.Dto.Common;
 using iucs.readernest.application.Dto.Enrollment;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Admission;
@@ -17,12 +20,15 @@ namespace iucs.readernest.application.Services
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
         private readonly IBillingService _billingService;
+        private readonly IBulkFileReader _bulkFileReader;
 
-        public EnrollmentService(IUnitOfWork unitOfWork, IAuditLogService auditLog, IBillingService billingService)
+        public EnrollmentService(
+            IUnitOfWork unitOfWork, IAuditLogService auditLog, IBillingService billingService, IBulkFileReader bulkFileReader)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _billingService = billingService;
+            _bulkFileReader = bulkFileReader;
         }
 
         /// <summary>
@@ -364,6 +370,78 @@ namespace iucs.readernest.application.Services
             await _auditLog.StageAsync(AuditAction.Update, nameof(Child), child.Id.ToString(),
                 changesJson: "{\"rmNotes\":\"updated\"}", cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        public async Task<BulkImportResult> BulkImportStudentsAsync(
+            Stream file, string fileName, CancellationToken cancellationToken = default)
+        {
+            var rows = _bulkFileReader.ReadRows(file, fileName);
+            var result = new BulkImportResult { TotalRows = rows.Count };
+
+            for (var i = 0; i < rows.Count; i++)
+            {
+                var rowNumber = i + 2;
+                try
+                {
+                    var row = rows[i];
+                    var parentEmail = row.GetOrNull("ParentEmail")
+                        ?? throw new DomainValidationException("ParentEmail is required.");
+                    var studentName = row.GetOrNull("StudentFullName")
+                        ?? throw new DomainValidationException("StudentFullName is required.");
+
+                    var normalizedEmail = parentEmail.Trim().ToLowerInvariant();
+                    var parentProfile = await _unitOfWork.Repository<ParentProfile>().Query()
+                        .Include(p => p.User)
+                        .FirstOrDefaultAsync(p => p.User.Email == normalizedEmail, cancellationToken)
+                        ?? throw new NotFoundException(
+                            $"No parent account found with email '{parentEmail}' — create the parent first, then import their students.");
+
+                    DateOnly? dateOfBirth = null;
+                    var dobText = row.GetOrNull("DateOfBirth");
+                    if (dobText is not null)
+                    {
+                        if (!DateOnly.TryParse(dobText, out var parsedDob))
+                        {
+                            throw new DomainValidationException($"DateOfBirth '{dobText}' is not a valid date — use YYYY-MM-DD.");
+                        }
+                        dateOfBirth = parsedDob;
+                    }
+
+                    var nameParts = studentName.Trim().Split(' ', 2);
+                    var child = new Child
+                    {
+                        ParentProfileId = parentProfile.Id,
+                        FirstName = nameParts[0],
+                        LastName = nameParts.Length > 1 ? nameParts[1] : string.Empty,
+                        DateOfBirth = dateOfBirth,
+                        AcademicLevel = row.GetOrNull("AcademicLevel"),
+                        IsActive = true,
+                    };
+                    await _unitOfWork.Repository<Child>().AddAsync(child, cancellationToken);
+                    await _auditLog.StageAsync(AuditAction.Create, nameof(Child), child.Id.ToString(), cancellationToken: cancellationToken);
+                    await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+                    result.SucceededCount++;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    result.FailedCount++;
+                    result.Errors.Add(new BulkImportRowError { RowNumber = rowNumber, Message = ex.Message });
+                }
+            }
+
+            return result;
+        }
+
+        public async Task<string> ExportStudentsCsvAsync(CancellationToken cancellationToken = default)
+        {
+            var students = await ListAllStudentsAsync(cancellationToken);
+            string[] headers = ["FullName", "ParentName", "Age", "AcademicLevel", "CourseName", "IsActive"];
+            var rows = students.Select(s => new List<string?>
+            {
+                s.FullName, s.ParentName, s.Age?.ToString(), s.AcademicLevel, s.CourseName, s.IsActive ? "true" : "false",
+            });
+            return CsvWriter.BuildCsv(headers, rows);
         }
 
         /// <summary>

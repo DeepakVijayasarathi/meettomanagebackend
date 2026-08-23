@@ -1,4 +1,5 @@
 using iucs.readernest.api.Auth;
+using iucs.readernest.application.Dto.Common;
 using iucs.readernest.application.Dto.Courses;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
@@ -51,6 +52,31 @@ namespace iucs.readernest.api.Controllers
             CancellationToken cancellationToken)
         {
             return Ok(await _departmentService.UpdateAsync(id, request, cancellationToken));
+        }
+
+        private const long MaxBulkImportBytes = 5 * 1024 * 1024;
+
+        /// <summary>Bulk-create departments from an uploaded .csv/.xlsx. Columns: Name, Description, IsActive.</summary>
+        [HttpPost("bulk-import")]
+        [HasPermission(PermissionModule.CourseBatchManagement, PermissionAction.Create)]
+        [RequestSizeLimit(MaxBulkImportBytes)]
+        public async Task<ActionResult<BulkImportResult>> BulkImport(IFormFile file, CancellationToken cancellationToken)
+        {
+            if (file.Length == 0)
+            {
+                return BadRequest("The uploaded file is empty.");
+            }
+
+            await using var stream = file.OpenReadStream();
+            return Ok(await _departmentService.BulkImportAsync(stream, file.FileName, cancellationToken));
+        }
+
+        [HttpGet("export")]
+        [HasPermission(PermissionModule.CourseBatchManagement, PermissionAction.View)]
+        public async Task<IActionResult> Export([FromQuery] bool includeInactive = true, CancellationToken cancellationToken = default)
+        {
+            var csv = await _departmentService.ExportCsvAsync(includeInactive, cancellationToken);
+            return File(System.Text.Encoding.UTF8.GetBytes(csv), "text/csv", $"departments-{DateTime.UtcNow:yyyyMMdd}.csv");
         }
     }
 }

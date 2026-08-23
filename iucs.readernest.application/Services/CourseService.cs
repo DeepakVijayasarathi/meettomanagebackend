@@ -1,4 +1,7 @@
+using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
+using iucs.readernest.application.Common.Interfaces;
+using iucs.readernest.application.Dto.Common;
 using iucs.readernest.application.Dto.Courses;
 using iucs.readernest.application.Mappings;
 using iucs.readernest.domain.Entities.Academics;
@@ -16,11 +19,13 @@ namespace iucs.readernest.application.Services
 
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
+        private readonly IBulkFileReader _bulkFileReader;
 
-        public CourseService(IUnitOfWork unitOfWork, IAuditLogService auditLog)
+        public CourseService(IUnitOfWork unitOfWork, IAuditLogService auditLog, IBulkFileReader bulkFileReader)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
+            _bulkFileReader = bulkFileReader;
         }
 
         public async Task<IReadOnlyList<CourseCategoryDto>> ListCategoriesAsync(CancellationToken cancellationToken = default)
@@ -230,6 +235,101 @@ namespace iucs.readernest.application.Services
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return course.ToDto();
+        }
+
+        public async Task<BulkImportResult> BulkImportAsync(Stream file, string fileName, CancellationToken cancellationToken = default)
+        {
+            var rows = _bulkFileReader.ReadRows(file, fileName);
+            var result = new BulkImportResult { TotalRows = rows.Count };
+
+            for (var i = 0; i < rows.Count; i++)
+            {
+                var rowNumber = i + 2;
+                try
+                {
+                    var row = rows[i];
+                    var name = row.GetOrNull("Name") ?? throw new DomainValidationException("Name is required.");
+                    var departmentName = row.GetOrNull("DepartmentName")
+                        ?? throw new DomainValidationException("DepartmentName is required.");
+                    var categoryName = row.GetOrNull("CategoryName")
+                        ?? throw new DomainValidationException("CategoryName is required.");
+                    var typeText = row.GetOrNull("Type") ?? "Group";
+                    if (!Enum.TryParse<CourseType>(typeText, true, out var type))
+                    {
+                        throw new DomainValidationException($"Type '{typeText}' is not valid — use Individual or Group.");
+                    }
+
+                    var durationText = row.GetOrNull("DurationMinutes")
+                        ?? throw new DomainValidationException("DurationMinutes is required.");
+                    if (!int.TryParse(durationText, out var duration))
+                    {
+                        throw new DomainValidationException($"DurationMinutes '{durationText}' is not a whole number.");
+                    }
+
+                    var priceText = row.GetOrNull("Price") ?? throw new DomainValidationException("Price is required.");
+                    if (!decimal.TryParse(priceText, out var price))
+                    {
+                        throw new DomainValidationException($"Price '{priceText}' is not a number.");
+                    }
+
+                    var sessionsText = row.GetOrNull("TotalSessions")
+                        ?? throw new DomainValidationException("TotalSessions is required.");
+                    if (!int.TryParse(sessionsText, out var totalSessions))
+                    {
+                        throw new DomainValidationException($"TotalSessions '{sessionsText}' is not a whole number.");
+                    }
+
+                    var department = await _unitOfWork.Repository<Department>()
+                        .FirstOrDefaultAsync(d => d.Name == departmentName, cancellationToken)
+                        ?? throw new NotFoundException($"No department named '{departmentName}' — create it first (or via the Departments bulk import).");
+
+                    var category = await _unitOfWork.Repository<CourseCategory>()
+                        .FirstOrDefaultAsync(c => c.Name == categoryName && c.DepartmentId == department.Id, cancellationToken);
+                    if (category is null)
+                    {
+                        var created = await CreateCategoryAsync(
+                            new CreateCourseCategoryRequest { Name = categoryName, DepartmentId = department.Id },
+                            cancellationToken);
+                        category = await _unitOfWork.Repository<CourseCategory>().GetByIdAsync(created.Id, cancellationToken);
+                    }
+
+                    await CreateAsync(
+                        new SaveCourseRequest
+                        {
+                            CourseCategoryId = category!.Id,
+                            Name = name,
+                            Description = row.GetOrNull("Description"),
+                            Type = type,
+                            DurationMinutes = duration,
+                            Price = price,
+                            TotalSessions = totalSessions,
+                            DepartmentId = department.Id,
+                            IsActive = row.GetBool("IsActive"),
+                        },
+                        cancellationToken);
+                    result.SucceededCount++;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    result.FailedCount++;
+                    result.Errors.Add(new BulkImportRowError { RowNumber = rowNumber, Message = ex.Message });
+                }
+            }
+
+            return result;
+        }
+
+        public async Task<string> ExportCsvAsync(bool includeInactive, CancellationToken cancellationToken = default)
+        {
+            var courses = await ListAsync(includeInactive, cancellationToken);
+            string[] headers = ["DepartmentName", "CategoryName", "Name", "Description", "Type", "DurationMinutes", "Price", "TotalSessions", "IsActive"];
+            var rows = courses.Select(c => new List<string?>
+            {
+                c.DepartmentName, c.CategoryName, c.Name, c.Description, c.Type.ToString(),
+                c.DurationMinutes.ToString(), c.Price.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                c.TotalSessions.ToString(), c.IsActive ? "true" : "false",
+            });
+            return CsvWriter.BuildCsv(headers, rows);
         }
 
         private async Task<(CourseCategory Category, Department Department)> ValidateAsync(

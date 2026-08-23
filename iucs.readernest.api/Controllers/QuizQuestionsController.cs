@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using iucs.readernest.api.Auth;
+using iucs.readernest.application.Dto.Common;
 using iucs.readernest.application.Dto.Quizzes;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
@@ -75,6 +76,32 @@ namespace iucs.readernest.api.Controllers
         {
             var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
             return Ok(await _quizQuestionService.GetForSessionAsync(sessionId, userId, cancellationToken));
+        }
+
+        private const long MaxBulkImportBytes = 5 * 1024 * 1024;
+
+        /// <summary>Columns: DepartmentName (required unless CourseName set), CourseName, Prompt, Option1..Option6, CorrectOptionNumber.</summary>
+        [HttpPost("bulk-import")]
+        [HasPermission(PermissionModule.CourseBatchManagement, PermissionAction.Create)]
+        [RequestSizeLimit(MaxBulkImportBytes)]
+        public async Task<ActionResult<BulkImportResult>> BulkImport(IFormFile file, CancellationToken cancellationToken)
+        {
+            if (file.Length == 0)
+            {
+                return BadRequest("The uploaded file is empty.");
+            }
+
+            await using var stream = file.OpenReadStream();
+            return Ok(await _quizQuestionService.BulkImportAsync(stream, file.FileName, cancellationToken));
+        }
+
+        [HttpGet("export")]
+        [HasPermission(PermissionModule.CourseBatchManagement, PermissionAction.View)]
+        public async Task<IActionResult> Export(
+            [FromQuery] Guid? departmentId, [FromQuery] Guid? courseId, CancellationToken cancellationToken)
+        {
+            var csv = await _quizQuestionService.ExportCsvAsync(departmentId, courseId, cancellationToken);
+            return File(System.Text.Encoding.UTF8.GetBytes(csv), "text/csv", $"quiz-questions-{DateTime.UtcNow:yyyyMMdd}.csv");
         }
     }
 }
