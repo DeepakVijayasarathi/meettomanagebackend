@@ -1,5 +1,7 @@
 using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
+using iucs.readernest.application.Common.Interfaces;
+using iucs.readernest.application.Dto.Common;
 using iucs.readernest.application.Dto.Quizzes;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Admission;
@@ -16,12 +18,15 @@ namespace iucs.readernest.application.Services
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
         private readonly ISessionService _sessionService;
+        private readonly IBulkFileReader _bulkFileReader;
 
-        public QuizQuestionService(IUnitOfWork unitOfWork, IAuditLogService auditLog, ISessionService sessionService)
+        public QuizQuestionService(
+            IUnitOfWork unitOfWork, IAuditLogService auditLog, ISessionService sessionService, IBulkFileReader bulkFileReader)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _sessionService = sessionService;
+            _bulkFileReader = bulkFileReader;
         }
 
         public async Task<IReadOnlyList<QuizQuestionDto>> ListAsync(
@@ -172,6 +177,106 @@ namespace iucs.readernest.application.Services
                 .ToListAsync(cancellationToken);
 
             return questions.Select(ToDto).ToList();
+        }
+
+        private const int MaxImportOptions = 6;
+
+        public async Task<BulkImportResult> BulkImportAsync(Stream file, string fileName, CancellationToken cancellationToken = default)
+        {
+            var rows = _bulkFileReader.ReadRows(file, fileName);
+            var result = new BulkImportResult { TotalRows = rows.Count };
+
+            for (var i = 0; i < rows.Count; i++)
+            {
+                var rowNumber = i + 2;
+                try
+                {
+                    var row = rows[i];
+                    var prompt = row.GetOrNull("Prompt") ?? throw new DomainValidationException("Prompt is required.");
+
+                    Guid? departmentId = null;
+                    Guid? courseId = null;
+                    var courseName = row.GetOrNull("CourseName");
+                    if (courseName is not null)
+                    {
+                        var course = await _unitOfWork.Repository<Course>().FirstOrDefaultAsync(c => c.Name == courseName, cancellationToken)
+                            ?? throw new NotFoundException($"No course named '{courseName}'.");
+                        courseId = course.Id;
+                    }
+                    else
+                    {
+                        var departmentName = row.GetOrNull("DepartmentName")
+                            ?? throw new DomainValidationException("Set either DepartmentName or CourseName for this question.");
+                        var department = await _unitOfWork.Repository<Department>().FirstOrDefaultAsync(d => d.Name == departmentName, cancellationToken)
+                            ?? throw new NotFoundException($"No department named '{departmentName}'.");
+                        departmentId = department.Id;
+                    }
+
+                    var options = new List<QuizQuestionOptionInput>();
+                    for (var opt = 1; opt <= MaxImportOptions; opt++)
+                    {
+                        var text = row.GetOrNull($"Option{opt}");
+                        if (text is not null)
+                        {
+                            options.Add(new QuizQuestionOptionInput { Text = text, IsCorrect = false });
+                        }
+                    }
+
+                    var correctText = row.GetOrNull("CorrectOptionNumber")
+                        ?? throw new DomainValidationException("CorrectOptionNumber is required.");
+                    if (!int.TryParse(correctText, out var correctNumber) || correctNumber < 1 || correctNumber > options.Count)
+                    {
+                        throw new DomainValidationException(
+                            $"CorrectOptionNumber must be a number between 1 and {options.Count} (the number of filled-in options).");
+                    }
+
+                    options[correctNumber - 1].IsCorrect = true;
+
+                    await CreateAsync(
+                        new SaveQuizQuestionRequest
+                        {
+                            DepartmentId = departmentId,
+                            CourseId = courseId,
+                            Prompt = prompt,
+                            Options = options,
+                        },
+                        cancellationToken);
+                    result.SucceededCount++;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    result.FailedCount++;
+                    result.Errors.Add(new BulkImportRowError { RowNumber = rowNumber, Message = ex.Message });
+                }
+            }
+
+            return result;
+        }
+
+        public async Task<string> ExportCsvAsync(Guid? departmentId, Guid? courseId, CancellationToken cancellationToken = default)
+        {
+            var questions = await ListAsync(departmentId, courseId, cancellationToken);
+            var headers = new List<string> { "DepartmentName", "CourseName", "Prompt" };
+            for (var opt = 1; opt <= MaxImportOptions; opt++)
+            {
+                headers.Add($"Option{opt}");
+            }
+            headers.Add("CorrectOptionNumber");
+
+            var rows = questions.Select(q =>
+            {
+                var row = new List<string?> { q.DepartmentName, q.CourseName, q.Prompt };
+                var ordered = q.Options.OrderBy(o => o.DisplayOrder).ToList();
+                for (var opt = 0; opt < MaxImportOptions; opt++)
+                {
+                    row.Add(opt < ordered.Count ? ordered[opt].Text : null);
+                }
+                var correctIndex = ordered.FindIndex(o => o.IsCorrect);
+                row.Add(correctIndex >= 0 ? (correctIndex + 1).ToString() : null);
+                return row;
+            });
+
+            return CsvWriter.BuildCsv(headers, rows);
         }
 
         /// <summary>Shared validate+resolve for Create/Update: derives DepartmentId from the

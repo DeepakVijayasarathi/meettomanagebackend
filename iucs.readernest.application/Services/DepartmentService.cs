@@ -1,4 +1,7 @@
+using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
+using iucs.readernest.application.Common.Interfaces;
+using iucs.readernest.application.Dto.Common;
 using iucs.readernest.application.Dto.Courses;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Enums;
@@ -11,11 +14,13 @@ namespace iucs.readernest.application.Services
     {
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
+        private readonly IBulkFileReader _bulkFileReader;
 
-        public DepartmentService(IUnitOfWork unitOfWork, IAuditLogService auditLog)
+        public DepartmentService(IUnitOfWork unitOfWork, IAuditLogService auditLog, IBulkFileReader bulkFileReader)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
+            _bulkFileReader = bulkFileReader;
         }
 
         public async Task<IReadOnlyList<DepartmentDto>> ListAsync(bool includeInactive = false, CancellationToken cancellationToken = default)
@@ -75,6 +80,48 @@ namespace iucs.readernest.application.Services
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return ToDto(department);
+        }
+
+        public async Task<BulkImportResult> BulkImportAsync(Stream file, string fileName, CancellationToken cancellationToken = default)
+        {
+            var rows = _bulkFileReader.ReadRows(file, fileName);
+            var result = new BulkImportResult { TotalRows = rows.Count };
+
+            for (var i = 0; i < rows.Count; i++)
+            {
+                var rowNumber = i + 2; // header is row 1
+                try
+                {
+                    var row = rows[i];
+                    var name = row.GetOrNull("Name")
+                        ?? throw new DomainValidationException("Name is required.");
+
+                    await CreateAsync(
+                        new SaveDepartmentRequest
+                        {
+                            Name = name,
+                            Description = row.GetOrNull("Description"),
+                            IsActive = row.GetBool("IsActive"),
+                        },
+                        cancellationToken);
+                    result.SucceededCount++;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    result.FailedCount++;
+                    result.Errors.Add(new BulkImportRowError { RowNumber = rowNumber, Message = ex.Message });
+                }
+            }
+
+            return result;
+        }
+
+        public async Task<string> ExportCsvAsync(bool includeInactive, CancellationToken cancellationToken = default)
+        {
+            var departments = await ListAsync(includeInactive, cancellationToken);
+            string[] headers = ["Name", "Description", "IsActive"];
+            var rows = departments.Select(d => new List<string?> { d.Name, d.Description, d.IsActive ? "true" : "false" });
+            return CsvWriter.BuildCsv(headers, rows);
         }
 
         private static DepartmentDto ToDto(Department department) => new()

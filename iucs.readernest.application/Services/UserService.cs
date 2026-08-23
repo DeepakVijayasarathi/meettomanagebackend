@@ -1,9 +1,11 @@
+using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Dto.Common;
 using iucs.readernest.application.Dto.Users;
 using iucs.readernest.application.Helper;
 using iucs.readernest.application.Mappings;
+using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Entities.Communication;
 using iucs.readernest.domain.Entities.Integrations;
@@ -26,6 +28,7 @@ namespace iucs.readernest.application.Services
         private readonly IEmailSender _emailSender;
         private readonly IWhatsAppSender _whatsAppSender;
         private readonly ISmsSender _smsSender;
+        private readonly IBulkFileReader _bulkFileReader;
         private readonly ILogger<UserService> _logger;
 
         public UserService(
@@ -37,6 +40,7 @@ namespace iucs.readernest.application.Services
             IEmailSender emailSender,
             IWhatsAppSender whatsAppSender,
             ISmsSender smsSender,
+            IBulkFileReader bulkFileReader,
             ILogger<UserService> logger)
         {
             _unitOfWork = unitOfWork;
@@ -47,6 +51,7 @@ namespace iucs.readernest.application.Services
             _emailSender = emailSender;
             _whatsAppSender = whatsAppSender;
             _smsSender = smsSender;
+            _bulkFileReader = bulkFileReader;
             _logger = logger;
         }
 
@@ -785,6 +790,77 @@ namespace iucs.readernest.application.Services
 
             await _auditLog.StageAsync(AuditAction.Delete, nameof(User), user.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        public async Task<BulkImportResult> BulkImportAsync(
+            Stream file, string fileName, UserRole role, CancellationToken cancellationToken = default)
+        {
+            if (role != UserRole.Parent && role != UserRole.Teacher)
+            {
+                throw new DomainValidationException("Only Parent and Teacher accounts can be bulk-imported.");
+            }
+
+            var rows = _bulkFileReader.ReadRows(file, fileName);
+            var result = new BulkImportResult { TotalRows = rows.Count };
+
+            for (var i = 0; i < rows.Count; i++)
+            {
+                var rowNumber = i + 2;
+                try
+                {
+                    var row = rows[i];
+                    var email = row.GetOrNull("Email") ?? throw new DomainValidationException("Email is required.");
+                    var firstName = row.GetOrNull("FirstName") ?? throw new DomainValidationException("FirstName is required.");
+
+                    Guid? departmentId = null;
+                    if (role == UserRole.Teacher)
+                    {
+                        var departmentName = row.GetOrNull("DepartmentName");
+                        if (departmentName is not null)
+                        {
+                            var department = await _unitOfWork.Repository<Department>()
+                                .FirstOrDefaultAsync(d => d.Name == departmentName, cancellationToken)
+                                ?? throw new NotFoundException($"No department named '{departmentName}'.");
+                            departmentId = department.Id;
+                        }
+                    }
+
+                    await CreateAsync(
+                        new CreateUserRequest
+                        {
+                            Email = email,
+                            FirstName = firstName,
+                            LastName = row.GetOrNull("LastName"),
+                            Phone = row.GetOrNull("Phone"),
+                            Role = role,
+                            DepartmentId = departmentId,
+                        },
+                        cancellationToken);
+                    result.SucceededCount++;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    result.FailedCount++;
+                    result.Errors.Add(new BulkImportRowError { RowNumber = rowNumber, Message = ex.Message });
+                }
+            }
+
+            return result;
+        }
+
+        public async Task<string> ExportCsvAsync(UserRole? role, CancellationToken cancellationToken = default)
+        {
+            // Reuses the same page the Users screen itself pages through, at a size generous
+            // enough to cover a school's whole roster in one export without turning this into
+            // an unbounded table scan if the caller is ever handed a huge role by mistake.
+            var page = await ListAsync(role, null, 1, 5000, cancellationToken);
+            string[] headers = ["Email", "FirstName", "LastName", "Phone", "Role", "Status", "DepartmentName", "CreatedAtUtc"];
+            var rows = page.Items.Select(u => new List<string?>
+            {
+                u.Email, u.FirstName, u.LastName, u.Phone, u.Role.ToString(), u.Status.ToString(),
+                u.DepartmentName, u.CreatedAtUtc.ToString("yyyy-MM-dd"),
+            });
+            return CsvWriter.BuildCsv(headers, rows);
         }
 
         private async Task<bool> IsIntegrationEnabledAsync(string key, CancellationToken cancellationToken)
