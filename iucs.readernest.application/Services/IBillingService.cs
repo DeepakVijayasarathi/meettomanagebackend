@@ -21,6 +21,12 @@ namespace iucs.readernest.application.Services
 
         Task<PackagePlanDto> UpdatePlanAsync(Guid id, SavePackagePlanRequest request, CancellationToken cancellationToken = default);
 
+        /// <summary>Row-by-row. Columns: Name, CourseName (optional), BillingType (Subscription/SessionBased/OneTime),
+        /// BillingCycle (Monthly/Quarterly/Yearly/OneTime), Price, SessionsIncluded (optional), IsActive.</summary>
+        Task<BulkImportResult> BulkImportPlansAsync(Stream file, string fileName, CancellationToken cancellationToken = default);
+
+        Task<string> ExportPlansCsvAsync(CancellationToken cancellationToken = default);
+
         /// <summary>
         /// Newest-first page of invoices. Paged because this is the one billing table that
         /// grows without bound (every subscription cycle appends a row, forever) and each

@@ -60,11 +60,13 @@ namespace iucs.readernest.tests
 
         private readonly FakeSmsSender _smsSender = new();
 
-        private UserService CreateUserService() => new(_db.UnitOfWork, _hasher, _notifications, _emailTemplates, _auditLog, _emailSender, _whatsAppSender, _smsSender, NullLogger<UserService>.Instance);
+        private readonly FakeBulkFileReader _bulkFileReader = new();
 
-        private CourseService CreateCourseService() => new(_db.UnitOfWork, _auditLog);
+        private UserService CreateUserService() => new(_db.UnitOfWork, _hasher, _notifications, _emailTemplates, _auditLog, _emailSender, _whatsAppSender, _smsSender, _bulkFileReader, NullLogger<UserService>.Instance);
 
-        private DepartmentService CreateDepartmentService() => new(_db.UnitOfWork, _auditLog);
+        private CourseService CreateCourseService() => new(_db.UnitOfWork, _auditLog, _bulkFileReader);
+
+        private DepartmentService CreateDepartmentService() => new(_db.UnitOfWork, _auditLog, _bulkFileReader);
 
         private BatchService CreateBatchService() => new(_db.UnitOfWork, _auditLog, _notifications);
 
@@ -76,11 +78,14 @@ namespace iucs.readernest.tests
 
         private SessionService CreateSessionService() => new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, new FakeJitsiTokenService());
 
-        private BillingService CreateBillingService() => new(_db.UnitOfWork, _auditLog, new FakePaymentGateway(), _notifications, _db.CurrentUser);
+        private SessionService CreateSessionService(FakeJitsiTokenService jitsiTokens) =>
+            new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, jitsiTokens);
 
-        private BillingService CreateBillingService(FakePaymentGateway gateway) => new(_db.UnitOfWork, _auditLog, gateway, _notifications, _db.CurrentUser);
+        private BillingService CreateBillingService() => new(_db.UnitOfWork, _auditLog, new FakePaymentGateway(), _notifications, _db.CurrentUser, _bulkFileReader);
 
-        private EnrollmentService CreateEnrollmentService() => new(_db.UnitOfWork, _auditLog, CreateBillingService());
+        private BillingService CreateBillingService(FakePaymentGateway gateway) => new(_db.UnitOfWork, _auditLog, gateway, _notifications, _db.CurrentUser, _bulkFileReader);
+
+        private EnrollmentService CreateEnrollmentService() => new(_db.UnitOfWork, _auditLog, CreateBillingService(), CreateBatchService(), _bulkFileReader);
 
         private MenuService CreateMenuService() => new(_db.UnitOfWork, _auditLog);
 
@@ -94,7 +99,7 @@ namespace iucs.readernest.tests
         private DemoBookingService CreateDemoBookingService() =>
             new(_db.UnitOfWork, _auditLog, _emailSender, _emailTemplates, new FakeCrmNotifier(), new FakeJitsiTokenService(), NullLogger<DemoBookingService>.Instance);
 
-        private QuizQuestionService CreateQuizQuestionService() => new(_db.UnitOfWork, _auditLog, CreateSessionService());
+        private QuizQuestionService CreateQuizQuestionService() => new(_db.UnitOfWork, _auditLog, CreateSessionService(), _bulkFileReader);
 
         // ---- WBS business-rule coverage (Reader_Nest_LMS.pdf pp.28–32) ----
 
@@ -827,6 +832,47 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task FinalizeJibriRecording_RegistersAgainstMatchingRoom_WhenTokenValid()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var jitsiTokens = new FakeJitsiTokenService { ValidateFinalizeTokenResult = true };
+
+            var recording = await CreateSessionService(jitsiTokens).FinalizeJibriRecordingAsync(
+                session.MeetingRoomId!, "irrelevant-under-the-fake", "https://jitsi.test/recordings/abc/rec.mp4", 900);
+
+            Assert.NotNull(recording);
+            Assert.Equal(session.Id, recording!.ClassSessionId);
+            var stored = await _db.Context.SessionRecordings.FindAsync(recording.Id);
+            Assert.NotNull(stored);
+        }
+
+        [Fact]
+        public async Task FinalizeJibriRecording_Rejects_WhenTokenInvalid()
+        {
+            // Default FakeJitsiTokenService (ValidateFinalizeTokenResult unset) mirrors an
+            // invalid/missing/wrong-room token — the finalize hook has no session, so this
+            // must be a hard refusal, not a silent no-op that could be mistaken for "room not
+            // a class session" (the actual no-op case, covered below).
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+
+            await Assert.ThrowsAsync<UnauthorizedException>(() => CreateSessionService().FinalizeJibriRecordingAsync(
+                session.MeetingRoomId!, "bad-token", "https://jitsi.test/recordings/abc/rec.mp4", 900));
+        }
+
+        [Fact]
+        public async Task FinalizeJibriRecording_NoOps_WhenRoomMatchesNoClassSession()
+        {
+            // A personal/demo room Jibri also records — nothing in the data model to attach
+            // it to, so this is a deliberate no-op (null), not a NotFoundException.
+            var jitsiTokens = new FakeJitsiTokenService { ValidateFinalizeTokenResult = true };
+
+            var recording = await CreateSessionService(jitsiTokens).FinalizeJibriRecordingAsync(
+                "trn-personal-doesnotexist", "irrelevant-under-the-fake", "https://jitsi.test/recordings/abc/rec.mp4", 900);
+
+            Assert.Null(recording);
+        }
+
+        [Fact]
         public async Task CreateInvoice_RoutesToMatchingDepartmentAccount_ByDefault()
         {
             var parentUser = await _db.SeedUserAsync($"dept-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
@@ -1154,7 +1200,7 @@ namespace iucs.readernest.tests
             // same queue). The shared FakePaymentGateway counts disbursements across both.
             var (context2, uow2) = _db.CreateConcurrentSession();
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
-            var billing2 = new BillingService(uow2, auditLog2, gateway, _notifications, _db.CurrentUser);
+            var billing2 = new BillingService(uow2, auditLog2, gateway, _notifications, _db.CurrentUser, _bulkFileReader);
 
             // Request 2 reads the refund while it is genuinely still Requested. EF returns this
             // same tracked instance from any later lookup on context2 rather than refreshing it,
@@ -1227,7 +1273,7 @@ namespace iucs.readernest.tests
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
             var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
             var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, NullLogger<NotificationService>.Instance);
-            var billing2 = new BillingService(uow2, auditLog2, new FakePaymentGateway(), notifications2, _db.CurrentUser);
+            var billing2 = new BillingService(uow2, auditLog2, new FakePaymentGateway(), notifications2, _db.CurrentUser, _bulkFileReader);
 
             var task1 = billing1.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 500, Method = PaymentMethod.Card });
             var task2 = billing2.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 500, Method = PaymentMethod.Cash });
@@ -1272,7 +1318,7 @@ namespace iucs.readernest.tests
             // without the gateway being asked to refund again.
             gateway.RefundFailure = null;
             var auditLog2 = new AuditLogService(verifyUow, _db.CurrentUser);
-            var billing2 = new BillingService(verifyUow, auditLog2, gateway, _notifications, _db.CurrentUser);
+            var billing2 = new BillingService(verifyUow, auditLog2, gateway, _notifications, _db.CurrentUser, _bulkFileReader);
             var rejected = await Assert.ThrowsAsync<DomainValidationException>(
                 () => billing2.ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = true }));
             Assert.Contains("already Approved", rejected.Message);
@@ -4163,7 +4209,7 @@ namespace iucs.readernest.tests
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
             var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
             var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, NullLogger<NotificationService>.Instance);
-            var billing2 = new BillingService(uow2, auditLog2, gateway, notifications2, _db.CurrentUser);
+            var billing2 = new BillingService(uow2, auditLog2, gateway, notifications2, _db.CurrentUser, _bulkFileReader);
 
             var request = () => new RequestRefundRequest
             {

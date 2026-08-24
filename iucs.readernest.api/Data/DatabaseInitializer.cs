@@ -45,6 +45,7 @@ namespace iucs.readernest.api.Data
             await EnsurePackagesAndStudentViewMenusAsync(context);
             await EnsureAdminDepartmentsMenuAsync(context);
             await EnsureAdminQuizBankMenuAsync(context);
+            await EnsureAdminServerMonitoringMenuAsync(context);
             await BackfillMenuRequiredModulesAsync(context);
             await SeedIntegrationsAsync(context);
             await EnsureCashPaymentMethodAsync(context);
@@ -723,6 +724,45 @@ namespace iucs.readernest.api.Data
                 SortOrder = last.SortOrder + 1,
                 IsActive = true,
                 RequiredModule = PermissionModule.CourseBatchManagement,
+            });
+        }
+
+        /// <summary>
+        /// Inserts the Admin "Server Monitoring" menu item into a database that was seeded
+        /// before that screen existed (SeedMenusAsync only ever creates rows once). Appended
+        /// after whatever the System section's last item currently is (today just "Settings &amp;
+        /// Branding"), same idiom as EnsureAdminQuizBankMenuAsync.
+        /// </summary>
+        private static async Task EnsureAdminServerMonitoringMenuAsync(ReaderNestDbContext context)
+        {
+            const string path = "/admin/monitoring";
+            if (context.MenuItems.Local.Any(m => m.Portal == "admin" && m.Path == path) ||
+                await context.MenuItems.AnyAsync(m => m.Portal == "admin" && m.Path == path))
+            {
+                return;
+            }
+
+            var systemItems = await context.MenuItems
+                .Where(m => m.Portal == "admin" && m.Section == "System")
+                .ToListAsync();
+            if (systemItems.Count == 0)
+            {
+                return; // no System section at all (unexpected) — nothing sensible to append after
+            }
+
+            var last = systemItems.OrderByDescending(m => m.SortOrder).First();
+
+            context.MenuItems.Add(new MenuItem
+            {
+                Portal = "admin",
+                Section = "System",
+                SectionOrder = last.SectionOrder,
+                Label = "Server Monitoring",
+                Path = path,
+                Icon = "Activity",
+                SortOrder = last.SortOrder + 1,
+                IsActive = true,
+                RequiredModule = PermissionModule.SystemMonitoring,
             });
         }
 

@@ -75,6 +75,16 @@ namespace iucs.readernest.tests
         }
     }
 
+    /// <summary>Real parsing (CSV/XLSX via ClosedXML) lives in the api project's BulkFileReader,
+    /// which this test project doesn't reference — tests exercise the service-layer bulk-import
+    /// logic directly by preloading the rows a real parse would have produced.</summary>
+    public class FakeBulkFileReader : IBulkFileReader
+    {
+        public List<Dictionary<string, string>> Rows { get; set; } = [];
+
+        public List<Dictionary<string, string>> ReadRows(Stream content, string fileName) => Rows;
+    }
+
     public class FakePaymentGateway : IPaymentGateway
     {
         /// <summary>References set here report Paid on the next status poll (drives reconcile tests).</summary>
@@ -193,6 +203,13 @@ namespace iucs.readernest.tests
             string? participantEmail,
             bool moderator,
             DateTime expiresAtUtc) => null;
+
+        /// <summary>Defaults to false (mirrors "unconfigured"/invalid); a test that needs the
+        /// finalize-recording path to succeed sets this true first.</summary>
+        public bool ValidateFinalizeTokenResult { get; set; }
+
+        public bool ValidateFinalizeToken(string? bearerToken, string? jitsiConfigJson, string expectedRoom)
+            => ValidateFinalizeTokenResult;
     }
 
     /// <summary>

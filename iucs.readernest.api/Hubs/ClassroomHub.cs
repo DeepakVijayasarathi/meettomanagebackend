@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Security.Claims;
+using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Enums;
 using Microsoft.AspNetCore.Authorization;
@@ -25,12 +26,18 @@ namespace iucs.readernest.api.Hubs
         private readonly ISessionService _sessionService;
         private readonly IGamificationService _gamificationService;
         private readonly IAcademicOpsService _academicOpsService;
+        private readonly IClassroomPresenceTracker _presenceTracker;
 
-        public ClassroomHub(ISessionService sessionService, IGamificationService gamificationService, IAcademicOpsService academicOpsService)
+        public ClassroomHub(
+            ISessionService sessionService,
+            IGamificationService gamificationService,
+            IAcademicOpsService academicOpsService,
+            IClassroomPresenceTracker presenceTracker)
         {
             _sessionService = sessionService;
             _gamificationService = gamificationService;
             _academicOpsService = academicOpsService;
+            _presenceTracker = presenceTracker;
         }
 
         public record ParticipantState(string Name, string Role, bool HandRaised);
@@ -119,6 +126,7 @@ namespace iucs.readernest.api.Hubs
             }
 
             await Groups.AddToGroupAsync(Context.ConnectionId, Group(sessionId));
+            _presenceTracker.UserJoined(sessionId, Context.ConnectionId);
             await BroadcastRosterAsync(sessionId);
             await SendLeaderboardAsync(sessionId);
 
@@ -312,6 +320,8 @@ namespace iucs.readernest.api.Hubs
 
         private async Task RemoveFromSessionAsync(string sessionId)
         {
+            _presenceTracker.UserLeft(sessionId, Context.ConnectionId);
+
             if (Rooms.TryGetValue(sessionId, out var room))
             {
                 room.TryRemove(Context.ConnectionId, out _);

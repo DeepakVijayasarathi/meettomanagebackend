@@ -280,5 +280,58 @@ namespace iucs.readernest.api.Controllers
             await _userService.SetPermissionsAsync(id, currentUserId, role.Permissions, role.Id, cancellationToken);
             return NoContent();
         }
+
+        private const long MaxBulkImportBytes = 5 * 1024 * 1024;
+
+        /// <summary>Bulk-create Parent or Teacher accounts from an uploaded .csv/.xlsx.
+        /// Columns: Email, FirstName, LastName, Phone, DepartmentName (Teacher rows only).</summary>
+        [HttpPost("bulk-import")]
+        [HasPermission(PermissionModule.UserManagement, PermissionAction.Create)]
+        [RequestSizeLimit(MaxBulkImportBytes)]
+        public async Task<ActionResult<BulkImportResult>> BulkImport(
+            IFormFile file, [FromForm] UserRole role, CancellationToken cancellationToken)
+        {
+            if (file.Length == 0)
+            {
+                return BadRequest("The uploaded file is empty.");
+            }
+
+            await using var stream = file.OpenReadStream();
+            return Ok(await _userService.BulkImportAsync(stream, file.FileName, role, cancellationToken));
+        }
+
+        [HttpGet("export")]
+        [HasPermission(PermissionModule.UserManagement, PermissionAction.View)]
+        public async Task<IActionResult> Export([FromQuery] UserRole? role, CancellationToken cancellationToken)
+        {
+            var csv = await _userService.ExportCsvAsync(role, cancellationToken);
+            var suffix = role?.ToString().ToLowerInvariant() ?? "all";
+            return File(System.Text.Encoding.UTF8.GetBytes(csv), "text/csv", $"users-{suffix}-{DateTime.UtcNow:yyyyMMdd}.csv");
+        }
+
+        /// <summary>Bulk-create Students (Child records) from an uploaded .csv/.xlsx. Each row's
+        /// ParentEmail must match an existing Parent account. Columns: ParentEmail,
+        /// StudentFullName, DateOfBirth (YYYY-MM-DD, optional), AcademicLevel (optional).</summary>
+        [HttpPost("students/bulk-import")]
+        [HasPermission(PermissionModule.UserManagement, PermissionAction.Create)]
+        [RequestSizeLimit(MaxBulkImportBytes)]
+        public async Task<ActionResult<BulkImportResult>> BulkImportStudents(IFormFile file, CancellationToken cancellationToken)
+        {
+            if (file.Length == 0)
+            {
+                return BadRequest("The uploaded file is empty.");
+            }
+
+            await using var stream = file.OpenReadStream();
+            return Ok(await _enrollmentService.BulkImportStudentsAsync(stream, file.FileName, cancellationToken));
+        }
+
+        [HttpGet("students/export")]
+        [HasPermission(PermissionModule.UserManagement, PermissionAction.View)]
+        public async Task<IActionResult> ExportStudents(CancellationToken cancellationToken)
+        {
+            var csv = await _enrollmentService.ExportStudentsCsvAsync(cancellationToken);
+            return File(System.Text.Encoding.UTF8.GetBytes(csv), "text/csv", $"students-{DateTime.UtcNow:yyyyMMdd}.csv");
+        }
     }
 }
