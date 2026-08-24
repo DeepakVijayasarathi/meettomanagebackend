@@ -33,6 +33,10 @@ namespace iucs.readernest.application.Dto.Monitoring
         public double MemoryTotalMb { get; set; }
         public double DiskUsedPercent { get; set; }
         public double DiskTotalGb { get; set; }
+        public double NetworkRxMbps { get; set; }
+        public double NetworkTxMbps { get; set; }
+        public double DiskReadMbps { get; set; }
+        public double DiskWriteMbps { get; set; }
         public List<MonitoredServiceDto> Services { get; set; } = new();
         /// <summary>How long ago the agent itself last wrote its status file — a stale reading (agent stuck/cron dead) still reports <see cref="Reachable"/> true, so the UI needs this to flag it separately.</summary>
         public double AgentDataAgeSeconds { get; set; }
