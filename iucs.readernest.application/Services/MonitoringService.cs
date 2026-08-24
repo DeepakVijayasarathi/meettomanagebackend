@@ -42,8 +42,9 @@ namespace iucs.readernest.application.Services
                 .ToList();
             var databaseTask = CheckDatabaseAsync(cancellationToken);
             var insightsTask = GetDatabaseInsightsAsync(cancellationToken);
+            var alertsTask = _prometheus.GetActiveAlertsAsync(_options.PrometheusBaseUrl, cancellationToken);
 
-            await Task.WhenAll(serverTasks.Cast<Task>().Append(databaseTask).Append(insightsTask));
+            await Task.WhenAll(serverTasks.Cast<Task>().Append(databaseTask).Append(insightsTask).Append(alertsTask));
             var (dbHealthy, dbLatencyMs) = await databaseTask;
 
             return new MonitoringSummaryDto
@@ -56,6 +57,20 @@ namespace iucs.readernest.application.Services
                 DatabaseInsights = await insightsTask,
                 ConcurrentClassroomUsers = _presenceTracker.TotalConnectedUsers,
                 ActiveClassCount = _presenceTracker.ActiveClassCount,
+                ActiveAlerts = (await alertsTask)
+                    .Select(a => new AlertDto
+                    {
+                        Name = a.Name,
+                        Severity = a.Severity,
+                        Summary = a.Summary,
+                        Description = a.Description,
+                        State = a.State,
+                        ActiveSince = a.ActiveSince,
+                        Instance = a.Labels.TryGetValue("instance", out var instance) ? instance : null,
+                    })
+                    .OrderByDescending(a => a.Severity == "critical")
+                    .ThenBy(a => a.ActiveSince)
+                    .ToList(),
                 GeneratedAtUtc = DateTime.UtcNow,
             };
         }

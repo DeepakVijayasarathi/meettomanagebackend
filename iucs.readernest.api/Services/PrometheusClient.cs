@@ -191,5 +191,76 @@ namespace iucs.readernest.api.Services
                 return Array.Empty<(DateTime, double)>();
             }
         }
+
+        public async Task<IReadOnlyList<PrometheusAlert>> GetActiveAlertsAsync(string baseUrl, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(baseUrl))
+            {
+                return Array.Empty<PrometheusAlert>();
+            }
+
+            try
+            {
+                var client = _httpClientFactory.CreateClient("Prometheus");
+                var url = $"{baseUrl.TrimEnd('/')}/api/v1/alerts";
+
+                using var response = await client.GetAsync(url, cancellationToken);
+                if (!response.IsSuccessStatusCode)
+                {
+                    return Array.Empty<PrometheusAlert>();
+                }
+
+                await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+                var root = doc.RootElement;
+
+                if (!root.TryGetProperty("status", out var status) || status.GetString() != "success")
+                {
+                    return Array.Empty<PrometheusAlert>();
+                }
+
+                var alertsElement = root.GetProperty("data").GetProperty("alerts");
+                var alerts = new List<PrometheusAlert>(alertsElement.GetArrayLength());
+                foreach (var item in alertsElement.EnumerateArray())
+                {
+                    var labels = new Dictionary<string, string>();
+                    if (item.TryGetProperty("labels", out var labelsElement))
+                    {
+                        foreach (var label in labelsElement.EnumerateObject())
+                        {
+                            labels[label.Name] = label.Value.GetString() ?? string.Empty;
+                        }
+                    }
+
+                    string? summary = null;
+                    string? description = null;
+                    if (item.TryGetProperty("annotations", out var annotationsElement))
+                    {
+                        if (annotationsElement.TryGetProperty("summary", out var s)) summary = s.GetString();
+                        if (annotationsElement.TryGetProperty("description", out var d)) description = d.GetString();
+                    }
+
+                    var activeAt = item.TryGetProperty("activeAt", out var activeAtElement) && activeAtElement.GetDateTime() is var parsed
+                        ? parsed
+                        : DateTime.UtcNow;
+
+                    alerts.Add(new PrometheusAlert(
+                        Name: labels.TryGetValue("alertname", out var name) ? name : "Alert",
+                        Severity: labels.TryGetValue("severity", out var severity) ? severity : "warning",
+                        Summary: summary ?? string.Empty,
+                        Description: description ?? string.Empty,
+                        State: item.TryGetProperty("state", out var stateElement) ? stateElement.GetString() ?? "pending" : "pending",
+                        ActiveSince: activeAt,
+                        Labels: labels));
+                }
+
+                return alerts;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to fetch active alerts from Prometheus at {BaseUrl}", baseUrl);
+                return Array.Empty<PrometheusAlert>();
+            }
+        }
     }
 }

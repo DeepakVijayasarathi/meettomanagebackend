@@ -27,7 +27,24 @@ namespace iucs.readernest.application.Common.Interfaces
         /// </summary>
         Task<IReadOnlyList<(DateTime Timestamp, double Value)>> QueryRangeAsync(
             string baseUrl, string promql, DateTime start, DateTime end, TimeSpan step, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Currently pending/firing alerts from Prometheus's own rule evaluation (/api/v1/alerts) —
+        /// the alert.rules.yml already loaded into this Prometheus instance (InstanceDown,
+        /// HighCpuLoad, HighMemoryUsage, LowDiskSpace). Empty list on any failure, not an
+        /// exception — an unreachable Prometheus must never look like "no alerts."
+        /// </summary>
+        Task<IReadOnlyList<PrometheusAlert>> GetActiveAlertsAsync(string baseUrl, CancellationToken cancellationToken = default);
     }
 
     public record PrometheusSeries(IReadOnlyDictionary<string, string> Labels, double Value);
+
+    public record PrometheusAlert(
+        string Name,
+        string Severity,
+        string Summary,
+        string Description,
+        string State,
+        DateTime ActiveSince,
+        IReadOnlyDictionary<string, string> Labels);
 }
