@@ -115,17 +115,29 @@ namespace iucs.readernest.application.Services
             var loadTask = _prometheus.QueryScalarAsync(baseUrl, $"node_load1{{instance=\"{instanceLabel}\"}}", cancellationToken);
             var uptimeTask = _prometheus.QueryScalarAsync(baseUrl, $"time() - node_boot_time_seconds{{instance=\"{instanceLabel}\"}}", cancellationToken);
             var servicesTask = _prometheus.QueryVectorAsync(baseUrl, $"rn_service_active{{instance=\"{instanceLabel}\"}}", cancellationToken);
+            // eth0: the single external NIC on both boxes today -- summing every interface would double-count
+            // traffic that also passes through docker0/br-*/veth* as it's routed into containers.
+            var netRxTask = _prometheus.QueryScalarAsync(baseUrl, $"rate(node_network_receive_bytes_total{{instance=\"{instanceLabel}\",device=\"eth0\"}}[5m]) * 8 / 1000000", cancellationToken);
+            var netTxTask = _prometheus.QueryScalarAsync(baseUrl, $"rate(node_network_transmit_bytes_total{{instance=\"{instanceLabel}\",device=\"eth0\"}}[5m]) * 8 / 1000000", cancellationToken);
+            // Summed across block devices instead of a named one -- disk naming (sda/vda/nvme0n1) isn't
+            // consistent across providers/servers, and unlike NICs there's no double-counting risk here.
+            var diskReadTask = _prometheus.QueryScalarAsync(baseUrl, $"sum(rate(node_disk_read_bytes_total{{instance=\"{instanceLabel}\"}}[5m])) / 1048576", cancellationToken);
+            var diskWriteTask = _prometheus.QueryScalarAsync(baseUrl, $"sum(rate(node_disk_written_bytes_total{{instance=\"{instanceLabel}\"}}[5m])) / 1048576", cancellationToken);
 
+            // jitsi_jvb_conferences/jitsi_jvb_current_endpoints come straight from JVB's own
+            // native Prometheus endpoint (see rn-jvb-metrics-proxy in the Prometheus scrape
+            // config) -- real counts, not a derived/custom metric.
             var conferencesTask = server.TracksLiveCalls
-                ? _prometheus.QueryScalarAsync(baseUrl, $"rn_jitsi_conferences{{instance=\"{instanceLabel}\"}}", cancellationToken)
+                ? _prometheus.QueryScalarAsync(baseUrl, $"jitsi_jvb_conferences{{instance=\"{instanceLabel}\"}}", cancellationToken)
                 : Task.FromResult<double?>(null);
             var participantsTask = server.TracksLiveCalls
-                ? _prometheus.QueryScalarAsync(baseUrl, $"rn_jitsi_participants{{instance=\"{instanceLabel}\"}}", cancellationToken)
+                ? _prometheus.QueryScalarAsync(baseUrl, $"jitsi_jvb_current_endpoints{{instance=\"{instanceLabel}\"}}", cancellationToken)
                 : Task.FromResult<double?>(null);
 
             await Task.WhenAll(
                 upTask, freshnessTask, cpuCoresTask, cpuUsageTask, memUsedPercentTask, memTotalTask,
-                diskUsedPercentTask, diskTotalTask, loadTask, uptimeTask, servicesTask, conferencesTask, participantsTask);
+                diskUsedPercentTask, diskTotalTask, loadTask, uptimeTask, servicesTask, conferencesTask, participantsTask,
+                netRxTask, netTxTask, diskReadTask, diskWriteTask);
 
             var up = await upTask;
             if (up is not 1)
@@ -166,6 +178,10 @@ namespace iucs.readernest.application.Services
                 MemoryTotalMb = await memTotalTask ?? 0,
                 DiskUsedPercent = Clamp(await diskUsedPercentTask ?? 0),
                 DiskTotalGb = await diskTotalTask ?? 0,
+                NetworkRxMbps = Math.Max(0, await netRxTask ?? 0),
+                NetworkTxMbps = Math.Max(0, await netTxTask ?? 0),
+                DiskReadMbps = Math.Max(0, await diskReadTask ?? 0),
+                DiskWriteMbps = Math.Max(0, await diskWriteTask ?? 0),
                 Services = services,
                 AgentDataAgeSeconds = await freshnessTask ?? 0,
                 LiveCalls = server.TracksLiveCalls
