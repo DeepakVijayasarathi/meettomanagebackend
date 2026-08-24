@@ -15,6 +15,9 @@ namespace iucs.readernest.application.Common.Options
         /// <summary>Base URL of the Prometheus HTTP API, e.g. "http://prometheus:9090" (Docker network name) or "http://204.168.140.222:9090".</summary>
         public string PrometheusBaseUrl { get; set; } = string.Empty;
 
+        /// <summary>Postgres datname to scope the Database Insights panel to (postgres-exporter also sees the UAT and system databases sharing this instance).</summary>
+        public string DatabaseName { get; set; } = string.Empty;
+
         public List<MonitoredServerOptions> Servers { get; set; } = new();
     }
 

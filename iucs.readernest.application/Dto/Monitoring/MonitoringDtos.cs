@@ -39,6 +39,23 @@ namespace iucs.readernest.application.Dto.Monitoring
         public LiveCallSummaryDto? LiveCalls { get; set; }
     }
 
+    /// <summary>
+    /// Postgres internals pulled straight from postgres-exporter (pg_stat_database/pg_locks/
+    /// pg_settings), scoped to the app's own database — not the whole Postgres instance,
+    /// which also carries system/UAT databases with their own, unrelated activity.
+    /// </summary>
+    public class DatabaseInsightsDto
+    {
+        public int ActiveConnections { get; set; }
+        public int MaxConnections { get; set; }
+        public double CommitsPerSecond { get; set; }
+        public double RollbacksPerSecond { get; set; }
+        public double CacheHitRatioPercent { get; set; }
+        public double DatabaseSizeMb { get; set; }
+        public long DeadlocksTotal { get; set; }
+        public int LocksHeld { get; set; }
+    }
+
     /// <summary>Everything the Server Monitoring dashboard needs in one call.</summary>
     public class MonitoringSummaryDto
     {
@@ -46,6 +63,7 @@ namespace iucs.readernest.application.Dto.Monitoring
         public bool ApiHealthy { get; set; }
         public bool DatabaseHealthy { get; set; }
         public double DatabaseLatencyMs { get; set; }
+        public DatabaseInsightsDto? DatabaseInsights { get; set; }
         public DateTime GeneratedAtUtc { get; set; }
     }
 }

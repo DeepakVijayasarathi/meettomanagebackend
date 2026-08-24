@@ -38,8 +38,9 @@ namespace iucs.readernest.application.Services
                 .Select(server => GetServerStatusAsync(server, cancellationToken))
                 .ToList();
             var databaseTask = CheckDatabaseAsync(cancellationToken);
+            var insightsTask = GetDatabaseInsightsAsync(cancellationToken);
 
-            await Task.WhenAll(serverTasks.Cast<Task>().Append(databaseTask));
+            await Task.WhenAll(serverTasks.Cast<Task>().Append(databaseTask).Append(insightsTask));
             var (dbHealthy, dbLatencyMs) = await databaseTask;
 
             return new MonitoringSummaryDto
@@ -49,7 +50,52 @@ namespace iucs.readernest.application.Services
                 ApiHealthy = true,
                 DatabaseHealthy = dbHealthy,
                 DatabaseLatencyMs = dbLatencyMs,
+                DatabaseInsights = await insightsTask,
                 GeneratedAtUtc = DateTime.UtcNow,
+            };
+        }
+
+        private async Task<DatabaseInsightsDto?> GetDatabaseInsightsAsync(CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(_options.DatabaseName))
+            {
+                return null;
+            }
+
+            var baseUrl = _options.PrometheusBaseUrl;
+            var db = EscapeLabelValue(_options.DatabaseName);
+
+            var connectionsTask = _prometheus.QueryScalarAsync(baseUrl, $"pg_stat_database_numbackends{{datname=\"{db}\"}}", cancellationToken);
+            var maxConnectionsTask = _prometheus.QueryScalarAsync(baseUrl, "pg_settings_max_connections", cancellationToken);
+            var commitsTask = _prometheus.QueryScalarAsync(baseUrl, $"rate(pg_stat_database_xact_commit{{datname=\"{db}\"}}[5m])", cancellationToken);
+            var rollbacksTask = _prometheus.QueryScalarAsync(baseUrl, $"rate(pg_stat_database_xact_rollback{{datname=\"{db}\"}}[5m])", cancellationToken);
+            var cacheHitTask = _prometheus.QueryScalarAsync(
+                baseUrl,
+                $"100 * pg_stat_database_blks_hit{{datname=\"{db}\"}} / (pg_stat_database_blks_hit{{datname=\"{db}\"}} + pg_stat_database_blks_read{{datname=\"{db}\"}})",
+                cancellationToken);
+            var sizeTask = _prometheus.QueryScalarAsync(baseUrl, $"pg_database_size_bytes{{datname=\"{db}\"}} / 1048576", cancellationToken);
+            var deadlocksTask = _prometheus.QueryScalarAsync(baseUrl, $"pg_stat_database_deadlocks{{datname=\"{db}\"}}", cancellationToken);
+            var locksTask = _prometheus.QueryScalarAsync(baseUrl, "sum(pg_locks_count)", cancellationToken);
+
+            await Task.WhenAll(connectionsTask, maxConnectionsTask, commitsTask, rollbacksTask, cacheHitTask, sizeTask, deadlocksTask, locksTask);
+
+            var connections = await connectionsTask;
+            if (connections is null)
+            {
+                // No data at all for this datname -- postgres-exporter unreachable or DB name misconfigured.
+                return null;
+            }
+
+            return new DatabaseInsightsDto
+            {
+                ActiveConnections = (int)connections,
+                MaxConnections = (int)(await maxConnectionsTask ?? 0),
+                CommitsPerSecond = await commitsTask ?? 0,
+                RollbacksPerSecond = await rollbacksTask ?? 0,
+                CacheHitRatioPercent = Math.Clamp(await cacheHitTask ?? 0, 0, 100),
+                DatabaseSizeMb = await sizeTask ?? 0,
+                DeadlocksTotal = (long)(await deadlocksTask ?? 0),
+                LocksHeld = (int)(await locksTask ?? 0),
             };
         }
 
