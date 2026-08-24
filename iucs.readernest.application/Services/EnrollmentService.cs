@@ -20,14 +20,20 @@ namespace iucs.readernest.application.Services
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
         private readonly IBillingService _billingService;
+        private readonly IBatchService _batchService;
         private readonly IBulkFileReader _bulkFileReader;
 
         public EnrollmentService(
-            IUnitOfWork unitOfWork, IAuditLogService auditLog, IBillingService billingService, IBulkFileReader bulkFileReader)
+            IUnitOfWork unitOfWork,
+            IAuditLogService auditLog,
+            IBillingService billingService,
+            IBatchService batchService,
+            IBulkFileReader bulkFileReader)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _billingService = billingService;
+            _batchService = batchService;
             _bulkFileReader = bulkFileReader;
         }
 
@@ -182,6 +188,14 @@ namespace iucs.readernest.application.Services
                     await ValidatePlanForBillingAsync(request.PackagePlanId.Value, parentProfile, cancellationToken);
                 }
 
+                // Same fail-fast intent as the plan check above: a bad/full/inactive batch
+                // should reject the review before anything is mutated, not after the Child
+                // and form status are already committed.
+                if (request.BatchId.HasValue)
+                {
+                    await ValidateBatchForAssignmentAsync(request.BatchId.Value, cancellationToken);
+                }
+
                 // Not [Required] on the DTO — that would also reject Approve=false requests,
                 // which never touch this field. DateOfBirth stays optional on Child itself
                 // (age display already handles null), but a genuinely missing value at
@@ -256,6 +270,16 @@ namespace iucs.readernest.application.Services
                     cancellationToken);
             }
 
+            // Places the new child straight onto the batch's roster — same "act immediately
+            // on approval" pattern as billing above. Runs after the plan is validated but the
+            // batch's own capacity/active check happens for real inside AssignStudentAsync
+            // (it needs a fresh, serializable read; the pre-check above only rejects garbage
+            // input early).
+            if (request.Approve && request.BatchId.HasValue && child is not null)
+            {
+                await _batchService.AssignStudentAsync(request.BatchId.Value, child.Id, cancellationToken);
+            }
+
             return await GetAsync(form.Id, cancellationToken);
         }
 
@@ -298,6 +322,32 @@ namespace iucs.readernest.application.Services
                 throw new DomainValidationException(
                     $"Cannot start billing: no active payment account is configured for the {departmentName} department. " +
                     "Set one up under Payment Gateway Mapping, or approve without a plan and assign it later.");
+            }
+        }
+
+        /// <summary>
+        /// Fail-fast check before anything is mutated: the real, race-safe capacity check
+        /// still happens inside <see cref="IBatchService.AssignStudentAsync"/> once the child
+        /// exists, but there's no reason to create a Child and mark the form Approved only to
+        /// discover the chosen batch doesn't exist, is Archived/Dormant, or is already full.
+        /// </summary>
+        private async Task ValidateBatchForAssignmentAsync(Guid batchId, CancellationToken cancellationToken)
+        {
+            var batch = await _unitOfWork.Repository<Batch>().GetByIdAsync(batchId, cancellationToken)
+                ?? throw new NotFoundException(nameof(Batch), batchId);
+
+            if (batch.Status != BatchStatus.Active)
+            {
+                throw new DomainValidationException(
+                    $"Batch '{batch.Name}' is {batch.Status} and cannot take new enrollments — pick another batch or approve without one.");
+            }
+
+            var activeCount = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                .CountAsync(e => e.BatchId == batchId && e.Status == EnrollmentStatus.Active, cancellationToken);
+            if (activeCount >= batch.Capacity)
+            {
+                throw new DomainValidationException(
+                    $"Batch '{batch.Name}' is at capacity ({batch.Capacity}/{batch.Capacity}). Choose another batch or approve without one.");
             }
         }
 

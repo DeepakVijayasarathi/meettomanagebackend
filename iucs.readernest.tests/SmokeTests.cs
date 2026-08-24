@@ -85,7 +85,7 @@ namespace iucs.readernest.tests
 
         private BillingService CreateBillingService(FakePaymentGateway gateway) => new(_db.UnitOfWork, _auditLog, gateway, _notifications, _db.CurrentUser, _bulkFileReader);
 
-        private EnrollmentService CreateEnrollmentService() => new(_db.UnitOfWork, _auditLog, CreateBillingService(), _bulkFileReader);
+        private EnrollmentService CreateEnrollmentService() => new(_db.UnitOfWork, _auditLog, CreateBillingService(), CreateBatchService(), _bulkFileReader);
 
         private MenuService CreateMenuService() => new(_db.UnitOfWork, _auditLog);
 
