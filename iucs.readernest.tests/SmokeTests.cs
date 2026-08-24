@@ -78,6 +78,9 @@ namespace iucs.readernest.tests
 
         private SessionService CreateSessionService() => new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, new FakeJitsiTokenService());
 
+        private SessionService CreateSessionService(FakeJitsiTokenService jitsiTokens) =>
+            new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, jitsiTokens);
+
         private BillingService CreateBillingService() => new(_db.UnitOfWork, _auditLog, new FakePaymentGateway(), _notifications, _db.CurrentUser, _bulkFileReader);
 
         private BillingService CreateBillingService(FakePaymentGateway gateway) => new(_db.UnitOfWork, _auditLog, gateway, _notifications, _db.CurrentUser, _bulkFileReader);
@@ -826,6 +829,47 @@ namespace iucs.readernest.tests
             Assert.NotNull(stored!.ExpiresAtUtc);
             var days = (stored.ExpiresAtUtc!.Value - DateTime.UtcNow).TotalDays;
             Assert.InRange(days, 14.9, 15.1);
+        }
+
+        [Fact]
+        public async Task FinalizeJibriRecording_RegistersAgainstMatchingRoom_WhenTokenValid()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var jitsiTokens = new FakeJitsiTokenService { ValidateFinalizeTokenResult = true };
+
+            var recording = await CreateSessionService(jitsiTokens).FinalizeJibriRecordingAsync(
+                session.MeetingRoomId!, "irrelevant-under-the-fake", "https://jitsi.test/recordings/abc/rec.mp4", 900);
+
+            Assert.NotNull(recording);
+            Assert.Equal(session.Id, recording!.ClassSessionId);
+            var stored = await _db.Context.SessionRecordings.FindAsync(recording.Id);
+            Assert.NotNull(stored);
+        }
+
+        [Fact]
+        public async Task FinalizeJibriRecording_Rejects_WhenTokenInvalid()
+        {
+            // Default FakeJitsiTokenService (ValidateFinalizeTokenResult unset) mirrors an
+            // invalid/missing/wrong-room token — the finalize hook has no session, so this
+            // must be a hard refusal, not a silent no-op that could be mistaken for "room not
+            // a class session" (the actual no-op case, covered below).
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+
+            await Assert.ThrowsAsync<UnauthorizedException>(() => CreateSessionService().FinalizeJibriRecordingAsync(
+                session.MeetingRoomId!, "bad-token", "https://jitsi.test/recordings/abc/rec.mp4", 900));
+        }
+
+        [Fact]
+        public async Task FinalizeJibriRecording_NoOps_WhenRoomMatchesNoClassSession()
+        {
+            // A personal/demo room Jibri also records — nothing in the data model to attach
+            // it to, so this is a deliberate no-op (null), not a NotFoundException.
+            var jitsiTokens = new FakeJitsiTokenService { ValidateFinalizeTokenResult = true };
+
+            var recording = await CreateSessionService(jitsiTokens).FinalizeJibriRecordingAsync(
+                "trn-personal-doesnotexist", "irrelevant-under-the-fake", "https://jitsi.test/recordings/abc/rec.mp4", 900);
+
+            Assert.Null(recording);
         }
 
         [Fact]

@@ -63,6 +63,23 @@ namespace iucs.readernest.application.Services
             Guid sessionId,
             CancellationToken cancellationToken = default);
 
+        /// <summary>
+        /// Machine-to-machine equivalent of <see cref="AddRecordingAsync"/> for the Jibri
+        /// finalize-recording hook: no signed-in caller, so <paramref name="bearerToken"/> (a
+        /// short-lived JWT signed with the same appId/appSecret as room-join tokens) is the
+        /// authorization instead of <c>EnsureSessionParticipantAsync</c> — see
+        /// <see cref="Common.Interfaces.IJitsiTokenService.ValidateFinalizeToken"/>. Returns null
+        /// (not an error) when <paramref name="roomName"/> doesn't match any ClassSession (e.g.
+        /// a personal or demo room) — Jibri records those too, but there's nothing in our data
+        /// model to attach the recording to.
+        /// </summary>
+        Task<SessionRecordingDto?> FinalizeJibriRecordingAsync(
+            string roomName,
+            string? bearerToken,
+            string storageUrl,
+            int? durationSeconds,
+            CancellationToken cancellationToken = default);
+
         /// <summary>Engagement tracking: batches of quiz/activity/whiteboard/attention signals from the live classroom.</summary>
         Task RecordEngagementAsync(Guid sessionId, RecordEngagementRequest request, CancellationToken cancellationToken = default);
 

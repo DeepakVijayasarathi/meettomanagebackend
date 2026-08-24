@@ -7,8 +7,12 @@ namespace iucs.readernest.application
 {
     public static class DependencyInjection
     {
+        // MonitoringOptions is bound in the API layer's Program.cs (like JwtOptions) — this
+        // project doesn't reference the config-binder package needed for the IConfiguration
+        // overload of Configure<T>.
         public static IServiceCollection AddApplication(this IServiceCollection services)
         {
+            services.AddScoped<IMonitoringService, MonitoringService>();
             services.AddSingleton<IPasswordHasher, BcryptPasswordHasher>();
             services.AddScoped<IAuditLogService, AuditLogService>();
             services.AddScoped<INotificationService, NotificationService>();
