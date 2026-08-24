@@ -134,7 +134,7 @@ namespace iucs.readernest.application.Services
             return await _unitOfWork.Repository<Course>().Query()
                 .Where(c => c.IsActive)
                 .OrderBy(c => c.Name)
-                .Select(c => new CourseOptionDto { Id = c.Id, Name = c.Name })
+                .Select(c => new CourseOptionDto { Id = c.Id, Name = c.Name, Type = c.Type })
                 .ToListAsync(cancellationToken);
         }
 
