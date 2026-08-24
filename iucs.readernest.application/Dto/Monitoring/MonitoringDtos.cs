@@ -90,6 +90,19 @@ namespace iucs.readernest.application.Dto.Monitoring
         public int LocksHeld { get; set; }
     }
 
+    /// <summary>One currently pending/firing Prometheus alert (see IPrometheusClient.GetActiveAlertsAsync).</summary>
+    public class AlertDto
+    {
+        public string Name { get; set; } = string.Empty;
+        public string Severity { get; set; } = string.Empty;
+        public string Summary { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        /// <summary>"pending" (condition met, waiting out the rule's `for` duration) or "firing".</summary>
+        public string State { get; set; } = string.Empty;
+        public DateTime ActiveSince { get; set; }
+        public string? Instance { get; set; }
+    }
+
     /// <summary>Everything the Server Monitoring dashboard needs in one call.</summary>
     public class MonitoringSummaryDto
     {
@@ -101,6 +114,7 @@ namespace iucs.readernest.application.Dto.Monitoring
         /// <summary>Total connections currently joined to any live class, platform-wide (from ClassroomHub) — distinct from a single Jitsi server's own participant count.</summary>
         public int ConcurrentClassroomUsers { get; set; }
         public int ActiveClassCount { get; set; }
+        public List<AlertDto> ActiveAlerts { get; set; } = new();
         public DateTime GeneratedAtUtc { get; set; }
     }
 }
