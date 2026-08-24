@@ -132,5 +132,64 @@ namespace iucs.readernest.api.Services
                 return Array.Empty<PrometheusSeries>();
             }
         }
+
+        public async Task<IReadOnlyList<(DateTime Timestamp, double Value)>> QueryRangeAsync(
+            string baseUrl, string promql, DateTime start, DateTime end, TimeSpan step, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(baseUrl) || string.IsNullOrWhiteSpace(promql))
+            {
+                return Array.Empty<(DateTime, double)>();
+            }
+
+            try
+            {
+                var client = _httpClientFactory.CreateClient("Prometheus");
+                var startUnix = new DateTimeOffset(start, TimeSpan.Zero).ToUnixTimeSeconds();
+                var endUnix = new DateTimeOffset(end, TimeSpan.Zero).ToUnixTimeSeconds();
+                var url =
+                    $"{baseUrl.TrimEnd('/')}/api/v1/query_range?query={Uri.EscapeDataString(promql)}" +
+                    $"&start={startUnix}&end={endUnix}&step={(int)step.TotalSeconds}";
+
+                using var response = await client.GetAsync(url, cancellationToken);
+                if (!response.IsSuccessStatusCode)
+                {
+                    return Array.Empty<(DateTime, double)>();
+                }
+
+                await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+                var root = doc.RootElement;
+
+                if (!root.TryGetProperty("status", out var status) || status.GetString() != "success")
+                {
+                    return Array.Empty<(DateTime, double)>();
+                }
+
+                var result = root.GetProperty("data").GetProperty("result");
+                if (result.GetArrayLength() == 0)
+                {
+                    return Array.Empty<(DateTime, double)>();
+                }
+
+                var values = result[0].GetProperty("values");
+                var points = new List<(DateTime, double)>(values.GetArrayLength());
+                foreach (var sample in values.EnumerateArray())
+                {
+                    var timestamp = DateTimeOffset.FromUnixTimeSeconds((long)sample[0].GetDouble()).UtcDateTime;
+                    var raw = sample[1].GetString();
+                    if (raw is not null && double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+                    {
+                        points.Add((timestamp, value));
+                    }
+                }
+
+                return points;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to range-query Prometheus at {BaseUrl}: {Query}", baseUrl, promql);
+                return Array.Empty<(DateTime, double)>();
+            }
+        }
     }
 }

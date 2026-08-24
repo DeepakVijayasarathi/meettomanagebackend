@@ -19,6 +19,14 @@ namespace iucs.readernest.application.Common.Interfaces
         /// each service is its own labeled series and the caller needs all of them in one round trip.
         /// </summary>
         Task<IReadOnlyList<PrometheusSeries>> QueryVectorAsync(string baseUrl, string promql, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Runs a range query (/api/v1/query_range) for a trend chart — the first result series's
+        /// full set of (timestamp, value) samples between start and end, at the given step. Empty
+        /// list on any failure, same "never take the dashboard down" contract as the other methods.
+        /// </summary>
+        Task<IReadOnlyList<(DateTime Timestamp, double Value)>> QueryRangeAsync(
+            string baseUrl, string promql, DateTime start, DateTime end, TimeSpan step, CancellationToken cancellationToken = default);
     }
 
     public record PrometheusSeries(IReadOnlyDictionary<string, string> Labels, double Value);

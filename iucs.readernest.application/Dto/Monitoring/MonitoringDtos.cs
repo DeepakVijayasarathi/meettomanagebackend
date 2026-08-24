@@ -14,6 +14,13 @@ namespace iucs.readernest.application.Dto.Monitoring
         public int TotalParticipants { get; set; }
     }
 
+    /// <summary>One sample of a Prometheus range query (a trend chart data point).</summary>
+    public class TimeSeriesPointDto
+    {
+        public DateTime Timestamp { get; set; }
+        public double Value { get; set; }
+    }
+
     /// <summary>
     /// One server's point-in-time health, as reported by its own rn-status agent. <see cref="Reachable"/>
     /// false means the agent couldn't be reached at all (server down, network issue, wrong token) —
@@ -41,6 +48,9 @@ namespace iucs.readernest.application.Dto.Monitoring
         /// <summary>How long ago the agent itself last wrote its status file — a stale reading (agent stuck/cron dead) still reports <see cref="Reachable"/> true, so the UI needs this to flag it separately.</summary>
         public double AgentDataAgeSeconds { get; set; }
         public LiveCallSummaryDto? LiveCalls { get; set; }
+        /// <summary>Last hour of CPU/memory usage, ~2-minute steps — populated only when Reachable.</summary>
+        public List<TimeSeriesPointDto> CpuHistory { get; set; } = new();
+        public List<TimeSeriesPointDto> MemoryHistory { get; set; } = new();
     }
 
     /// <summary>
@@ -68,6 +78,9 @@ namespace iucs.readernest.application.Dto.Monitoring
         public bool DatabaseHealthy { get; set; }
         public double DatabaseLatencyMs { get; set; }
         public DatabaseInsightsDto? DatabaseInsights { get; set; }
+        /// <summary>Total connections currently joined to any live class, platform-wide (from ClassroomHub) — distinct from a single Jitsi server's own participant count.</summary>
+        public int ConcurrentClassroomUsers { get; set; }
+        public int ActiveClassCount { get; set; }
         public DateTime GeneratedAtUtc { get; set; }
     }
 }

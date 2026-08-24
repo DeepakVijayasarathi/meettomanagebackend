@@ -13,6 +13,7 @@ namespace iucs.readernest.application
         public static IServiceCollection AddApplication(this IServiceCollection services)
         {
             services.AddScoped<IMonitoringService, MonitoringService>();
+            services.AddSingleton<IClassroomPresenceTracker, ClassroomPresenceTracker>();
             services.AddSingleton<IPasswordHasher, BcryptPasswordHasher>();
             services.AddScoped<IAuditLogService, AuditLogService>();
             services.AddScoped<INotificationService, NotificationService>();

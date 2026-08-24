@@ -20,15 +20,18 @@ namespace iucs.readernest.application.Services
     {
         private readonly IPrometheusClient _prometheus;
         private readonly IUnitOfWork _unitOfWork;
+        private readonly IClassroomPresenceTracker _presenceTracker;
         private readonly MonitoringOptions _options;
 
         public MonitoringService(
             IPrometheusClient prometheus,
             IUnitOfWork unitOfWork,
+            IClassroomPresenceTracker presenceTracker,
             IOptions<MonitoringOptions> options)
         {
             _prometheus = prometheus;
             _unitOfWork = unitOfWork;
+            _presenceTracker = presenceTracker;
             _options = options.Value;
         }
 
@@ -51,6 +54,8 @@ namespace iucs.readernest.application.Services
                 DatabaseHealthy = dbHealthy,
                 DatabaseLatencyMs = dbLatencyMs,
                 DatabaseInsights = await insightsTask,
+                ConcurrentClassroomUsers = _presenceTracker.TotalConnectedUsers,
+                ActiveClassCount = _presenceTracker.ActiveClassCount,
                 GeneratedAtUtc = DateTime.UtcNow,
             };
         }
@@ -127,6 +132,9 @@ namespace iucs.readernest.application.Services
             // jitsi_jvb_conferences/jitsi_jvb_current_endpoints come straight from JVB's own
             // native Prometheus endpoint (see rn-jvb-metrics-proxy in the Prometheus scrape
             // config) -- real counts, not a derived/custom metric.
+            // Last hour of CPU/memory, ~2-minute steps -- for the trend chart. Only worth the extra
+            // round trip once we know the server is even up, so these fire after the up check below
+            // rather than joining the big WhenAll batch.
             var conferencesTask = server.TracksLiveCalls
                 ? _prometheus.QueryScalarAsync(baseUrl, $"jitsi_jvb_conferences{{instance=\"{instanceLabel}\"}}", cancellationToken)
                 : Task.FromResult<double?>(null);
@@ -165,6 +173,17 @@ namespace iucs.readernest.application.Services
             var conferences = await conferencesTask;
             var participants = await participantsTask;
 
+            var now = DateTime.UtcNow;
+            var historyStart = now.AddHours(-1);
+            var historyStep = TimeSpan.FromMinutes(2);
+            var cpuHistoryTask = _prometheus.QueryRangeAsync(
+                baseUrl, $"100 - (avg(rate(node_cpu_seconds_total{{instance=\"{instanceLabel}\",mode=\"idle\"}}[5m])) * 100)",
+                historyStart, now, historyStep, cancellationToken);
+            var memHistoryTask = _prometheus.QueryRangeAsync(
+                baseUrl, $"100 * (1 - node_memory_MemAvailable_bytes{{instance=\"{instanceLabel}\"}} / node_memory_MemTotal_bytes{{instance=\"{instanceLabel}\"}})",
+                historyStart, now, historyStep, cancellationToken);
+            await Task.WhenAll(cpuHistoryTask, memHistoryTask);
+
             return new ServerStatusDto
             {
                 Name = server.Name,
@@ -184,6 +203,8 @@ namespace iucs.readernest.application.Services
                 DiskWriteMbps = Math.Max(0, await diskWriteTask ?? 0),
                 Services = services,
                 AgentDataAgeSeconds = await freshnessTask ?? 0,
+                CpuHistory = (await cpuHistoryTask).Select(p => new TimeSeriesPointDto { Timestamp = p.Timestamp, Value = Clamp(p.Value) }).ToList(),
+                MemoryHistory = (await memHistoryTask).Select(p => new TimeSeriesPointDto { Timestamp = p.Timestamp, Value = Clamp(p.Value) }).ToList(),
                 LiveCalls = server.TracksLiveCalls
                     ? new LiveCallSummaryDto
                     {
