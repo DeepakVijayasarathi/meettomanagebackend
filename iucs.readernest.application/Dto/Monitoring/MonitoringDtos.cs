@@ -22,6 +22,25 @@ namespace iucs.readernest.application.Dto.Monitoring
     }
 
     /// <summary>
+    /// Real-time call quality straight from JVB's own native Prometheus endpoint — not just
+    /// "is the bridge up," but whether the calls running on it are actually good right now.
+    /// Populated only for a server with TracksLiveCalls set.
+    /// </summary>
+    public class CallQualityDto
+    {
+        public double AverageRttMs { get; set; }
+        public double IncomingLossPercent { get; set; }
+        public double OutgoingLossPercent { get; set; }
+        public double IncomingBitrateKbps { get; set; }
+        public double OutgoingBitrateKbps { get; set; }
+        public int EndpointsSendingAudio { get; set; }
+        public int EndpointsSendingVideo { get; set; }
+        /// <summary>JVB's own load indicator, 0-1 — how close the bridge is to needing to shed load.</summary>
+        public double JvbStressPercent { get; set; }
+        public bool JvbHealthy { get; set; }
+    }
+
+    /// <summary>
     /// One server's point-in-time health, as reported by its own rn-status agent. <see cref="Reachable"/>
     /// false means the agent couldn't be reached at all (server down, network issue, wrong token) —
     /// every other field is then meaningless/default and the UI should show it as unknown, not "0%".
@@ -51,6 +70,7 @@ namespace iucs.readernest.application.Dto.Monitoring
         /// <summary>Last hour of CPU/memory usage, ~2-minute steps — populated only when Reachable.</summary>
         public List<TimeSeriesPointDto> CpuHistory { get; set; } = new();
         public List<TimeSeriesPointDto> MemoryHistory { get; set; } = new();
+        public CallQualityDto? CallQuality { get; set; }
     }
 
     /// <summary>

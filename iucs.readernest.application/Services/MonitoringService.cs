@@ -142,10 +142,25 @@ namespace iucs.readernest.application.Services
                 ? _prometheus.QueryScalarAsync(baseUrl, $"jitsi_jvb_current_endpoints{{instance=\"{instanceLabel}\"}}", cancellationToken)
                 : Task.FromResult<double?>(null);
 
+            // Same JVB endpoint as above -- call quality, not just up/down.
+            Task<double?> jvbMetric(string name) => server.TracksLiveCalls
+                ? _prometheus.QueryScalarAsync(baseUrl, $"{name}{{instance=\"{instanceLabel}\"}}", cancellationToken)
+                : Task.FromResult<double?>(null);
+            var rttTask = jvbMetric("jitsi_jvb_average_rtt");
+            var lossInTask = jvbMetric("jitsi_jvb_incoming_loss_fraction");
+            var lossOutTask = jvbMetric("jitsi_jvb_outgoing_loss_fraction");
+            var bitrateInTask = jvbMetric("jitsi_jvb_incoming_bitrate");
+            var bitrateOutTask = jvbMetric("jitsi_jvb_outgoing_bitrate");
+            var sendingAudioTask = jvbMetric("jitsi_jvb_endpoints_sending_audio");
+            var sendingVideoTask = jvbMetric("jitsi_jvb_endpoints_sending_video");
+            var stressTask = jvbMetric("jitsi_jvb_stress");
+            var jvbHealthyTask = jvbMetric("jitsi_jvb_healthy");
+
             await Task.WhenAll(
                 upTask, freshnessTask, cpuCoresTask, cpuUsageTask, memUsedPercentTask, memTotalTask,
                 diskUsedPercentTask, diskTotalTask, loadTask, uptimeTask, servicesTask, conferencesTask, participantsTask,
-                netRxTask, netTxTask, diskReadTask, diskWriteTask);
+                netRxTask, netTxTask, diskReadTask, diskWriteTask,
+                rttTask, lossInTask, lossOutTask, bitrateInTask, bitrateOutTask, sendingAudioTask, sendingVideoTask, stressTask, jvbHealthyTask);
 
             var up = await upTask;
             if (up is not 1)
@@ -172,6 +187,21 @@ namespace iucs.readernest.application.Services
 
             var conferences = await conferencesTask;
             var participants = await participantsTask;
+            var jvbHealthy = await jvbHealthyTask;
+            CallQualityDto? callQuality = server.TracksLiveCalls && jvbHealthy is not null
+                ? new CallQualityDto
+                {
+                    AverageRttMs = await rttTask ?? 0,
+                    IncomingLossPercent = Math.Clamp((await lossInTask ?? 0) * 100, 0, 100),
+                    OutgoingLossPercent = Math.Clamp((await lossOutTask ?? 0) * 100, 0, 100),
+                    IncomingBitrateKbps = (await bitrateInTask ?? 0) / 1000,
+                    OutgoingBitrateKbps = (await bitrateOutTask ?? 0) / 1000,
+                    EndpointsSendingAudio = (int)(await sendingAudioTask ?? 0),
+                    EndpointsSendingVideo = (int)(await sendingVideoTask ?? 0),
+                    JvbStressPercent = Math.Clamp((await stressTask ?? 0) * 100, 0, 100),
+                    JvbHealthy = jvbHealthy == 1,
+                }
+                : null;
 
             var now = DateTime.UtcNow;
             var historyStart = now.AddHours(-1);
@@ -205,6 +235,7 @@ namespace iucs.readernest.application.Services
                 AgentDataAgeSeconds = await freshnessTask ?? 0,
                 CpuHistory = (await cpuHistoryTask).Select(p => new TimeSeriesPointDto { Timestamp = p.Timestamp, Value = Clamp(p.Value) }).ToList(),
                 MemoryHistory = (await memHistoryTask).Select(p => new TimeSeriesPointDto { Timestamp = p.Timestamp, Value = Clamp(p.Value) }).ToList(),
+                CallQuality = callQuality,
                 LiveCalls = server.TracksLiveCalls
                     ? new LiveCallSummaryDto
                     {
