@@ -227,7 +227,25 @@ namespace iucs.readernest.application.Services
             var memHistoryTask = _prometheus.QueryRangeAsync(
                 baseUrl, $"100 * (1 - node_memory_MemAvailable_bytes{{instance=\"{instanceLabel}\"}} / node_memory_MemTotal_bytes{{instance=\"{instanceLabel}\"}})",
                 historyStart, now, historyStep, cancellationToken);
-            await Task.WhenAll(cpuHistoryTask, memHistoryTask);
+            // deriv() is a real linear-regression rate over the window, not a naive two-point
+            // delta -- exactly Prometheus's own tool for "is this trending toward a problem."
+            var diskAvailBytesTask = _prometheus.QueryScalarAsync(
+                baseUrl, $"node_filesystem_avail_bytes{{instance=\"{instanceLabel}\",mountpoint=\"/\",fstype!=\"tmpfs\"}}", cancellationToken);
+            var diskTrendTask = _prometheus.QueryScalarAsync(
+                baseUrl, $"deriv(node_filesystem_avail_bytes{{instance=\"{instanceLabel}\",mountpoint=\"/\",fstype!=\"tmpfs\"}}[6h])", cancellationToken);
+            await Task.WhenAll(cpuHistoryTask, memHistoryTask, diskAvailBytesTask, diskTrendTask);
+
+            var diskAvailBytes = await diskAvailBytesTask;
+            var diskTrendBytesPerSec = await diskTrendTask;
+            var diskForecast = new CapacityForecastDto
+            {
+                IsFilling = diskTrendBytesPerSec is < 0 && diskAvailBytes is > 0,
+                TrendGbPerDay = (diskTrendBytesPerSec ?? 0) * 86400 / 1_073_741_824,
+            };
+            if (diskForecast.IsFilling)
+            {
+                diskForecast.DaysUntilFull = Math.Round(diskAvailBytes!.Value / -diskTrendBytesPerSec!.Value / 86400, 1);
+            }
 
             return new ServerStatusDto
             {
@@ -251,6 +269,7 @@ namespace iucs.readernest.application.Services
                 CpuHistory = (await cpuHistoryTask).Select(p => new TimeSeriesPointDto { Timestamp = p.Timestamp, Value = Clamp(p.Value) }).ToList(),
                 MemoryHistory = (await memHistoryTask).Select(p => new TimeSeriesPointDto { Timestamp = p.Timestamp, Value = Clamp(p.Value) }).ToList(),
                 CallQuality = callQuality,
+                DiskForecast = diskForecast,
                 LiveCalls = server.TracksLiveCalls
                     ? new LiveCallSummaryDto
                     {

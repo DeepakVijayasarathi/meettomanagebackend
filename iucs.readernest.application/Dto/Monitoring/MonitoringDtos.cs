@@ -71,6 +71,7 @@ namespace iucs.readernest.application.Dto.Monitoring
         public List<TimeSeriesPointDto> CpuHistory { get; set; } = new();
         public List<TimeSeriesPointDto> MemoryHistory { get; set; } = new();
         public CallQualityDto? CallQuality { get; set; }
+        public CapacityForecastDto? DiskForecast { get; set; }
     }
 
     /// <summary>
@@ -88,6 +89,20 @@ namespace iucs.readernest.application.Dto.Monitoring
         public double DatabaseSizeMb { get; set; }
         public long DeadlocksTotal { get; set; }
         public int LocksHeld { get; set; }
+    }
+
+    /// <summary>
+    /// Disk-fill projection from the last 6 hours' trend (Prometheus's own deriv() function —
+    /// a real linear-regression rate, not a guess). Only meaningful for genuinely accumulating
+    /// usage (logs, recordings, DB growth); a healthy server usually reports IsFilling=false.
+    /// </summary>
+    public class CapacityForecastDto
+    {
+        public bool IsFilling { get; set; }
+        /// <summary>Null unless IsFilling is true.</summary>
+        public double? DaysUntilFull { get; set; }
+        /// <summary>Signed: positive means free space is growing, negative means it's shrinking.</summary>
+        public double TrendGbPerDay { get; set; }
     }
 
     /// <summary>One currently pending/firing Prometheus alert (see IPrometheusClient.GetActiveAlertsAsync).</summary>
