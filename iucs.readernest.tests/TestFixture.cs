@@ -2,6 +2,7 @@ using System.Data.Common;
 using System.Text.Json;
 using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Interfaces;
+using iucs.readernest.application.Dto.Billing;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Data;
 using iucs.readernest.domain.Data.Interceptors;
@@ -83,6 +84,20 @@ namespace iucs.readernest.tests
         public List<Dictionary<string, string>> Rows { get; set; } = [];
 
         public List<Dictionary<string, string>> ReadRows(Stream content, string fileName) => Rows;
+    }
+
+    /// <summary>Real rendering (QuestPDF) lives in the api project's InvoicePdfGenerator, which
+    /// this test project doesn't reference — tests only need to prove GenerateInvoicePdfAsync
+    /// resolves the right invoice/data and calls through, not that a real PDF comes out.</summary>
+    public class FakeInvoicePdfGenerator : IInvoicePdfGenerator
+    {
+        public InvoicePdfData? LastRequest { get; private set; }
+
+        public byte[] Generate(InvoicePdfData data)
+        {
+            LastRequest = data;
+            return [1, 2, 3];
+        }
     }
 
     public class FakePaymentGateway : IPaymentGateway

@@ -62,6 +62,8 @@ namespace iucs.readernest.tests
 
         private readonly FakeBulkFileReader _bulkFileReader = new();
 
+        private readonly FakeInvoicePdfGenerator _invoicePdfGenerator = new();
+
         private UserService CreateUserService() => new(_db.UnitOfWork, _hasher, _notifications, _emailTemplates, _auditLog, _emailSender, _whatsAppSender, _smsSender, _bulkFileReader, NullLogger<UserService>.Instance);
 
         private CourseService CreateCourseService() => new(_db.UnitOfWork, _auditLog, _bulkFileReader);
@@ -81,9 +83,11 @@ namespace iucs.readernest.tests
         private SessionService CreateSessionService(FakeJitsiTokenService jitsiTokens) =>
             new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, jitsiTokens);
 
-        private BillingService CreateBillingService() => new(_db.UnitOfWork, _auditLog, new FakePaymentGateway(), _notifications, _db.CurrentUser, _bulkFileReader);
+        private BillingService CreateBillingService() =>
+            new(_db.UnitOfWork, _auditLog, new FakePaymentGateway(), _notifications, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
 
-        private BillingService CreateBillingService(FakePaymentGateway gateway) => new(_db.UnitOfWork, _auditLog, gateway, _notifications, _db.CurrentUser, _bulkFileReader);
+        private BillingService CreateBillingService(FakePaymentGateway gateway) =>
+            new(_db.UnitOfWork, _auditLog, gateway, _notifications, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
 
         private EnrollmentService CreateEnrollmentService() => new(_db.UnitOfWork, _auditLog, CreateBillingService(), CreateBatchService(), _bulkFileReader);
 
@@ -1200,7 +1204,7 @@ namespace iucs.readernest.tests
             // same queue). The shared FakePaymentGateway counts disbursements across both.
             var (context2, uow2) = _db.CreateConcurrentSession();
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
-            var billing2 = new BillingService(uow2, auditLog2, gateway, _notifications, _db.CurrentUser, _bulkFileReader);
+            var billing2 = new BillingService(uow2, auditLog2, gateway, _notifications, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
 
             // Request 2 reads the refund while it is genuinely still Requested. EF returns this
             // same tracked instance from any later lookup on context2 rather than refreshing it,
@@ -1273,7 +1277,7 @@ namespace iucs.readernest.tests
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
             var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
             var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, NullLogger<NotificationService>.Instance);
-            var billing2 = new BillingService(uow2, auditLog2, new FakePaymentGateway(), notifications2, _db.CurrentUser, _bulkFileReader);
+            var billing2 = new BillingService(uow2, auditLog2, new FakePaymentGateway(), notifications2, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
 
             var task1 = billing1.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 500, Method = PaymentMethod.Card });
             var task2 = billing2.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 500, Method = PaymentMethod.Cash });
@@ -1318,7 +1322,7 @@ namespace iucs.readernest.tests
             // without the gateway being asked to refund again.
             gateway.RefundFailure = null;
             var auditLog2 = new AuditLogService(verifyUow, _db.CurrentUser);
-            var billing2 = new BillingService(verifyUow, auditLog2, gateway, _notifications, _db.CurrentUser, _bulkFileReader);
+            var billing2 = new BillingService(verifyUow, auditLog2, gateway, _notifications, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
             var rejected = await Assert.ThrowsAsync<DomainValidationException>(
                 () => billing2.ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = true }));
             Assert.Contains("already Approved", rejected.Message);
@@ -4209,7 +4213,7 @@ namespace iucs.readernest.tests
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
             var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
             var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, NullLogger<NotificationService>.Instance);
-            var billing2 = new BillingService(uow2, auditLog2, gateway, notifications2, _db.CurrentUser, _bulkFileReader);
+            var billing2 = new BillingService(uow2, auditLog2, gateway, notifications2, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
 
             var request = () => new RequestRefundRequest
             {

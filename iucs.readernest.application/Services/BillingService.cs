@@ -33,6 +33,7 @@ namespace iucs.readernest.application.Services
         /// <summary>Only for hand-stamping UpdatedBy on writes that bypass the audit interceptor.</summary>
         private readonly ICurrentUserService _currentUser;
         private readonly IBulkFileReader _bulkFileReader;
+        private readonly IInvoicePdfGenerator _invoicePdfGenerator;
 
         public BillingService(
             IUnitOfWork unitOfWork,
@@ -40,7 +41,8 @@ namespace iucs.readernest.application.Services
             IPaymentGateway paymentGateway,
             INotificationService notificationService,
             ICurrentUserService currentUser,
-            IBulkFileReader bulkFileReader)
+            IBulkFileReader bulkFileReader,
+            IInvoicePdfGenerator invoicePdfGenerator)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
@@ -48,6 +50,7 @@ namespace iucs.readernest.application.Services
             _notificationService = notificationService;
             _currentUser = currentUser;
             _bulkFileReader = bulkFileReader;
+            _invoicePdfGenerator = invoicePdfGenerator;
         }
 
         public async Task<IReadOnlyList<PackagePlanDto>> ListPlansAsync(CancellationToken cancellationToken = default)
@@ -371,6 +374,29 @@ namespace iucs.readernest.application.Services
                 Page = page,
                 PageSize = pageSize,
             };
+        }
+
+        public async Task<(byte[] Content, string FileName)> GenerateInvoicePdfAsync(Guid id, CancellationToken cancellationToken = default)
+        {
+            var invoice = await WithDtoIncludes(_unitOfWork.Repository<Invoice>().Query())
+                .FirstOrDefaultAsync(i => i.Id == id, cancellationToken)
+                ?? throw new NotFoundException(nameof(Invoice), id);
+
+            var data = new InvoicePdfData
+            {
+                InvoiceNumber = invoice.InvoiceNumber,
+                IssuedAtUtc = invoice.IssuedAtUtc,
+                ParentName = invoice.ParentProfile?.User is null
+                    ? "—"
+                    : $"{invoice.ParentProfile.User.FirstName} {invoice.ParentProfile.User.LastName}".Trim(),
+                ParentPhone = invoice.ParentProfile?.User?.Phone,
+                Description = invoice.Course?.Name ?? invoice.Subscription?.PackagePlan?.Course?.Name ?? "Course Fee",
+                Amount = invoice.Amount,
+                Currency = invoice.Currency,
+            };
+
+            var content = _invoicePdfGenerator.Generate(data);
+            return (content, $"{invoice.InvoiceNumber}.pdf");
         }
 
         public async Task<InvoiceDto> CreateInvoiceAsync(
