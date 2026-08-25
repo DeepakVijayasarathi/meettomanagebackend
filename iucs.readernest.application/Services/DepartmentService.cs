@@ -4,6 +4,7 @@ using iucs.readernest.application.Common.Interfaces;
 using iucs.readernest.application.Dto.Common;
 using iucs.readernest.application.Dto.Courses;
 using iucs.readernest.domain.Entities.Academics;
+using iucs.readernest.domain.Entities.Billing;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
 using Microsoft.EntityFrameworkCore;
@@ -52,6 +53,26 @@ namespace iucs.readernest.application.Services
                 IsActive = request.IsActive,
             };
             await repository.AddAsync(department, cancellationToken);
+
+            // Every department needs its own payment account (PaymentAccount.DepartmentId is
+            // uniquely indexed) for invoices to route anywhere — without this, a newly-added
+            // department was invisible on Payment Gateway Mapping and had nothing to assign a
+            // parent to until someone created its account by hand. Inactive with a placeholder
+            // ref: the account exists and shows up immediately, but nothing routes through it
+            // as real money until an admin fills in actual gateway credentials — the same
+            // "pending-client-decision" convention PaymentMapping.tsx already recognizes and
+            // clears back to a blank field the moment someone opens it to configure.
+            await _unitOfWork.Repository<PaymentAccount>().AddAsync(
+                new PaymentAccount
+                {
+                    Name = $"{name} Department Account",
+                    DepartmentId = department.Id,
+                    GatewayProvider = "razorpay",
+                    GatewayAccountRef = "pending-client-decision",
+                    IsActive = false,
+                },
+                cancellationToken);
+
             await _auditLog.StageAsync(AuditAction.Create, nameof(Department), department.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 

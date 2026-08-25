@@ -2421,6 +2421,21 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task Departments_CreateAsync_AlsoCreatesItsPaymentAccount()
+        {
+            var departments = CreateDepartmentService();
+            var created = await departments.CreateAsync(new SaveDepartmentRequest { Name = "Hindi", IsActive = true });
+
+            var account = await _db.Context.PaymentAccounts.FirstOrDefaultAsync(a => a.DepartmentId == created.Id);
+            Assert.NotNull(account);
+            Assert.Equal("Hindi Department Account", account!.Name);
+            // Not wired to real money yet — an admin still has to fill in actual gateway
+            // credentials via Payment Gateway Mapping's edit dialog before this department
+            // can actually collect anything, same as the two the app originally shipped with.
+            Assert.False(account.IsActive);
+        }
+
+        [Fact]
         public async Task Departments_CreateAsync_RejectsADuplicateName()
         {
             var departments = CreateDepartmentService();
