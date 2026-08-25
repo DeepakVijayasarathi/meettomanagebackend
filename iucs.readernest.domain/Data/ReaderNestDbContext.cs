@@ -158,7 +158,7 @@ namespace iucs.readernest.domain.Data
             var mapper = new NpgsqlSnakeCaseNameTranslator();
             foreach (var entity in modelBuilder.Model.GetEntityTypes())
             {
-                entity.SetTableName(mapper.TranslateMemberName(entity.GetTableName()));
+                entity.SetTableName(mapper.TranslateMemberName(entity.GetTableName()!));
 
                 foreach (var property in entity.GetProperties())
                 {
@@ -167,17 +167,17 @@ namespace iucs.readernest.domain.Data
 
                 foreach (var key in entity.GetKeys())
                 {
-                    key.SetName(mapper.TranslateMemberName(key.GetName()));
+                    key.SetName(mapper.TranslateMemberName(key.GetName()!));
                 }
 
                 foreach (var fk in entity.GetForeignKeys())
                 {
-                    fk.SetConstraintName(mapper.TranslateMemberName(fk.GetConstraintName()));
+                    fk.SetConstraintName(mapper.TranslateMemberName(fk.GetConstraintName()!));
                 }
 
                 foreach (var index in entity.GetIndexes())
                 {
-                    index.SetDatabaseName(mapper.TranslateMemberName(index.GetDatabaseName()));
+                    index.SetDatabaseName(mapper.TranslateMemberName(index.GetDatabaseName()!));
                 }
             }
         }

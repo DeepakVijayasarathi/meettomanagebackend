@@ -30,7 +30,7 @@ namespace iucs.readernest.application.Services
             CancellationToken cancellationToken = default)
         {
             var query = _unitOfWork.Repository<PayoutRate>().Query()
-                .Include(r => r.TeacherProfile).ThenInclude(t => t.User);
+                .Include(r => r.TeacherProfile).ThenInclude(t => t!.User);
 
             IQueryable<PayoutRate> filtered = query;
             if (teacherProfileId.HasValue)
@@ -109,7 +109,7 @@ namespace iucs.readernest.application.Services
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             var saved = await _unitOfWork.Repository<PayoutRate>().Query()
-                .Include(r => r.TeacherProfile).ThenInclude(t => t.User)
+                .Include(r => r.TeacherProfile).ThenInclude(t => t!.User)
                 .FirstAsync(r => r.Id == rate.Id, cancellationToken);
             return saved.ToDto();
         }
