@@ -27,6 +27,7 @@ using iucs.readernest.domain.Entities.Communication;
 using iucs.readernest.domain.Entities.Payouts;
 using iucs.readernest.domain.Entities.Quizzes;
 using iucs.readernest.domain.Entities.Sessions;
+using iucs.readernest.domain.Entities.Settings;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
 using Microsoft.EntityFrameworkCore;
@@ -833,6 +834,41 @@ namespace iucs.readernest.tests
             Assert.NotNull(stored!.ExpiresAtUtc);
             var days = (stored.ExpiresAtUtc!.Value - DateTime.UtcNow).TotalDays;
             Assert.InRange(days, 14.9, 15.1);
+        }
+
+        [Fact]
+        public async Task GenerateInvoicePdf_UsesOrgDefaults_WhenNoInvoiceSettingsConfigured()
+        {
+            var (billing, invoice) = await SeedInvoiceAsync(amount: 1000);
+
+            await billing.GenerateInvoicePdfAsync(invoice.Id);
+
+            var request = _invoicePdfGenerator.LastRequest;
+            Assert.NotNull(request);
+            Assert.Equal("777705999305", request!.AccountNumber);
+            Assert.Equal("06AWCPN6985H1Z3", request.GstNumber);
+            Assert.Equal("Akanksha Nagar", request.SignatoryName);
+        }
+
+        [Fact]
+        public async Task GenerateInvoicePdf_UsesConfiguredSettings_WhenPresent()
+        {
+            var (billing, invoice) = await SeedInvoiceAsync(amount: 1000);
+            _db.Context.AppSettings.Add(new AppSetting
+            {
+                Category = SettingCategory.General,
+                Key = "invoice.accountName",
+                Value = "A DIFFERENT ACCOUNT NAME",
+            });
+            await _db.Context.SaveChangesAsync();
+
+            await billing.GenerateInvoicePdfAsync(invoice.Id);
+
+            var request = _invoicePdfGenerator.LastRequest;
+            Assert.NotNull(request);
+            Assert.Equal("A DIFFERENT ACCOUNT NAME", request!.AccountName);
+            // Untouched keys still fall back to the org defaults, not blank/null.
+            Assert.Equal("777705999305", request.AccountNumber);
         }
 
         [Fact]

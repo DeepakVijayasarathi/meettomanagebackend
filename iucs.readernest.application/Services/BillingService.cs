@@ -8,6 +8,7 @@ using iucs.readernest.application.Mappings;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Billing;
+using iucs.readernest.domain.Entities.Settings;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
@@ -376,11 +377,37 @@ namespace iucs.readernest.application.Services
             };
         }
 
+        /// <summary>
+        /// "invoice.*" AppSetting keys (Settings → General → Invoice Details) with the org's
+        /// original fixed values as fallback defaults — a deployment where nobody has touched
+        /// that section yet still renders the exact same PDF as before this became editable.
+        /// </summary>
+        private static readonly Dictionary<string, string> InvoiceSettingDefaults = new()
+        {
+            ["invoice.accountNumber"] = "777705999305",
+            ["invoice.ifscCode"] = "ICIC0008065",
+            ["invoice.branchName"] = "sector 17 Faridabad",
+            ["invoice.gstNumber"] = "06AWCPN6985H1Z3",
+            ["invoice.accountName"] = "THE READER NEST",
+            ["invoice.contactEmail"] = "INFO@THEREADERNEST.COM",
+            ["invoice.signatoryName"] = "Akanksha Nagar",
+            ["invoice.signatoryTitle"] = "Founder & MD",
+        };
+
         public async Task<(byte[] Content, string FileName)> GenerateInvoicePdfAsync(Guid id, CancellationToken cancellationToken = default)
         {
             var invoice = await WithDtoIncludes(_unitOfWork.Repository<Invoice>().Query())
                 .FirstOrDefaultAsync(i => i.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(Invoice), id);
+
+            var settings = await _unitOfWork.Repository<AppSetting>().Query()
+                .Where(s => InvoiceSettingDefaults.Keys.Contains(s.Key))
+                .ToDictionaryAsync(s => s.Key, s => s.Value, cancellationToken);
+
+            string Setting(string key) =>
+                settings.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+                    ? value
+                    : InvoiceSettingDefaults[key];
 
             var data = new InvoicePdfData
             {
@@ -393,6 +420,14 @@ namespace iucs.readernest.application.Services
                 Description = invoice.Course?.Name ?? invoice.Subscription?.PackagePlan?.Course?.Name ?? "Course Fee",
                 Amount = invoice.Amount,
                 Currency = invoice.Currency,
+                AccountNumber = Setting("invoice.accountNumber"),
+                IfscCode = Setting("invoice.ifscCode"),
+                BranchName = Setting("invoice.branchName"),
+                GstNumber = Setting("invoice.gstNumber"),
+                AccountName = Setting("invoice.accountName"),
+                ContactEmail = Setting("invoice.contactEmail"),
+                SignatoryName = Setting("invoice.signatoryName"),
+                SignatoryTitle = Setting("invoice.signatoryTitle"),
             };
 
             var content = _invoicePdfGenerator.Generate(data);

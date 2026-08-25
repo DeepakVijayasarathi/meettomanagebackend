@@ -109,6 +109,26 @@ namespace iucs.readernest.application.Dto.Billing
         public decimal Amount { get; set; }
 
         public string Currency { get; set; } = null!;
+
+        // Org payment/GST/signatory details — admin-editable (Settings → General → Invoice
+        // Details, "invoice.*" keys), same on every invoice. BillingService resolves these
+        // from AppSetting with the org's original fixed values as fallback defaults, so a
+        // deployment where nobody has ever touched that section still renders correctly.
+        public string AccountNumber { get; set; } = null!;
+
+        public string IfscCode { get; set; } = null!;
+
+        public string BranchName { get; set; } = null!;
+
+        public string GstNumber { get; set; } = null!;
+
+        public string AccountName { get; set; } = null!;
+
+        public string ContactEmail { get; set; } = null!;
+
+        public string SignatoryName { get; set; } = null!;
+
+        public string SignatoryTitle { get; set; } = null!;
     }
 
     public class CreateInvoiceRequest

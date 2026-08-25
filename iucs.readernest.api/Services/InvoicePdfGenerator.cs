@@ -10,21 +10,12 @@ namespace iucs.readernest.api.Services
     /// <summary>
     /// Renders one invoice as a "Bill of Supply" PDF matching the org's existing manually-made
     /// invoice template exactly (cream background, red title, logo, bank/GST payment info,
-    /// itemized table, refund terms, composition-scheme declaration, founder signature).
-    /// Company/bank/GST/signatory details are fixed constants here, not pulled from settings —
-    /// they're the org's own unchanging payment-collection details, identical on every invoice.
+    /// itemized table, refund terms, composition-scheme declaration, founder signature). Pure
+    /// layout only — the actual bank/GST/signatory values are resolved by the caller
+    /// (BillingService, from AppSetting) and arrive already-filled-in on <see cref="InvoicePdfData"/>.
     /// </summary>
     public class InvoicePdfGenerator : IInvoicePdfGenerator
     {
-        private const string AccountNumber = "777705999305";
-        private const string IfscCode = "ICIC0008065";
-        private const string BranchName = "sector 17 Faridabad";
-        private const string GstNumber = "06AWCPN6985H1Z3";
-        private const string AccountName = "THE READER NEST";
-        private const string ContactEmail = "INFO@THEREADERNEST.COM";
-        private const string SignatoryName = "Akanksha Nagar";
-        private const string SignatoryTitle = "Founder & MD";
-
         private const string Cream = "#EDE7DC";
         private const string Red = "#D62839";
         private const string Ink = "#3B2A1E";
@@ -86,11 +77,11 @@ namespace iucs.readernest.api.Services
                             row.RelativeItem().Column(c =>
                             {
                                 c.Item().AlignCenter().Text("Payment Info").Bold();
-                                c.Item().PaddingTop(6).Text($"Account no.– {AccountNumber}");
-                                c.Item().Text($"IFSC code– {IfscCode}");
-                                c.Item().Text($"Branch Name – {BranchName}");
-                                c.Item().Text($"GST NO– {GstNumber}");
-                                c.Item().Text($"ACCOUNT NAME– {AccountName}");
+                                c.Item().PaddingTop(6).Text($"Account no.– {data.AccountNumber}");
+                                c.Item().Text($"IFSC code– {data.IfscCode}");
+                                c.Item().Text($"Branch Name – {data.BranchName}");
+                                c.Item().Text($"GST NO– {data.GstNumber}");
+                                c.Item().Text($"ACCOUNT NAME– {data.AccountName}");
                             });
                         });
 
@@ -131,7 +122,7 @@ namespace iucs.readernest.api.Services
                             table.Cell().Border(1).BorderColor(LineColor).Padding(6).AlignCenter().Text($"{data.Amount:0.##}").Bold();
                         });
 
-                        col.Item().PaddingTop(6).AlignRight().Text($"FOR ANY QUESTIONS, PLEASE CONTACT {ContactEmail}").FontSize(8);
+                        col.Item().PaddingTop(6).AlignRight().Text($"FOR ANY QUESTIONS, PLEASE CONTACT {data.ContactEmail}").FontSize(8);
 
                         col.Item().PaddingTop(20).Row(row =>
                         {
@@ -147,9 +138,9 @@ namespace iucs.readernest.api.Services
                             });
                             row.RelativeItem(1).Column(c =>
                             {
-                                c.Item().AlignCenter().PaddingBottom(2).Text(SignatoryName).Italic().FontSize(20);
-                                c.Item().AlignCenter().Text(SignatoryName).Bold().FontSize(10);
-                                c.Item().AlignCenter().Text(SignatoryTitle).FontSize(9);
+                                c.Item().AlignCenter().PaddingBottom(2).Text(data.SignatoryName).Italic().FontSize(20);
+                                c.Item().AlignCenter().Text(data.SignatoryName).Bold().FontSize(10);
+                                c.Item().AlignCenter().Text(data.SignatoryTitle).FontSize(9);
                             });
                         });
 
