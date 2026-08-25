@@ -5630,6 +5630,40 @@ namespace iucs.readernest.tests
         }
 
         /// <summary>
+        /// {{OrgName}} is available to every template without its caller having to pass one —
+        /// resolved centrally from the "brand.name" setting (see EmailTemplateSeedData.Wrap's
+        /// header/footer, and ReconcileOrgNameEmailTemplatesAsync for already-seeded DBs). A
+        /// deployment that renames its brand should see that reflected in outgoing email
+        /// without anyone having to touch a single template's own content.
+        /// </summary>
+        [Fact]
+        public async Task EmailTemplate_SubstitutesOrgNameFromBrandSetting_WithoutCallerSupplyingIt()
+        {
+            _db.Context.EmailTemplates.Add(new EmailTemplate
+            {
+                Key = "qa-orgname",
+                Name = "QA OrgName",
+                Category = NotificationType.General,
+                Subject = "Hello from {{OrgName}}",
+                HtmlBody = "<p>Welcome to {{OrgName}}</p>",
+                PlaceholdersJson = "[]",
+                IsActive = true,
+            });
+            _db.Context.AppSettings.Add(new AppSetting
+            {
+                Category = SettingCategory.Branding,
+                Key = "brand.name",
+                Value = "Acme Academy",
+            });
+            await _db.Context.SaveChangesAsync();
+
+            var (subject, body) = await _emailTemplates.RenderAsync("qa-orgname", new Dictionary<string, string>());
+
+            Assert.Equal("Hello from Acme Academy", subject);
+            Assert.Contains("Welcome to Acme Academy", body);
+        }
+
+        /// <summary>
         /// Bulk email recipient scoping, previously untested. The count shown on the compose
         /// screen has to be exactly who the send reaches, and a batch-scoped send must not
         /// spill into unrelated parents.

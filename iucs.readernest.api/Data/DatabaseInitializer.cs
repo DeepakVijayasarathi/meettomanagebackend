@@ -58,6 +58,7 @@ namespace iucs.readernest.api.Data
             await EnsureProgressReportEmailTemplateAsync(context);
             await EnsurePinResetEmailTemplateAsync(context);
             await EnsureAccessRequestEmailTemplatesAsync(context);
+            await ReconcileOrgNameEmailTemplatesAsync(context);
             await EnsureProgressReportsMenuAsync(context);
             await EnsureStoreInquiriesMenuAsync(context);
             await EnsureParentRecordingsMenuAsync(context);
@@ -1277,6 +1278,31 @@ namespace iucs.readernest.api.Data
             existing.Subject = seed.Subject;
             existing.HtmlBody = seed.HtmlBody;
             existing.PlaceholdersJson = JsonSerializer.Serialize(seed.Placeholders);
+        }
+
+        /// <summary>
+        /// SeedEmailTemplatesAsync is insert-only, so a live DB seeded before every template's
+        /// header/footer (and two subjects/bodies) switched from a hardcoded "The Reader Nest"
+        /// to {{OrgName}} — resolved live from Settings -> Branding by EmailTemplateService,
+        /// see docs/WHITE_LABEL_BRANDING.md's "Product naming" row — still has the old fixed
+        /// text baked in. Reconciles every template still missing the token, skipping any an
+        /// admin has already edited themselves (same trade-off as the other Reconcile* methods
+        /// above: an admin's own subsequent edit is left alone, not overwritten again later).
+        /// </summary>
+        private static async Task ReconcileOrgNameEmailTemplatesAsync(ReaderNestDbContext context)
+        {
+            foreach (var seed in EmailTemplateSeedData.All)
+            {
+                var existing = await context.EmailTemplates.FirstOrDefaultAsync(t => t.Key == seed.Key);
+                if (existing is null || existing.HtmlBody.Contains("{{OrgName}}"))
+                {
+                    continue;
+                }
+
+                existing.Subject = seed.Subject;
+                existing.HtmlBody = seed.HtmlBody;
+                existing.PlaceholdersJson = JsonSerializer.Serialize(seed.Placeholders);
+            }
         }
     }
 }
