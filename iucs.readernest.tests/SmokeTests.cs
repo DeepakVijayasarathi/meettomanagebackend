@@ -2464,6 +2464,53 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task UpdatePaymentAccount_AppliesToEveryDepartment_ByDefault()
+        {
+            var maths = new PaymentAccount { Name = "Maths Department Account", DepartmentId = WellKnownDepartments.Maths, GatewayProvider = "cashfree", GatewayAccountRef = "acc_maths_old", IsActive = true };
+            var phonics = new PaymentAccount { Name = "Phonics Department Account", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "acc_phonics_old", IsActive = true };
+            _db.Context.PaymentAccounts.AddRange(maths, phonics);
+            await _db.Context.SaveChangesAsync();
+
+            var billing = CreateBillingService();
+            await billing.UpdatePaymentAccountAsync(maths.Id, new UpdatePaymentAccountRequest
+            {
+                Name = "Maths Department Account",
+                GatewayProvider = "razorpay",
+                GatewayAccountRef = "acc_org_wide_123",
+                IsActive = true,
+            });
+
+            var updatedPhonics = await _db.Context.PaymentAccounts.AsNoTracking().FirstAsync(a => a.Id == phonics.Id);
+            Assert.Equal("razorpay", updatedPhonics.GatewayProvider);
+            Assert.Equal("acc_org_wide_123", updatedPhonics.GatewayAccountRef);
+            // Only the routing fields converge — the card label stays department-specific.
+            Assert.Equal("Phonics Department Account", updatedPhonics.Name);
+        }
+
+        [Fact]
+        public async Task UpdatePaymentAccount_LeavesOthersAlone_WhenApplyToAllDepartmentsIsFalse()
+        {
+            var maths = new PaymentAccount { Name = "Maths Department Account", DepartmentId = WellKnownDepartments.Maths, GatewayProvider = "cashfree", GatewayAccountRef = "acc_maths_old", IsActive = true };
+            var phonics = new PaymentAccount { Name = "Phonics Department Account", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "acc_phonics_old", IsActive = true };
+            _db.Context.PaymentAccounts.AddRange(maths, phonics);
+            await _db.Context.SaveChangesAsync();
+
+            var billing = CreateBillingService();
+            await billing.UpdatePaymentAccountAsync(maths.Id, new UpdatePaymentAccountRequest
+            {
+                Name = "Maths Department Account",
+                GatewayProvider = "cashfree",
+                GatewayAccountRef = "acc_maths_only_999",
+                IsActive = true,
+                ApplyToAllDepartments = false,
+            });
+
+            var stillPhonics = await _db.Context.PaymentAccounts.AsNoTracking().FirstAsync(a => a.Id == phonics.Id);
+            Assert.Equal("razorpay", stillPhonics.GatewayProvider);
+            Assert.Equal("acc_phonics_old", stillPhonics.GatewayAccountRef);
+        }
+
+        [Fact]
         public async Task Departments_CreateAsync_RejectsADuplicateName()
         {
             var departments = CreateDepartmentService();

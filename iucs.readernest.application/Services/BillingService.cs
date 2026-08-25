@@ -158,13 +158,34 @@ namespace iucs.readernest.application.Services
                 ?? throw new NotFoundException(nameof(PaymentAccount), id);
 
             account.Name = request.Name.Trim();
-            account.GatewayProvider = request.GatewayProvider.Trim();
-            account.GatewayAccountRef = request.GatewayAccountRef.Trim();
+            var provider = request.GatewayProvider.Trim();
+            var accountRef = request.GatewayAccountRef.Trim();
+            account.GatewayProvider = provider;
+            account.GatewayAccountRef = accountRef;
             account.IsActive = request.IsActive;
             _unitOfWork.Repository<PaymentAccount>().Update(account);
 
+            if (request.ApplyToAllDepartments)
+            {
+                // Every other department's account converges on this same gateway wiring —
+                // Name is deliberately left alone (stays "<Department> Department Account" for
+                // the card label), only the actual routing fields sync.
+                var others = await _unitOfWork.Repository<PaymentAccount>().TrackedQuery()
+                    .Where(a => a.Id != account.Id)
+                    .ToListAsync(cancellationToken);
+                foreach (var other in others)
+                {
+                    other.GatewayProvider = provider;
+                    other.GatewayAccountRef = accountRef;
+                    other.IsActive = request.IsActive;
+                    _unitOfWork.Repository<PaymentAccount>().Update(other);
+                }
+            }
+
             await _auditLog.StageAsync(AuditAction.Update, nameof(PaymentAccount), account.Id.ToString(),
-                $"Gateway wiring set to {account.GatewayProvider}/{account.GatewayAccountRef}", cancellationToken);
+                $"Gateway wiring set to {account.GatewayProvider}/{account.GatewayAccountRef}"
+                    + (request.ApplyToAllDepartments ? " (applied to all departments)" : ""),
+                cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return new PaymentAccountDto
