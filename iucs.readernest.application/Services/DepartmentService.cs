@@ -54,22 +54,29 @@ namespace iucs.readernest.application.Services
             };
             await repository.AddAsync(department, cancellationToken);
 
-            // Every department needs its own payment account (PaymentAccount.DepartmentId is
-            // uniquely indexed) for invoices to route anywhere — without this, a newly-added
-            // department was invisible on Payment Gateway Mapping and had nothing to assign a
-            // parent to until someone created its account by hand. Inactive with a placeholder
-            // ref: the account exists and shows up immediately, but nothing routes through it
-            // as real money until an admin fills in actual gateway credentials — the same
-            // "pending-client-decision" convention PaymentMapping.tsx already recognizes and
-            // clears back to a blank field the moment someone opens it to configure.
+            // Every department needs its own payment account row (PaymentAccount.DepartmentId
+            // is uniquely indexed) for invoices to route anywhere — without this, a newly-added
+            // department was invisible on Payment Gateway Mapping and had nothing to route
+            // through until someone created its account by hand. Most orgs here run one real
+            // gateway account for the whole business, not a distinct one per department, so a
+            // new department inherits whichever real (non-placeholder) account was configured
+            // first — active immediately, nothing to set up. Only when literally nothing has
+            // ever been configured yet does it fall back to its own inactive placeholder (the
+            // same "pending-client-decision" convention PaymentMapping.tsx already recognizes
+            // and clears back to a blank field the moment someone opens it to configure).
+            var existingRealAccount = await _unitOfWork.Repository<PaymentAccount>().Query()
+                .Where(a => a.GatewayAccountRef != "pending-client-decision")
+                .OrderBy(a => a.CreatedAtUtc)
+                .FirstOrDefaultAsync(cancellationToken);
+
             await _unitOfWork.Repository<PaymentAccount>().AddAsync(
                 new PaymentAccount
                 {
                     Name = $"{name} Department Account",
                     DepartmentId = department.Id,
-                    GatewayProvider = "razorpay",
-                    GatewayAccountRef = "pending-client-decision",
-                    IsActive = false,
+                    GatewayProvider = existingRealAccount?.GatewayProvider ?? "razorpay",
+                    GatewayAccountRef = existingRealAccount?.GatewayAccountRef ?? "pending-client-decision",
+                    IsActive = existingRealAccount is not null,
                 },
                 cancellationToken);
 

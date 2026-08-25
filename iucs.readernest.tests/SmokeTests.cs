@@ -2429,10 +2429,38 @@ namespace iucs.readernest.tests
             var account = await _db.Context.PaymentAccounts.FirstOrDefaultAsync(a => a.DepartmentId == created.Id);
             Assert.NotNull(account);
             Assert.Equal("Hindi Department Account", account!.Name);
-            // Not wired to real money yet — an admin still has to fill in actual gateway
-            // credentials via Payment Gateway Mapping's edit dialog before this department
-            // can actually collect anything, same as the two the app originally shipped with.
+            // With nothing else configured yet, there's nothing to inherit from — this is the
+            // "not wired to real money yet" placeholder an admin fills in via Payment Gateway
+            // Mapping's edit dialog, same as the two the app originally shipped with.
             Assert.False(account.IsActive);
+            Assert.Equal("pending-client-decision", account.GatewayAccountRef);
+        }
+
+        [Fact]
+        public async Task Departments_CreateAsync_InheritsAnAlreadyConfiguredAccount_MostOrgsRunJustOne()
+        {
+            // A department that already has real, working gateway credentials -- most orgs
+            // here genuinely run one account for the whole business, not one per department.
+            _db.Context.PaymentAccounts.Add(new PaymentAccount
+            {
+                Name = "Phonics Department Account",
+                DepartmentId = WellKnownDepartments.Phonics,
+                GatewayProvider = "cashfree",
+                GatewayAccountRef = "acc_real_configured_123",
+                IsActive = true,
+            });
+            await _db.Context.SaveChangesAsync();
+
+            var departments = CreateDepartmentService();
+            var created = await departments.CreateAsync(new SaveDepartmentRequest { Name = "Abacus", IsActive = true });
+
+            var account = await _db.Context.PaymentAccounts.FirstOrDefaultAsync(a => a.DepartmentId == created.Id);
+            Assert.NotNull(account);
+            // Immediately usable -- no separate setup step, matching how the org actually
+            // operates (one real gateway account shared by every department by default).
+            Assert.True(account!.IsActive);
+            Assert.Equal("cashfree", account.GatewayProvider);
+            Assert.Equal("acc_real_configured_123", account.GatewayAccountRef);
         }
 
         [Fact]
