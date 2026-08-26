@@ -45,6 +45,7 @@ namespace iucs.readernest.application.Mappings
                         Amount = i.Amount,
                         Note = i.Note,
                         CreatedAtUtc = i.CreatedAtUtc,
+                        RequiresReview = i.RequiresReview,
                     })
                     .ToList(),
             };

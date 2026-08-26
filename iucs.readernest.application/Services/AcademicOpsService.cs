@@ -145,6 +145,55 @@ namespace iucs.readernest.application.Services
         }
 
         /// <summary>
+        /// Teacher-departure capture — fired by ClassroomHub on LeaveSession/OnDisconnectedAsync.
+        /// The hub's own leave/disconnect handling only ever touched in-memory presence state
+        /// (Rooms/Scores/_presenceTracker); SessionAttendance.LeftAtUtc was never actually written
+        /// anywhere, so a teacher who joined then left after a few minutes of a much longer class
+        /// looked identical to one who taught the whole thing. Only handles the teacher side (the
+        /// side that drives payout accuracy) — parent/child leave capture is a separate concern.
+        /// Same never-throw contract as the join capture: a disconnect must never fail because
+        /// this write did.
+        /// </summary>
+        public async Task CaptureLeaveAttendanceAsync(Guid sessionId, Guid userId, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                var session = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(sessionId, cancellationToken);
+                if (session is null)
+                {
+                    return;
+                }
+
+                var isAssignedTeacher = await _unitOfWork.Repository<TeacherProfile>()
+                    .ExistsAsync(t => t.Id == session.TeacherProfileId && t.UserId == userId, cancellationToken);
+                if (!isAssignedTeacher)
+                {
+                    return;
+                }
+
+                await CaptureAttendanceCoreAsync(
+                    sessionId,
+                    new CaptureAttendanceRequest
+                    {
+                        Entries =
+                        [
+                            new AttendanceEntryDto
+                            {
+                                TeacherProfileId = session.TeacherProfileId,
+                                Status = AttendanceStatus.Present,
+                                LeftAtUtc = DateTime.UtcNow,
+                            },
+                        ],
+                    },
+                    cancellationToken);
+            }
+            catch
+            {
+                // Best-effort: a disconnect must never fail because attendance capture did.
+            }
+        }
+
+        /// <summary>
         /// Demo-session counterpart of the SessionAttendance path above: matches the joining
         /// account's email (case-insensitive) against the booking's primary contact
         /// (<see cref="DemoBooking.ParentEmail"/>) or an additional invitee

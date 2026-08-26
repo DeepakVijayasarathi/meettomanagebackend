@@ -255,6 +255,126 @@ namespace iucs.readernest.tests
         }
 
         /// <summary>
+        /// Caught live: a teacher who joins a live class and leaves after a few minutes was
+        /// indistinguishable from one who taught the whole thing -- no-show detection only checks
+        /// whether the teacher ever joined at all, and the payout amount is computed purely from
+        /// the session's scheduled duration. Attendance well short of the scheduled class must
+        /// still accrue full pay (no automatic proration -- see PayoutItem.RequiresReview's own
+        /// doc comment for why) but flag the item so an admin sees it before finalizing.
+        /// </summary>
+        [Fact]
+        public async Task Complete_FlagsPayoutItemForReview_WhenTeacherAttendedWellUnderScheduledDuration()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1); // 45-minute session
+            await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
+            {
+                TeacherProfileId = session.TeacherProfileId,
+                DurationMinutes = 45,
+                RatePerSession = 1000,
+                EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
+            });
+            var joinedAt = DateTime.UtcNow.AddMinutes(-10);
+            _db.Context.SessionAttendances.Add(new SessionAttendance
+            {
+                ClassSessionId = session.Id,
+                ParticipantType = ParticipantType.Teacher,
+                TeacherProfileId = session.TeacherProfileId,
+                Status = AttendanceStatus.Present,
+                JoinedAtUtc = joinedAt,
+                LeftAtUtc = joinedAt.AddMinutes(10), // 10 of 45 scheduled minutes
+            });
+            await _db.Context.SaveChangesAsync();
+
+            await CreateSessionService().CompleteAsync(session.Id);
+
+            var item = Assert.Single(_db.Context.PayoutItems.ToList());
+            Assert.Equal(PayoutItemType.SessionEarning, item.Type);
+            Assert.Equal(1000m, item.Amount); // full scheduled-duration rate -- no proration
+            Assert.True(item.RequiresReview);
+            Assert.Contains("attended only 10 of 45 scheduled minutes", item.Note);
+        }
+
+        [Fact]
+        public async Task Complete_DoesNotFlag_WhenTeacherAttendedMostOfTheScheduledClass()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1); // 45-minute session
+            await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
+            {
+                TeacherProfileId = session.TeacherProfileId,
+                DurationMinutes = 45,
+                RatePerSession = 1000,
+                EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
+            });
+            var joinedAt = DateTime.UtcNow.AddMinutes(-40);
+            _db.Context.SessionAttendances.Add(new SessionAttendance
+            {
+                ClassSessionId = session.Id,
+                ParticipantType = ParticipantType.Teacher,
+                TeacherProfileId = session.TeacherProfileId,
+                Status = AttendanceStatus.Present,
+                JoinedAtUtc = joinedAt,
+                LeftAtUtc = joinedAt.AddMinutes(40), // 40 of 45 scheduled minutes -- ordinary lateness/early wrap-up
+            });
+            await _db.Context.SaveChangesAsync();
+
+            await CreateSessionService().CompleteAsync(session.Id);
+
+            var item = Assert.Single(_db.Context.PayoutItems.ToList());
+            Assert.False(item.RequiresReview);
+        }
+
+        /// <summary>
+        /// A flag nobody can act on is decoration. AdjustItemAsync is the only way to clear
+        /// RequiresReview, and FinalizeAsync must refuse while any item is still flagged --
+        /// otherwise a shortened class's full pay would go out anyway with nobody ever forced to
+        /// look at it.
+        /// </summary>
+        [Fact]
+        public async Task AdjustItemAsync_CorrectsAmountAndClearsReviewFlag_AndFinalizeRefusesUntilThen()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1); // 45-minute session
+            var payouts = CreatePayoutService();
+            await payouts.SetRateAsync(new SavePayoutRateRequest
+            {
+                TeacherProfileId = session.TeacherProfileId,
+                DurationMinutes = 45,
+                RatePerSession = 1000,
+                EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
+            });
+            var joinedAt = DateTime.UtcNow.AddMinutes(-10);
+            _db.Context.SessionAttendances.Add(new SessionAttendance
+            {
+                ClassSessionId = session.Id,
+                ParticipantType = ParticipantType.Teacher,
+                TeacherProfileId = session.TeacherProfileId,
+                Status = AttendanceStatus.Present,
+                JoinedAtUtc = joinedAt,
+                LeftAtUtc = joinedAt.AddMinutes(10),
+            });
+            await _db.Context.SaveChangesAsync();
+            await CreateSessionService().CompleteAsync(session.Id);
+
+            var payout = await _db.Context.Payouts.AsNoTracking().FirstAsync();
+            var flaggedItem = Assert.Single(_db.Context.PayoutItems.ToList());
+            Assert.True(flaggedItem.RequiresReview);
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => payouts.FinalizeAsync(payout.Id));
+
+            var adjusted = await payouts.AdjustItemAsync(payout.Id, flaggedItem.Id, new AdjustPayoutItemRequest
+            {
+                NewAmount = 250m, // roughly proportional to the 10 of 45 minutes actually taught
+                Reason = "Teacher left after 10 minutes; prorated by hand.",
+            });
+            Assert.Equal(250m, adjusted.TotalAmount);
+            var adjustedItem = Assert.Single(adjusted.Items);
+            Assert.False(adjustedItem.RequiresReview);
+            Assert.Contains("Adjusted from 1000.00 to 250.00", adjustedItem.Note);
+
+            var finalized = await payouts.FinalizeAsync(payout.Id);
+            Assert.Equal(250m, finalized.TotalAmount);
+        }
+
+        /// <summary>
         /// TeacherNoShowPenaltyPercent is deliberately allowed above 100% (see the test above),
         /// so a teacher whose only accrued item this period is one heavily-penalized no-show
         /// finalizes to a genuinely negative raw sum. FinalizeAsync must floor the payout's

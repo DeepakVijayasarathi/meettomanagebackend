@@ -14,6 +14,13 @@ namespace iucs.readernest.application.Services
     {
         private static readonly int[] AllowedDurations = [30, 45, 60];
 
+        /// <summary>
+        /// Below half the scheduled duration is flagged for review; at or above it is not. Loose
+        /// enough that ordinary lateness or a brief reconnect never trips it, tight enough to
+        /// catch a class genuinely cut short.
+        /// </summary>
+        private const double MinAttendanceFractionForNoReview = 0.5;
+
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
         private readonly INotificationService _notificationService;
@@ -206,6 +213,38 @@ namespace iucs.readernest.application.Services
                 note = $"{note} ({rate.TeacherNoShowPenaltyPercent:0.#}% of session rate)";
             }
 
+            // Full scheduled-duration pay still accrues even when the teacher's captured
+            // attendance was much shorter than the class -- a dropped connection, a child
+            // needing to stop early, and a teacher genuinely cutting the class short all look
+            // identical from timestamps alone, and only a human reviewing the specific case can
+            // tell them apart (see PayoutItem.RequiresReview's own doc comment). This only flags
+            // for review; it never changes the amount itself.
+            var requiresReview = false;
+            if (type == PayoutItemType.SessionEarning)
+            {
+                var attendance = await _unitOfWork.Repository<SessionAttendance>().Query()
+                    .Where(a => a.ClassSessionId == session.Id && a.TeacherProfileId == session.TeacherProfileId)
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                // LeftAtUtc is only set once the teacher's hub connection actually disconnects,
+                // which for a self-completed class happens AFTER this call (Complete → then the
+                // page unmounts and drops the connection) -- so at this exact moment it is only
+                // populated when someone completes the class well after the teacher already left
+                // (e.g. an admin cleaning up later). Falling back to "now" correctly treats a
+                // still-connected teacher's own Complete click as the real end of their attendance.
+                if (attendance?.JoinedAtUtc is { } joinedAtUtc)
+                {
+                    var attendedEndUtc = attendance.LeftAtUtc ?? DateTime.UtcNow;
+                    var attendedMinutes = (attendedEndUtc - joinedAtUtc).TotalMinutes;
+                    if (durationMinutes > 0 && attendedMinutes < durationMinutes * MinAttendanceFractionForNoReview)
+                    {
+                        requiresReview = true;
+                        var attendedNote = $"Teacher attended only {Math.Max(0, attendedMinutes):0} of {durationMinutes} scheduled minutes -- review before finalizing.";
+                        note = string.IsNullOrEmpty(note) ? attendedNote : $"{note} ({attendedNote})";
+                    }
+                }
+            }
+
             var payout = await GetOrCreateCurrentPayoutAsync(
                 session.TeacherProfileId, session.ScheduledStartAtUtc, cancellationToken);
 
@@ -222,8 +261,52 @@ namespace iucs.readernest.application.Services
                 Type = type,
                 Amount = amount,
                 Note = note,
+                RequiresReview = requiresReview,
             });
             payout.TotalAmount += amount;
+        }
+
+        public async Task<PayoutDto> AdjustItemAsync(
+            Guid payoutId,
+            Guid itemId,
+            AdjustPayoutItemRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            // Load tracked (Query()/BaseQuery is AsNoTracking; mutating that never persists).
+            var payout = await _unitOfWork.Repository<Payout>().FirstOrDefaultAsync(p => p.Id == payoutId, cancellationToken)
+                ?? throw new NotFoundException(nameof(Payout), payoutId);
+
+            if (payout.Status != PayoutStatus.Pending)
+            {
+                throw new DomainValidationException(
+                    $"A payout in status '{payout.Status}' can no longer have its items adjusted.");
+            }
+
+            var item = await _unitOfWork.Repository<PayoutItem>().TrackedQuery()
+                .FirstOrDefaultAsync(i => i.Id == itemId && i.PayoutId == payoutId, cancellationToken)
+                ?? throw new NotFoundException(nameof(PayoutItem), itemId);
+
+            var reason = request.Reason.Trim();
+            if (reason.Length == 0)
+            {
+                throw new DomainValidationException("A reason is required to adjust a payout item.");
+            }
+
+            var delta = request.NewAmount - item.Amount;
+            var adjustmentNote = $"Adjusted from {item.Amount:0.00} to {request.NewAmount:0.00}: {reason}";
+            item.Note = string.IsNullOrEmpty(item.Note) ? adjustmentNote : $"{item.Note} ({adjustmentNote})";
+            item.Amount = request.NewAmount;
+            item.RequiresReview = false;
+            _unitOfWork.Repository<PayoutItem>().Update(item);
+
+            payout.TotalAmount += delta;
+            _unitOfWork.Repository<Payout>().Update(payout);
+
+            await _auditLog.StageAsync(AuditAction.Update, nameof(PayoutItem), item.Id.ToString(),
+                changesJson: $"{{\"reason\":\"{reason}\",\"delta\":{delta}}}", cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            return (await BaseQuery().FirstAsync(p => p.Id == payoutId, cancellationToken)).ToDto();
         }
 
         public async Task<PayoutDto> FinalizeAsync(Guid payoutId, CancellationToken cancellationToken = default)
@@ -240,6 +323,16 @@ namespace iucs.readernest.application.Services
             var items = await _unitOfWork.Repository<PayoutItem>().Query()
                 .Where(i => i.PayoutId == payoutId)
                 .ToListAsync(cancellationToken);
+
+            // A flag nobody is forced to look at is decoration, not a safeguard. AdjustItemAsync
+            // clears RequiresReview whether or not the amount actually changes, so "reviewed, full
+            // amount stands" is a real, one-line-noted admin decision, not this check being worked
+            // around.
+            if (items.Any(i => i.RequiresReview))
+            {
+                throw new DomainValidationException(
+                    "This payout has item(s) still flagged for review (teacher attendance fell well short of the scheduled class). Adjust or confirm each one before finalizing.");
+            }
 
             payout.Status = PayoutStatus.Finalized;
             // Floored at zero: TeacherNoShowPenaltyPercent is deliberately allowed up to 1000%

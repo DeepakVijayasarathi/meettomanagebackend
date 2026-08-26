@@ -57,6 +57,20 @@ namespace iucs.readernest.application.Dto.Payouts
         public string? Note { get; set; }
 
         public DateTime CreatedAtUtc { get; set; }
+
+        /// <summary>Teacher's captured attendance fell well short of the scheduled duration — needs a human look before this payout is finalized.</summary>
+        public bool RequiresReview { get; set; }
+    }
+
+    /// <summary>Admin correction to one line item — only while its payout is still Pending.</summary>
+    public class AdjustPayoutItemRequest
+    {
+        [Required]
+        public decimal NewAmount { get; set; }
+
+        [Required]
+        [MaxLength(500)]
+        public string Reason { get; set; } = null!;
     }
 
     public class PayoutDto

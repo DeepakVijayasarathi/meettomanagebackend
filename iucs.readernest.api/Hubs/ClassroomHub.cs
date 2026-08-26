@@ -324,7 +324,23 @@ namespace iucs.readernest.api.Hubs
 
             if (Rooms.TryGetValue(sessionId, out var room))
             {
-                room.TryRemove(Context.ConnectionId, out _);
+                room.TryRemove(Context.ConnectionId, out var removedState);
+
+                // Real departure time, for payout accuracy (see CaptureLeaveAttendanceAsync's own
+                // doc comment) — without this, nothing ever recorded when a teacher actually left
+                // a live class, so one who taught the whole thing and one who left after a few
+                // minutes were indistinguishable. Only worth the lookup for the departing
+                // participant's own role, not every student/parent leaving too.
+                if (removedState?.Role == "teacher"
+                    && Guid.TryParse(sessionId, out var sessionGuid)
+                    && Guid.TryParse(Context.User?.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))
+                {
+                    // CancellationToken.None, deliberately: this is exactly the abrupt-disconnect
+                    // (network drop) case that matters most to capture, and Context.ConnectionAborted
+                    // may already be signalled by the time OnDisconnectedAsync runs.
+                    await _academicOpsService.CaptureLeaveAttendanceAsync(sessionGuid, userId, CancellationToken.None);
+                }
+
                 if (room.IsEmpty)
                 {
                     Rooms.TryRemove(sessionId, out _);
