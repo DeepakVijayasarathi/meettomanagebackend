@@ -118,6 +118,15 @@ namespace iucs.readernest.application.Dto.Monitoring
         public string? Instance { get; set; }
     }
 
+    /// <summary>Error-filtered `docker logs` tail for one container on one monitored server (see IServerLogService).</summary>
+    public class ServerLogsDto
+    {
+        public string Server { get; set; } = string.Empty;
+        public string Container { get; set; } = string.Empty;
+        public List<string> Lines { get; set; } = new();
+        public DateTime FetchedAtUtc { get; set; }
+    }
+
     /// <summary>Everything the Server Monitoring dashboard needs in one call.</summary>
     public class MonitoringSummaryDto
     {

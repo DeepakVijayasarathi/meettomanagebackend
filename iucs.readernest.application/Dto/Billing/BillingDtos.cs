@@ -88,6 +88,49 @@ namespace iucs.readernest.application.Dto.Billing
         public DateTime? PaidAtUtc { get; set; }
     }
 
+    /// <summary>
+    /// Everything InvoicePdfGenerator needs to render one invoice — deliberately its own small
+    /// shape (not InvoiceDto) so the PDF layout doesn't silently break/change if InvoiceDto ever
+    /// gains or drops fields for unrelated (screen-display) reasons.
+    /// </summary>
+    public class InvoicePdfData
+    {
+        public string InvoiceNumber { get; set; } = null!;
+
+        public DateTime IssuedAtUtc { get; set; }
+
+        public string ParentName { get; set; } = null!;
+
+        public string? ParentPhone { get; set; }
+
+        /// <summary>Line description — the invoiced course's name, or a generic fallback when none is linked.</summary>
+        public string Description { get; set; } = null!;
+
+        public decimal Amount { get; set; }
+
+        public string Currency { get; set; } = null!;
+
+        // Org payment/GST/signatory details — admin-editable (Settings → General → Invoice
+        // Details, "invoice.*" keys), same on every invoice. BillingService resolves these
+        // from AppSetting with the org's original fixed values as fallback defaults, so a
+        // deployment where nobody has ever touched that section still renders correctly.
+        public string AccountNumber { get; set; } = null!;
+
+        public string IfscCode { get; set; } = null!;
+
+        public string BranchName { get; set; } = null!;
+
+        public string GstNumber { get; set; } = null!;
+
+        public string AccountName { get; set; } = null!;
+
+        public string ContactEmail { get; set; } = null!;
+
+        public string SignatoryName { get; set; } = null!;
+
+        public string SignatoryTitle { get; set; } = null!;
+    }
+
     public class CreateInvoiceRequest
     {
         [Required]

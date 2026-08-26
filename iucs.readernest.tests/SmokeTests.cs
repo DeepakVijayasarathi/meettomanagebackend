@@ -27,6 +27,7 @@ using iucs.readernest.domain.Entities.Communication;
 using iucs.readernest.domain.Entities.Payouts;
 using iucs.readernest.domain.Entities.Quizzes;
 using iucs.readernest.domain.Entities.Sessions;
+using iucs.readernest.domain.Entities.Settings;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
 using Microsoft.EntityFrameworkCore;
@@ -62,6 +63,8 @@ namespace iucs.readernest.tests
 
         private readonly FakeBulkFileReader _bulkFileReader = new();
 
+        private readonly FakeInvoicePdfGenerator _invoicePdfGenerator = new();
+
         private UserService CreateUserService() => new(_db.UnitOfWork, _hasher, _notifications, _emailTemplates, _auditLog, _emailSender, _whatsAppSender, _smsSender, _bulkFileReader, NullLogger<UserService>.Instance);
 
         private CourseService CreateCourseService() => new(_db.UnitOfWork, _auditLog, _bulkFileReader);
@@ -81,9 +84,11 @@ namespace iucs.readernest.tests
         private SessionService CreateSessionService(FakeJitsiTokenService jitsiTokens) =>
             new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, jitsiTokens);
 
-        private BillingService CreateBillingService() => new(_db.UnitOfWork, _auditLog, new FakePaymentGateway(), _notifications, _db.CurrentUser, _bulkFileReader);
+        private BillingService CreateBillingService() =>
+            new(_db.UnitOfWork, _auditLog, new FakePaymentGateway(), _notifications, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
 
-        private BillingService CreateBillingService(FakePaymentGateway gateway) => new(_db.UnitOfWork, _auditLog, gateway, _notifications, _db.CurrentUser, _bulkFileReader);
+        private BillingService CreateBillingService(FakePaymentGateway gateway) =>
+            new(_db.UnitOfWork, _auditLog, gateway, _notifications, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
 
         private EnrollmentService CreateEnrollmentService() => new(_db.UnitOfWork, _auditLog, CreateBillingService(), CreateBatchService(), _bulkFileReader);
 
@@ -832,6 +837,41 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task GenerateInvoicePdf_UsesOrgDefaults_WhenNoInvoiceSettingsConfigured()
+        {
+            var (billing, invoice) = await SeedInvoiceAsync(amount: 1000);
+
+            await billing.GenerateInvoicePdfAsync(invoice.Id);
+
+            var request = _invoicePdfGenerator.LastRequest;
+            Assert.NotNull(request);
+            Assert.Equal("777705999305", request!.AccountNumber);
+            Assert.Equal("06AWCPN6985H1Z3", request.GstNumber);
+            Assert.Equal("Akanksha Nagar", request.SignatoryName);
+        }
+
+        [Fact]
+        public async Task GenerateInvoicePdf_UsesConfiguredSettings_WhenPresent()
+        {
+            var (billing, invoice) = await SeedInvoiceAsync(amount: 1000);
+            _db.Context.AppSettings.Add(new AppSetting
+            {
+                Category = SettingCategory.General,
+                Key = "invoice.accountName",
+                Value = "A DIFFERENT ACCOUNT NAME",
+            });
+            await _db.Context.SaveChangesAsync();
+
+            await billing.GenerateInvoicePdfAsync(invoice.Id);
+
+            var request = _invoicePdfGenerator.LastRequest;
+            Assert.NotNull(request);
+            Assert.Equal("A DIFFERENT ACCOUNT NAME", request!.AccountName);
+            // Untouched keys still fall back to the org defaults, not blank/null.
+            Assert.Equal("777705999305", request.AccountNumber);
+        }
+
+        [Fact]
         public async Task FinalizeJibriRecording_RegistersAgainstMatchingRoom_WhenTokenValid()
         {
             var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
@@ -1200,7 +1240,7 @@ namespace iucs.readernest.tests
             // same queue). The shared FakePaymentGateway counts disbursements across both.
             var (context2, uow2) = _db.CreateConcurrentSession();
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
-            var billing2 = new BillingService(uow2, auditLog2, gateway, _notifications, _db.CurrentUser, _bulkFileReader);
+            var billing2 = new BillingService(uow2, auditLog2, gateway, _notifications, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
 
             // Request 2 reads the refund while it is genuinely still Requested. EF returns this
             // same tracked instance from any later lookup on context2 rather than refreshing it,
@@ -1273,7 +1313,7 @@ namespace iucs.readernest.tests
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
             var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
             var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, NullLogger<NotificationService>.Instance);
-            var billing2 = new BillingService(uow2, auditLog2, new FakePaymentGateway(), notifications2, _db.CurrentUser, _bulkFileReader);
+            var billing2 = new BillingService(uow2, auditLog2, new FakePaymentGateway(), notifications2, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
 
             var task1 = billing1.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 500, Method = PaymentMethod.Card });
             var task2 = billing2.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 500, Method = PaymentMethod.Cash });
@@ -1318,7 +1358,7 @@ namespace iucs.readernest.tests
             // without the gateway being asked to refund again.
             gateway.RefundFailure = null;
             var auditLog2 = new AuditLogService(verifyUow, _db.CurrentUser);
-            var billing2 = new BillingService(verifyUow, auditLog2, gateway, _notifications, _db.CurrentUser, _bulkFileReader);
+            var billing2 = new BillingService(verifyUow, auditLog2, gateway, _notifications, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
             var rejected = await Assert.ThrowsAsync<DomainValidationException>(
                 () => billing2.ReviewRefundAsync(refund.Id, new ReviewRefundRequest { Approve = true }));
             Assert.Contains("already Approved", rejected.Message);
@@ -2378,6 +2418,96 @@ namespace iucs.readernest.tests
 
             var all = await departments.ListAsync();
             Assert.Contains(all, d => d.Id == created.Id && d.Name == "Hindi");
+        }
+
+        [Fact]
+        public async Task Departments_CreateAsync_AlsoCreatesItsPaymentAccount()
+        {
+            var departments = CreateDepartmentService();
+            var created = await departments.CreateAsync(new SaveDepartmentRequest { Name = "Hindi", IsActive = true });
+
+            var account = await _db.Context.PaymentAccounts.FirstOrDefaultAsync(a => a.DepartmentId == created.Id);
+            Assert.NotNull(account);
+            Assert.Equal("Hindi Department Account", account!.Name);
+            // With nothing else configured yet, there's nothing to inherit from — this is the
+            // "not wired to real money yet" placeholder an admin fills in via Payment Gateway
+            // Mapping's edit dialog, same as the two the app originally shipped with.
+            Assert.False(account.IsActive);
+            Assert.Equal("pending-client-decision", account.GatewayAccountRef);
+        }
+
+        [Fact]
+        public async Task Departments_CreateAsync_InheritsAnAlreadyConfiguredAccount_MostOrgsRunJustOne()
+        {
+            // A department that already has real, working gateway credentials -- most orgs
+            // here genuinely run one account for the whole business, not one per department.
+            _db.Context.PaymentAccounts.Add(new PaymentAccount
+            {
+                Name = "Phonics Department Account",
+                DepartmentId = WellKnownDepartments.Phonics,
+                GatewayProvider = "cashfree",
+                GatewayAccountRef = "acc_real_configured_123",
+                IsActive = true,
+            });
+            await _db.Context.SaveChangesAsync();
+
+            var departments = CreateDepartmentService();
+            var created = await departments.CreateAsync(new SaveDepartmentRequest { Name = "Abacus", IsActive = true });
+
+            var account = await _db.Context.PaymentAccounts.FirstOrDefaultAsync(a => a.DepartmentId == created.Id);
+            Assert.NotNull(account);
+            // Immediately usable -- no separate setup step, matching how the org actually
+            // operates (one real gateway account shared by every department by default).
+            Assert.True(account!.IsActive);
+            Assert.Equal("cashfree", account.GatewayProvider);
+            Assert.Equal("acc_real_configured_123", account.GatewayAccountRef);
+        }
+
+        [Fact]
+        public async Task UpdatePaymentAccount_AppliesToEveryDepartment_ByDefault()
+        {
+            var maths = new PaymentAccount { Name = "Maths Department Account", DepartmentId = WellKnownDepartments.Maths, GatewayProvider = "cashfree", GatewayAccountRef = "acc_maths_old", IsActive = true };
+            var phonics = new PaymentAccount { Name = "Phonics Department Account", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "acc_phonics_old", IsActive = true };
+            _db.Context.PaymentAccounts.AddRange(maths, phonics);
+            await _db.Context.SaveChangesAsync();
+
+            var billing = CreateBillingService();
+            await billing.UpdatePaymentAccountAsync(maths.Id, new UpdatePaymentAccountRequest
+            {
+                Name = "Maths Department Account",
+                GatewayProvider = "razorpay",
+                GatewayAccountRef = "acc_org_wide_123",
+                IsActive = true,
+            });
+
+            var updatedPhonics = await _db.Context.PaymentAccounts.AsNoTracking().FirstAsync(a => a.Id == phonics.Id);
+            Assert.Equal("razorpay", updatedPhonics.GatewayProvider);
+            Assert.Equal("acc_org_wide_123", updatedPhonics.GatewayAccountRef);
+            // Only the routing fields converge — the card label stays department-specific.
+            Assert.Equal("Phonics Department Account", updatedPhonics.Name);
+        }
+
+        [Fact]
+        public async Task UpdatePaymentAccount_LeavesOthersAlone_WhenApplyToAllDepartmentsIsFalse()
+        {
+            var maths = new PaymentAccount { Name = "Maths Department Account", DepartmentId = WellKnownDepartments.Maths, GatewayProvider = "cashfree", GatewayAccountRef = "acc_maths_old", IsActive = true };
+            var phonics = new PaymentAccount { Name = "Phonics Department Account", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "razorpay", GatewayAccountRef = "acc_phonics_old", IsActive = true };
+            _db.Context.PaymentAccounts.AddRange(maths, phonics);
+            await _db.Context.SaveChangesAsync();
+
+            var billing = CreateBillingService();
+            await billing.UpdatePaymentAccountAsync(maths.Id, new UpdatePaymentAccountRequest
+            {
+                Name = "Maths Department Account",
+                GatewayProvider = "cashfree",
+                GatewayAccountRef = "acc_maths_only_999",
+                IsActive = true,
+                ApplyToAllDepartments = false,
+            });
+
+            var stillPhonics = await _db.Context.PaymentAccounts.AsNoTracking().FirstAsync(a => a.Id == phonics.Id);
+            Assert.Equal("razorpay", stillPhonics.GatewayProvider);
+            Assert.Equal("acc_phonics_old", stillPhonics.GatewayAccountRef);
         }
 
         [Fact]
@@ -4209,7 +4339,7 @@ namespace iucs.readernest.tests
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
             var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
             var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, NullLogger<NotificationService>.Instance);
-            var billing2 = new BillingService(uow2, auditLog2, gateway, notifications2, _db.CurrentUser, _bulkFileReader);
+            var billing2 = new BillingService(uow2, auditLog2, gateway, notifications2, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
 
             var request = () => new RequestRefundRequest
             {
@@ -5572,6 +5702,40 @@ namespace iucs.readernest.tests
             var (fallback, _) = await _emailTemplates.RenderAsync(
                 "qa-substitution", new Dictionary<string, string> { ["Name"] = "Ann" });
             Assert.Equal("Notification from The Reader Nest", fallback);
+        }
+
+        /// <summary>
+        /// {{OrgName}} is available to every template without its caller having to pass one —
+        /// resolved centrally from the "brand.name" setting (see EmailTemplateSeedData.Wrap's
+        /// header/footer, and ReconcileOrgNameEmailTemplatesAsync for already-seeded DBs). A
+        /// deployment that renames its brand should see that reflected in outgoing email
+        /// without anyone having to touch a single template's own content.
+        /// </summary>
+        [Fact]
+        public async Task EmailTemplate_SubstitutesOrgNameFromBrandSetting_WithoutCallerSupplyingIt()
+        {
+            _db.Context.EmailTemplates.Add(new EmailTemplate
+            {
+                Key = "qa-orgname",
+                Name = "QA OrgName",
+                Category = NotificationType.General,
+                Subject = "Hello from {{OrgName}}",
+                HtmlBody = "<p>Welcome to {{OrgName}}</p>",
+                PlaceholdersJson = "[]",
+                IsActive = true,
+            });
+            _db.Context.AppSettings.Add(new AppSetting
+            {
+                Category = SettingCategory.Branding,
+                Key = "brand.name",
+                Value = "Acme Academy",
+            });
+            await _db.Context.SaveChangesAsync();
+
+            var (subject, body) = await _emailTemplates.RenderAsync("qa-orgname", new Dictionary<string, string>());
+
+            Assert.Equal("Hello from Acme Academy", subject);
+            Assert.Contains("Welcome to Acme Academy", body);
         }
 
         /// <summary>

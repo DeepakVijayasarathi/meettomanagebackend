@@ -20,16 +20,26 @@ namespace iucs.readernest.application.Common
     {
         public static IReadOnlyList<EmailTemplateSeed> All { get; } = Build();
 
+        // {{OrgName}} is injected centrally for every template by EmailTemplateService.RenderAsync
+        // (from the "brand.name" setting) — no caller here has to pass it explicitly. Fixes the
+        // white-labeling gap docs/WHITE_LABEL_BRANDING.md flags under "Product naming": this
+        // wrapper used to hardcode "The Reader Nest" directly, so it showed up in every email
+        // regardless of which org actually deployed the app. Held in a constant and interpolated
+        // like `bodyHtml` below rather than written as literal "{{OrgName}}" text, because a
+        // single-`$` interpolated raw string can't disambiguate a literal double-brace from an
+        // interpolation trigger.
+        private const string OrgNameToken = "{{OrgName}}";
+
         private static string Wrap(string bodyHtml) => $"""
             <div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;">
               <div style="background:#4F46E5;padding:20px 28px;border-radius:8px 8px 0 0;">
-                <span style="color:#ffffff;font-size:18px;font-weight:700;">The Reader Nest</span>
+                <span style="color:#ffffff;font-size:18px;font-weight:700;">{OrgNameToken}</span>
               </div>
               <div style="padding:28px;border:1px solid #E5E7EB;border-top:none;border-radius:0 0 8px 8px;color:#1F2937;font-size:14px;line-height:1.6;">
                 {bodyHtml}
               </div>
               <p style="color:#9CA3AF;font-size:12px;text-align:center;margin-top:16px;">
-                The Reader Nest &middot; Read &middot; Write &middot; Speak
+                {OrgNameToken} &middot; Read &middot; Write &middot; Speak
               </p>
             </div>
             """;
@@ -45,10 +55,10 @@ namespace iucs.readernest.application.Common
             [
                 New("welcome-credentials", "Welcome & Login Credentials",
                     "Sent when an account is created, and whenever an admin resends login credentials.",
-                    NotificationType.General, "Your Reader Nest account is ready",
+                    NotificationType.General, "Your {{OrgName}} account is ready",
                     """
                     <p>Hello {{FirstName}},</p>
-                    <p>Your Reader Nest account is ready.</p>
+                    <p>Your {{OrgName}} account is ready.</p>
                     <table style="width:100%;background:#F9FAFB;border-radius:6px;margin:16px 0;">
                       <tr><td style="padding:12px 16px;color:#6B7280;">Login</td><td style="padding:12px 16px;font-weight:600;">{{Email}}</td></tr>
                       <tr><td style="padding:12px 16px;color:#6B7280;">PIN</td><td style="padding:12px 16px;font-weight:600;">{{TemporaryPin}}</td></tr>
@@ -59,10 +69,10 @@ namespace iucs.readernest.application.Common
 
                 New("pin-reset", "Self-Service PIN Reset",
                     "Sent when someone requests a PIN reset from the login page's \"Forgot your PIN\" link.",
-                    NotificationType.General, "Reset your Reader Nest PIN",
+                    NotificationType.General, "Reset your {{OrgName}} PIN",
                     """
                     <p>Hello {{FirstName}},</p>
-                    <p>We received a request to reset the PIN for your Reader Nest account ({{Email}}).</p>
+                    <p>We received a request to reset the PIN for your {{OrgName}} account ({{Email}}).</p>
                     <p><a href="{{ResetUrl}}" style="display:inline-block;padding:10px 18px;background:#4F46E5;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600;">Set a new PIN</a></p>
                     <p style="font-size:12px;color:#6b7280;">This link expires in {{ExpiryMinutes}} minutes and can only be used once. If you didn't request this, you can ignore this email — your PIN stays unchanged.</p>
                     """,

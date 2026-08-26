@@ -112,18 +112,28 @@ namespace iucs.readernest.application.Services
                     : new TemplateSnapshot(template.Subject, template.HtmlBody, template.IsActive);
             });
 
+            var brandName = await BrandSettings.GetNameAsync(_unitOfWork, cancellationToken);
+
             if (snapshot is null || !snapshot.IsActive)
             {
                 // A missing/disabled template must never block the underlying business
                 // operation — fall back to a minimal generic message instead of throwing.
-                var brandName = await BrandSettings.GetNameAsync(_unitOfWork, cancellationToken);
                 var fallbackSubject = tokens.TryGetValue("Subject", out var s) && !string.IsNullOrWhiteSpace(s)
                     ? s
                     : $"Notification from {brandName}";
                 return (fallbackSubject, $"<p>Please check your {brandName} dashboard for details.</p>");
             }
 
-            return (SubstituteSubject(snapshot.Subject, tokens), SubstituteHtml(snapshot.HtmlBody, tokens));
+            // Every template can use {{OrgName}} without its caller having to know to pass
+            // one — templates used to hardcode "The Reader Nest" directly (white-labeling
+            // gap: see docs/WHITE_LABEL_BRANDING.md's "Product naming" row), so this is
+            // injected here, centrally, rather than at each of the many call sites.
+            // A caller-supplied "OrgName" (none exist today) still wins over this default.
+            var withOrgName = tokens.ContainsKey("OrgName")
+                ? tokens
+                : new Dictionary<string, string>(tokens) { ["OrgName"] = brandName };
+
+            return (SubstituteSubject(snapshot.Subject, withOrgName), SubstituteHtml(snapshot.HtmlBody, withOrgName));
         }
 
         private sealed record TemplateSnapshot(string Subject, string HtmlBody, bool IsActive);

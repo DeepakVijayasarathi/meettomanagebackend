@@ -74,6 +74,9 @@ builder.Services.AddSingleton<IBulkFileReader, BulkFileReader>();
 // Signs room-scoped Jitsi join tokens from the DB "jitsi" integration's appId/appSecret;
 // no-ops (null token, unsigned join) until an admin sets them — see JITSI_ARCHITECTURE.md.
 builder.Services.AddSingleton<IJitsiTokenService, JitsiTokenService>();
+// Renders the "Bill of Supply" invoice PDF (QuestPDF) — stateless beyond a static embedded
+// logo loaded once, so singleton is fine.
+builder.Services.AddSingleton<IInvoicePdfGenerator, InvoicePdfGenerator>();
 // Server Monitoring dashboard: polls each server's rn-status agent (Monitoring:Servers config).
 // Short timeout so one down/slow server can't stall the whole summary request.
 builder.Services.AddHttpClient("Prometheus", client => client.Timeout = TimeSpan.FromSeconds(5));
@@ -198,6 +201,10 @@ builder.Services.AddMemoryCache();
 // Real-time classroom layer (roster, whiteboard sync, quizzes, celebrations)
 builder.Services.AddSignalR();
 
+// Live Server Monitoring push (replaces the dashboard's client-side poll)
+builder.Services.AddSingleton<iucs.readernest.api.Hubs.MonitoringConnectionTracker>();
+builder.Services.AddHostedService<iucs.readernest.api.Services.MonitoringBroadcastService>();
+
 // Brute-force protection on login: framework-provided rate limiting (built into
 // ASP.NET Core since .NET 7, no extra package). Rejects immediately over the limit
 // rather than queuing, so a flood gets a fast 429 instead of stacking up requests.
@@ -321,6 +328,7 @@ app.UseRateLimiter();
 
 app.MapControllers();
 app.MapHub<iucs.readernest.api.Hubs.ClassroomHub>("/hubs/classroom");
+app.MapHub<iucs.readernest.api.Hubs.MonitoringHub>("/hubs/monitoring");
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", timestampUtc = DateTime.UtcNow }));
 

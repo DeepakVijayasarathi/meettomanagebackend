@@ -8,6 +8,7 @@ using iucs.readernest.application.Mappings;
 using iucs.readernest.domain.Common;
 using iucs.readernest.domain.Entities.Academics;
 using iucs.readernest.domain.Entities.Billing;
+using iucs.readernest.domain.Entities.Settings;
 using iucs.readernest.domain.Entities.Users;
 using iucs.readernest.domain.Enums;
 using iucs.readernest.domain.Repository;
@@ -33,6 +34,7 @@ namespace iucs.readernest.application.Services
         /// <summary>Only for hand-stamping UpdatedBy on writes that bypass the audit interceptor.</summary>
         private readonly ICurrentUserService _currentUser;
         private readonly IBulkFileReader _bulkFileReader;
+        private readonly IInvoicePdfGenerator _invoicePdfGenerator;
 
         public BillingService(
             IUnitOfWork unitOfWork,
@@ -40,7 +42,8 @@ namespace iucs.readernest.application.Services
             IPaymentGateway paymentGateway,
             INotificationService notificationService,
             ICurrentUserService currentUser,
-            IBulkFileReader bulkFileReader)
+            IBulkFileReader bulkFileReader,
+            IInvoicePdfGenerator invoicePdfGenerator)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
@@ -48,6 +51,7 @@ namespace iucs.readernest.application.Services
             _notificationService = notificationService;
             _currentUser = currentUser;
             _bulkFileReader = bulkFileReader;
+            _invoicePdfGenerator = invoicePdfGenerator;
         }
 
         public async Task<IReadOnlyList<PackagePlanDto>> ListPlansAsync(CancellationToken cancellationToken = default)
@@ -154,13 +158,60 @@ namespace iucs.readernest.application.Services
                 ?? throw new NotFoundException(nameof(PaymentAccount), id);
 
             account.Name = request.Name.Trim();
-            account.GatewayProvider = request.GatewayProvider.Trim();
-            account.GatewayAccountRef = request.GatewayAccountRef.Trim();
+            var provider = request.GatewayProvider.Trim();
+            var accountRef = request.GatewayAccountRef.Trim();
+            account.GatewayProvider = provider;
+            account.GatewayAccountRef = accountRef;
             account.IsActive = request.IsActive;
             _unitOfWork.Repository<PaymentAccount>().Update(account);
 
+            if (request.ApplyToAllDepartments)
+            {
+                // Every other department's account converges on this same gateway wiring —
+                // Name is deliberately left alone (stays "<Department> Department Account" for
+                // the card label), only the actual routing fields sync.
+                var others = await _unitOfWork.Repository<PaymentAccount>().TrackedQuery()
+                    .Where(a => a.Id != account.Id)
+                    .ToListAsync(cancellationToken);
+                foreach (var other in others)
+                {
+                    other.GatewayProvider = provider;
+                    other.GatewayAccountRef = accountRef;
+                    other.IsActive = request.IsActive;
+                    _unitOfWork.Repository<PaymentAccount>().Update(other);
+                }
+
+                // A department that predates the auto-create-on-department-creation behaviour
+                // has no PaymentAccount row at all, so the loop above never reaches it — it was
+                // invisible on this screen and CreateInvoiceAsync throws NotFoundException the
+                // first time anyone tries to bill it (discovered live: English and Hindi).
+                // "One gateway account for the whole business" should mean literally every
+                // department, so backfill the ones with no row yet too.
+                var coveredDepartmentIds = await _unitOfWork.Repository<PaymentAccount>().Query()
+                    .Select(a => a.DepartmentId)
+                    .ToListAsync(cancellationToken);
+                var uncoveredDepartments = await _unitOfWork.Repository<Department>().Query()
+                    .Where(d => !coveredDepartmentIds.Contains(d.Id))
+                    .ToListAsync(cancellationToken);
+                foreach (var department in uncoveredDepartments)
+                {
+                    await _unitOfWork.Repository<PaymentAccount>().AddAsync(
+                        new PaymentAccount
+                        {
+                            Name = $"{department.Name} Department Account",
+                            DepartmentId = department.Id,
+                            GatewayProvider = provider,
+                            GatewayAccountRef = accountRef,
+                            IsActive = request.IsActive,
+                        },
+                        cancellationToken);
+                }
+            }
+
             await _auditLog.StageAsync(AuditAction.Update, nameof(PaymentAccount), account.Id.ToString(),
-                $"Gateway wiring set to {account.GatewayProvider}/{account.GatewayAccountRef}", cancellationToken);
+                $"Gateway wiring set to {account.GatewayProvider}/{account.GatewayAccountRef}"
+                    + (request.ApplyToAllDepartments ? " (applied to all departments)" : ""),
+                cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return new PaymentAccountDto
@@ -371,6 +422,63 @@ namespace iucs.readernest.application.Services
                 Page = page,
                 PageSize = pageSize,
             };
+        }
+
+        /// <summary>
+        /// "invoice.*" AppSetting keys (Settings → General → Invoice Details) with the org's
+        /// original fixed values as fallback defaults — a deployment where nobody has touched
+        /// that section yet still renders the exact same PDF as before this became editable.
+        /// </summary>
+        private static readonly Dictionary<string, string> InvoiceSettingDefaults = new()
+        {
+            ["invoice.accountNumber"] = "777705999305",
+            ["invoice.ifscCode"] = "ICIC0008065",
+            ["invoice.branchName"] = "sector 17 Faridabad",
+            ["invoice.gstNumber"] = "06AWCPN6985H1Z3",
+            ["invoice.accountName"] = "THE READER NEST",
+            ["invoice.contactEmail"] = "INFO@THEREADERNEST.COM",
+            ["invoice.signatoryName"] = "Akanksha Nagar",
+            ["invoice.signatoryTitle"] = "Founder & MD",
+        };
+
+        public async Task<(byte[] Content, string FileName)> GenerateInvoicePdfAsync(Guid id, CancellationToken cancellationToken = default)
+        {
+            var invoice = await WithDtoIncludes(_unitOfWork.Repository<Invoice>().Query())
+                .FirstOrDefaultAsync(i => i.Id == id, cancellationToken)
+                ?? throw new NotFoundException(nameof(Invoice), id);
+
+            var settings = await _unitOfWork.Repository<AppSetting>().Query()
+                .Where(s => InvoiceSettingDefaults.Keys.Contains(s.Key))
+                .ToDictionaryAsync(s => s.Key, s => s.Value, cancellationToken);
+
+            string Setting(string key) =>
+                settings.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
+                    ? value
+                    : InvoiceSettingDefaults[key];
+
+            var data = new InvoicePdfData
+            {
+                InvoiceNumber = invoice.InvoiceNumber,
+                IssuedAtUtc = invoice.IssuedAtUtc,
+                ParentName = invoice.ParentProfile?.User is null
+                    ? "—"
+                    : $"{invoice.ParentProfile.User.FirstName} {invoice.ParentProfile.User.LastName}".Trim(),
+                ParentPhone = invoice.ParentProfile?.User?.Phone,
+                Description = invoice.Course?.Name ?? invoice.Subscription?.PackagePlan?.Course?.Name ?? "Course Fee",
+                Amount = invoice.Amount,
+                Currency = invoice.Currency,
+                AccountNumber = Setting("invoice.accountNumber"),
+                IfscCode = Setting("invoice.ifscCode"),
+                BranchName = Setting("invoice.branchName"),
+                GstNumber = Setting("invoice.gstNumber"),
+                AccountName = Setting("invoice.accountName"),
+                ContactEmail = Setting("invoice.contactEmail"),
+                SignatoryName = Setting("invoice.signatoryName"),
+                SignatoryTitle = Setting("invoice.signatoryTitle"),
+            };
+
+            var content = _invoicePdfGenerator.Generate(data);
+            return (content, $"{invoice.InvoiceNumber}.pdf");
         }
 
         public async Task<InvoiceDto> CreateInvoiceAsync(
