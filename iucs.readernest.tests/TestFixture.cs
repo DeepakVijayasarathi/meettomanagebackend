@@ -181,6 +181,12 @@ namespace iucs.readernest.tests
         {
             return Task.FromResult(signature == "valid");
         }
+
+        /// <summary>Keys listed here report as configured; everything else does not (default: everything).</summary>
+        public HashSet<string>? UnconfiguredKeys { get; set; }
+
+        public Task<bool> IsMethodConfiguredAsync(string integrationKey, CancellationToken cancellationToken = default) =>
+            Task.FromResult(UnconfiguredKeys is null || !UnconfiguredKeys.Contains(integrationKey));
     }
 
     /// <summary>

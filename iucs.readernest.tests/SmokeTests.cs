@@ -5408,7 +5408,7 @@ namespace iucs.readernest.tests
         [Fact]
         public async Task Integration_MasksSecretsOnRead_AndPreservesThemWhenTheMaskIsSavedBack()
         {
-            var integrations = new IntegrationService(_db.UnitOfWork, _auditLog);
+            var integrations = new IntegrationService(_db.UnitOfWork, _auditLog, new FakePaymentGateway());
 
             var created = await integrations.CreateAsync(new SaveIntegrationRequest
             {
@@ -5479,7 +5479,7 @@ namespace iucs.readernest.tests
         [Fact]
         public async Task Integration_RejectsRazorpayKeyId_ThatDoesNotStartWithRzp()
         {
-            var integrations = new IntegrationService(_db.UnitOfWork, _auditLog);
+            var integrations = new IntegrationService(_db.UnitOfWork, _auditLog, new FakePaymentGateway());
 
             await Assert.ThrowsAsync<DomainValidationException>(() => integrations.CreateAsync(new SaveIntegrationRequest
             {
@@ -5518,6 +5518,41 @@ namespace iucs.readernest.tests
                 Config = new Dictionary<string, string?> { ["apiKey"] = created.Config["apiKey"] },
             });
             Assert.False(updated.IsEnabled);
+        }
+
+        /// <summary>
+        /// Caught live: Razorpay switched on with no API keys yet still showed up as a real
+        /// option in the Pay Now popup, because GetEnabledPaymentMethodsAsync only checked
+        /// IsEnabled -- a parent picking it got a silently-simulated fake link instead of an
+        /// actual checkout. "Cash" has no adapter/config at all and must always be offered.
+        /// </summary>
+        [Fact]
+        public async Task GetEnabledPaymentMethods_ExcludesEnabledButUnconfiguredGateways()
+        {
+            var gateway = new FakePaymentGateway { UnconfiguredKeys = ["razorpay"] };
+            var integrations = new IntegrationService(_db.UnitOfWork, _auditLog, gateway);
+
+            await integrations.CreateAsync(new SaveIntegrationRequest
+            {
+                Key = "razorpay",
+                Name = "Razorpay",
+                Category = IntegrationCategory.PaymentGateway,
+                IsEnabled = true,
+                Config = new Dictionary<string, string?>(),
+            });
+            await integrations.CreateAsync(new SaveIntegrationRequest
+            {
+                Key = "cash",
+                Name = "Cash",
+                Category = IntegrationCategory.PaymentGateway,
+                IsEnabled = true,
+                Config = new Dictionary<string, string?>(),
+            });
+
+            var methods = await integrations.GetEnabledPaymentMethodsAsync();
+
+            Assert.DoesNotContain(methods, m => m.Key == "razorpay");
+            Assert.Contains(methods, m => m.Key == "cash");
         }
 
         /// <summary>

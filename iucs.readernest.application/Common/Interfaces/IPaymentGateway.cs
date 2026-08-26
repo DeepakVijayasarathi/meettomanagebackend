@@ -133,6 +133,18 @@ namespace iucs.readernest.application.Common.Interfaces
             CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Whether this integration key can actually take a payment right now -- enabled in
+        /// Settings → Integrations AND has its required credentials filled in. "cash" always
+        /// answers true (nothing to configure). Used to keep an enabled-but-unconfigured
+        /// gateway (e.g. Razorpay turned on with no API keys yet) from being offered to a payer
+        /// as a real option in the Pay Now popup — CreatePaymentLinkAsync's own fallback to the
+        /// simulated gateway is a safe default for internal/API callers, but a parent who picks
+        /// "Razorpay" expecting a real checkout and silently gets a fake link is a real problem,
+        /// not a graceful degradation.
+        /// </summary>
+        Task<bool> IsMethodConfiguredAsync(string integrationKey, CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Creates a gateway order for an in-page checkout popup (no redirect). Default:
         /// unsupported — only providers with an inline checkout (Razorpay) override this.
         /// </summary>

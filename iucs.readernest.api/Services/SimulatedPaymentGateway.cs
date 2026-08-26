@@ -60,5 +60,11 @@ namespace iucs.readernest.api.Services
             string gatewayReference,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(new GatewayPaymentStatus { State = GatewayPaymentState.Unknown });
+
+        // This class is only ever reached as PaymentGatewayDispatcher's internal fallback, never
+        // registered as IPaymentGateway itself -- IsMethodConfiguredAsync (which decides what a
+        // payer sees in the Pay Now popup) is answered by the dispatcher, not this class.
+        public Task<bool> IsMethodConfiguredAsync(string integrationKey, CancellationToken cancellationToken = default) =>
+            Task.FromResult(true);
     }
 }
