@@ -76,7 +76,7 @@ namespace iucs.readernest.api.Services
                             });
                             row.RelativeItem().Column(c =>
                             {
-                                c.Item().AlignCenter().Text("Payment Info").Bold();
+                                c.Item().Text("Payment Info").Bold();
                                 c.Item().PaddingTop(6).Text($"Account no.– {data.AccountNumber}");
                                 c.Item().Text($"IFSC code– {data.IfscCode}");
                                 c.Item().Text($"Branch Name – {data.BranchName}");
