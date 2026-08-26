@@ -112,8 +112,8 @@ namespace iucs.readernest.application.Dto.Billing
 
         // Org payment/GST/signatory details — admin-editable (Settings → General → Invoice
         // Details, "invoice.*" keys), same on every invoice. BillingService resolves these
-        // from AppSetting with the org's original fixed values as fallback defaults, so a
-        // deployment where nobody has ever touched that section still renders correctly.
+        // from AppSetting, falling back to a "Not configured" placeholder until an admin
+        // fills them in — never a hardcoded real value (see BillingService.InvoiceSettingKeys).
         public string AccountNumber { get; set; } = null!;
 
         public string IfscCode { get; set; } = null!;

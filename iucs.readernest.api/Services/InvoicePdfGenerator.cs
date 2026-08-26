@@ -106,7 +106,7 @@ namespace iucs.readernest.api.Services
                             table.Cell().Border(1).BorderColor(LineColor).Padding(6).Text(data.Description);
                             table.Cell().Border(1).BorderColor(LineColor).Padding(6).Text("");
                             table.Cell().Border(1).BorderColor(LineColor).Padding(6).Text("");
-                            table.Cell().Border(1).BorderColor(LineColor).Padding(6).AlignCenter().Text($"{data.Amount:0.##}");
+                            table.Cell().Border(1).BorderColor(LineColor).Padding(6).AlignCenter().Text($"{data.Currency} {data.Amount:0.##}");
 
                             // Blank rows so the table reads the same as the org's own template
                             // (room for a staff member to hand-annotate a printed copy).
@@ -119,7 +119,7 @@ namespace iucs.readernest.api.Services
                             }
 
                             table.Cell().ColumnSpan(3).Border(1).BorderColor(LineColor).Padding(6).AlignRight().Text("GRAND TOTAL").Bold();
-                            table.Cell().Border(1).BorderColor(LineColor).Padding(6).AlignCenter().Text($"{data.Amount:0.##}").Bold();
+                            table.Cell().Border(1).BorderColor(LineColor).Padding(6).AlignCenter().Text($"{data.Currency} {data.Amount:0.##}").Bold();
                         });
 
                         col.Item().PaddingTop(6).AlignRight().Text($"FOR ANY QUESTIONS, PLEASE CONTACT {data.ContactEmail}").FontSize(8);
