@@ -45,9 +45,15 @@ namespace iucs.readernest.application.Services
             var name = request.Name.Trim();
             var repository = _unitOfWork.Repository<CourseCategory>();
 
-            if (await repository.ExistsAsync(c => c.Name == name, cancellationToken))
+            // Scoped to the department, not global: two departments legitimately reuse the same
+            // category name (e.g. a "Level 1" under both Hindi and Maths), and the frontend's
+            // own ensureCategory() already assumes this -- it only treats an existing category as
+            // a match when its DepartmentId matches too, otherwise it tries to create a new one
+            // scoped to the target department. A global check here rejected that second create
+            // outright, even though nothing actually collided.
+            if (await repository.ExistsAsync(c => c.Name == name && c.DepartmentId == request.DepartmentId, cancellationToken))
             {
-                throw new ConflictException($"A course category named '{name}' already exists.");
+                throw new ConflictException($"A course category named '{name}' already exists in this department.");
             }
 
             // Fetched (not just checked for existence) so the navigation is set below —

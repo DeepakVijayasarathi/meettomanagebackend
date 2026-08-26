@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace iucs.readernest.domain.Entities.Academics
 {
-    [Index(nameof(Name), IsUnique = true)]
+    [Index(nameof(DepartmentId), nameof(Name), IsUnique = true)]
     public class CourseCategory : AuditEntity
     {
         [MaxLength(150)]
