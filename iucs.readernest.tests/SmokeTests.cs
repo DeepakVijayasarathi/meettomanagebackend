@@ -837,7 +837,7 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
-        public async Task GenerateInvoicePdf_UsesOrgDefaults_WhenNoInvoiceSettingsConfigured()
+        public async Task GenerateInvoicePdf_UsesNotConfiguredPlaceholder_WhenNoInvoiceSettingsConfigured()
         {
             var (billing, invoice) = await SeedInvoiceAsync(amount: 1000);
 
@@ -845,9 +845,9 @@ namespace iucs.readernest.tests
 
             var request = _invoicePdfGenerator.LastRequest;
             Assert.NotNull(request);
-            Assert.Equal("777705999305", request!.AccountNumber);
-            Assert.Equal("06AWCPN6985H1Z3", request.GstNumber);
-            Assert.Equal("Akanksha Nagar", request.SignatoryName);
+            Assert.Equal("Not configured", request!.AccountNumber);
+            Assert.Equal("Not configured", request.GstNumber);
+            Assert.Equal("Not configured", request.SignatoryName);
         }
 
         [Fact]
@@ -867,8 +867,8 @@ namespace iucs.readernest.tests
             var request = _invoicePdfGenerator.LastRequest;
             Assert.NotNull(request);
             Assert.Equal("A DIFFERENT ACCOUNT NAME", request!.AccountName);
-            // Untouched keys still fall back to the org defaults, not blank/null.
-            Assert.Equal("777705999305", request.AccountNumber);
+            // Untouched keys still fall back to the placeholder, not blank/null.
+            Assert.Equal("Not configured", request.AccountNumber);
         }
 
         [Fact]

@@ -425,21 +425,26 @@ namespace iucs.readernest.application.Services
         }
 
         /// <summary>
-        /// "invoice.*" AppSetting keys (Settings → General → Invoice Details) with the org's
-        /// original fixed values as fallback defaults — a deployment where nobody has touched
-        /// that section yet still renders the exact same PDF as before this became editable.
+        /// "invoice.*" AppSetting keys (Settings → General → Invoice Details). Real bank/GST/
+        /// signatory details are org-specific and must never be hardcoded in source (they used
+        /// to be, both here and in InvoicePdfGenerator — a real bank account number, IFSC and
+        /// GSTIN sitting in plaintext in git history). This placeholder is shown only until an
+        /// admin fills in Settings → General → Invoice Details; the real values now live solely
+        /// in the database.
         /// </summary>
-        private static readonly Dictionary<string, string> InvoiceSettingDefaults = new()
-        {
-            ["invoice.accountNumber"] = "777705999305",
-            ["invoice.ifscCode"] = "ICIC0008065",
-            ["invoice.branchName"] = "sector 17 Faridabad",
-            ["invoice.gstNumber"] = "06AWCPN6985H1Z3",
-            ["invoice.accountName"] = "THE READER NEST",
-            ["invoice.contactEmail"] = "INFO@THEREADERNEST.COM",
-            ["invoice.signatoryName"] = "Akanksha Nagar",
-            ["invoice.signatoryTitle"] = "Founder & MD",
-        };
+        private const string InvoiceSettingNotConfigured = "Not configured";
+
+        private static readonly HashSet<string> InvoiceSettingKeys =
+        [
+            "invoice.accountNumber",
+            "invoice.ifscCode",
+            "invoice.branchName",
+            "invoice.gstNumber",
+            "invoice.accountName",
+            "invoice.contactEmail",
+            "invoice.signatoryName",
+            "invoice.signatoryTitle",
+        ];
 
         public async Task<(byte[] Content, string FileName)> GenerateInvoicePdfAsync(Guid id, CancellationToken cancellationToken = default)
         {
@@ -448,13 +453,13 @@ namespace iucs.readernest.application.Services
                 ?? throw new NotFoundException(nameof(Invoice), id);
 
             var settings = await _unitOfWork.Repository<AppSetting>().Query()
-                .Where(s => InvoiceSettingDefaults.Keys.Contains(s.Key))
+                .Where(s => InvoiceSettingKeys.Contains(s.Key))
                 .ToDictionaryAsync(s => s.Key, s => s.Value, cancellationToken);
 
             string Setting(string key) =>
                 settings.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value)
                     ? value
-                    : InvoiceSettingDefaults[key];
+                    : InvoiceSettingNotConfigured;
 
             var data = new InvoicePdfData
             {
