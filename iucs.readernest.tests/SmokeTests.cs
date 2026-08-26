@@ -324,6 +324,52 @@ namespace iucs.readernest.tests
         }
 
         /// <summary>
+        /// End-to-end version of CaptureJoinAttendance_TeacherRejoinAfterDrop_...: a brief network
+        /// drop and automatic reconnect partway through an otherwise fully-taught class must not
+        /// falsely flag the payout, which is exactly what the stale-LeftAtUtc bug did before the
+        /// join-capture fix (a rejoin used to bump JoinedAtUtc forward while leaving the old
+        /// disconnect's LeftAtUtc in place, producing a leave-before-join row and a negative
+        /// "attended minutes" that tripped the review threshold).
+        /// </summary>
+        [Fact]
+        public async Task Complete_DoesNotFlag_WhenTeacherHadABriefReconnectButTaughtTheWholeClass()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1); // 45-minute session
+            await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
+            {
+                TeacherProfileId = session.TeacherProfileId,
+                DurationMinutes = 45,
+                RatePerSession = 1000,
+                EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
+            });
+            var teacherProfile = await _db.Context.TeacherProfiles.FindAsync(session.TeacherProfileId);
+            var ops = CreateAcademicOpsService();
+
+            // Seeded directly (back-dated), rather than via CaptureJoinAttendanceAsync, which
+            // always stamps "now" -- the test needs the class to have genuinely run its full 45
+            // scheduled minutes by the time Complete is called below, not collapse to the
+            // milliseconds these statements actually take to execute.
+            _db.Context.SessionAttendances.Add(new SessionAttendance
+            {
+                ClassSessionId = session.Id,
+                ParticipantType = ParticipantType.Teacher,
+                TeacherProfileId = session.TeacherProfileId,
+                Status = AttendanceStatus.Present,
+                JoinedAtUtc = DateTime.UtcNow.AddMinutes(-45),
+            });
+            await _db.Context.SaveChangesAsync();
+
+            await ops.CaptureLeaveAttendanceAsync(session.Id, teacherProfile!.UserId); // brief network drop, partway through
+            await ops.CaptureJoinAttendanceAsync(session.Id, teacherProfile.UserId); // automatic reconnect moments later
+
+            await CreateSessionService().CompleteAsync(session.Id); // taught essentially the whole class
+
+            var item = Assert.Single(_db.Context.PayoutItems.ToList());
+            Assert.False(item.RequiresReview);
+            Assert.Equal(1000m, item.Amount);
+        }
+
+        /// <summary>
         /// A flag nobody can act on is decoration. AdjustItemAsync is the only way to clear
         /// RequiresReview, and FinalizeAsync must refuse while any item is still flagged --
         /// otherwise a shortened class's full pay would go out anyway with nobody ever forced to
@@ -575,6 +621,37 @@ namespace iucs.readernest.tests
             var row = Assert.Single(_db.Context.SessionAttendances.Where(a => a.ClassSessionId == session.Id));
             Assert.Equal(teacherProfile.Id, row.TeacherProfileId);
             Assert.Equal(AttendanceStatus.Present, row.Status);
+        }
+
+        /// <summary>
+        /// Caught by reasoning through "what if the teacher's network drops mid-class": SignalR's
+        /// automatic reconnect calls JoinSession again after a brief drop, which used to
+        /// overwrite JoinedAtUtc with the reconnect time while leaving the disconnect's LeftAtUtc
+        /// stale -- producing a leave time BEFORE the join time and a negative "attended minutes"
+        /// that falsely flagged a teacher who taught almost the whole class for review, purely
+        /// because of a network blip. A rejoin must keep the original join time and clear the
+        /// now-stale leave time instead.
+        /// </summary>
+        [Fact]
+        public async Task CaptureJoinAttendance_TeacherRejoinAfterDrop_KeepsOriginalJoinTime_AndClearsStaleLeave()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var teacherProfile = await _db.Context.TeacherProfiles.FindAsync(session.TeacherProfileId);
+            var ops = CreateAcademicOpsService();
+
+            await ops.CaptureJoinAttendanceAsync(session.Id, teacherProfile!.UserId);
+            var originalJoin = _db.Context.SessionAttendances.Single(a => a.ClassSessionId == session.Id).JoinedAtUtc;
+
+            // Network drop: ClassroomHub.OnDisconnectedAsync writes a real leave time.
+            await ops.CaptureLeaveAttendanceAsync(session.Id, teacherProfile.UserId);
+            Assert.NotNull(_db.Context.SessionAttendances.AsNoTracking().Single(a => a.ClassSessionId == session.Id).LeftAtUtc);
+
+            // Automatic reconnect: SignalR calls JoinSession again for the same class.
+            await ops.CaptureJoinAttendanceAsync(session.Id, teacherProfile.UserId);
+
+            var row = _db.Context.SessionAttendances.AsNoTracking().Single(a => a.ClassSessionId == session.Id);
+            Assert.Equal(originalJoin, row.JoinedAtUtc); // not bumped forward by the reconnect
+            Assert.Null(row.LeftAtUtc); // no longer looks like they've left
         }
 
         [Fact]

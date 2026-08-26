@@ -91,12 +91,34 @@ namespace iucs.readernest.application.Services
                         .ExistsAsync(t => t.Id == session.TeacherProfileId && t.UserId == userId, cancellationToken);
                     if (isAssignedTeacher)
                     {
-                        entries.Add(new AttendanceEntryDto
+                        // A network drop followed by SignalR's automatic reconnect calls this
+                        // again for the SAME class — CaptureAttendanceCoreAsync's merge always
+                        // overwrites JoinedAtUtc with "now" (a real value beats the ?? fallback)
+                        // but leaves the stale LeftAtUtc the earlier disconnect wrote untouched,
+                        // so the row ends up with a leave time BEFORE its join time. That fed a
+                        // negative "attended minutes" into the payout review check, which then
+                        // flagged a teacher who taught almost the entire class as if they'd left
+                        // after a moment, purely because of a brief reconnect. On a genuine
+                        // rejoin (a row already exists), keep the original JoinedAtUtc and clear
+                        // the now-stale LeftAtUtc directly instead of going through the entries
+                        // path at all — the teacher is back, they haven't "left" this session yet.
+                        var existingTeacherRow = await _unitOfWork.Repository<SessionAttendance>().TrackedQuery()
+                            .FirstOrDefaultAsync(a => a.ClassSessionId == sessionId && a.TeacherProfileId == session.TeacherProfileId, cancellationToken);
+                        if (existingTeacherRow is not null)
                         {
-                            TeacherProfileId = session.TeacherProfileId,
-                            Status = AttendanceStatus.Present,
-                            JoinedAtUtc = DateTime.UtcNow,
-                        });
+                            existingTeacherRow.Status = AttendanceStatus.Present;
+                            existingTeacherRow.LeftAtUtc = null;
+                            await _unitOfWork.SaveChangesAsync(cancellationToken);
+                        }
+                        else
+                        {
+                            entries.Add(new AttendanceEntryDto
+                            {
+                                TeacherProfileId = session.TeacherProfileId,
+                                Status = AttendanceStatus.Present,
+                                JoinedAtUtc = DateTime.UtcNow,
+                            });
+                        }
                     }
                 }
                 else if (user.Role == UserRole.Parent)
