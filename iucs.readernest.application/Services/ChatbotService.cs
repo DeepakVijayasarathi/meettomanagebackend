@@ -127,6 +127,38 @@ namespace iucs.readernest.application.Services
             };
         }
 
+        public async Task<ChatMessageDto> SubmitFeedbackAsync(
+            Guid userId,
+            Guid messageId,
+            SubmitChatFeedbackRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var repository = _unitOfWork.Repository<ChatMessage>();
+            var message = await repository.FirstOrDefaultAsync(
+                m => m.Id == messageId && m.UserId == userId && m.Sender == ChatMessageSender.Bot,
+                cancellationToken)
+                ?? throw new NotFoundException(nameof(ChatMessage), messageId);
+
+            message.WasHelpful = request.Helpful;
+            repository.Update(message);
+
+            if (!request.Helpful)
+            {
+                // A matched FAQ isn't automatically a good answer — route it to a teacher just
+                // like a no-match would, instead of trusting the keyword match blindly.
+                var question = string.IsNullOrWhiteSpace(request.OriginalQuestion) ? message.Text : request.OriginalQuestion.Trim();
+                await _unitOfWork.Repository<ChatEscalation>().AddAsync(new ChatEscalation
+                {
+                    UserId = userId,
+                    Question = question,
+                    Status = ChatEscalationStatus.Pending,
+                }, cancellationToken);
+            }
+
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return ToDto(message);
+        }
+
         public async Task<IReadOnlyList<ChatEscalationDto>> ListEscalationsAsync(
             ChatEscalationStatus? status,
             CancellationToken cancellationToken = default)
@@ -175,6 +207,7 @@ namespace iucs.readernest.application.Services
             var messages = _unitOfWork.Repository<ChatMessage>().Query();
             var totalQuestions = await messages.CountAsync(m => m.Sender == ChatMessageSender.User, cancellationToken);
             var answeredByBot = await messages.CountAsync(m => m.Sender == ChatMessageSender.Bot && m.MatchedFaqId != null, cancellationToken);
+            var markedUnhelpful = await messages.CountAsync(m => m.Sender == ChatMessageSender.Bot && m.WasHelpful == false, cancellationToken);
             var activeUsers = await messages.Select(m => m.UserId).Distinct().CountAsync(cancellationToken);
 
             var escalations = _unitOfWork.Repository<ChatEscalation>().Query();
@@ -194,6 +227,7 @@ namespace iucs.readernest.application.Services
                 EscalatedToTeacher = escalatedTotal,
                 PendingEscalations = pending,
                 ActiveUsers = activeUsers,
+                MarkedUnhelpful = markedUnhelpful,
                 TopUnansweredQuestions = topUnanswered,
             };
         }
@@ -331,6 +365,7 @@ namespace iucs.readernest.application.Services
             Sender = message.Sender.ToString(),
             Text = message.Text,
             MatchedFaqId = message.MatchedFaqId,
+            WasHelpful = message.WasHelpful,
             CreatedAtUtc = message.CreatedAtUtc,
         };
 

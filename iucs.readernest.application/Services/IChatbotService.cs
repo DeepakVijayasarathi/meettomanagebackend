@@ -21,6 +21,12 @@ namespace iucs.readernest.application.Services
 
         Task<AskChatbotResponse> AskAsync(Guid userId, AskChatbotRequest request, CancellationToken cancellationToken = default);
 
+        Task<ChatMessageDto> SubmitFeedbackAsync(
+            Guid userId,
+            Guid messageId,
+            SubmitChatFeedbackRequest request,
+            CancellationToken cancellationToken = default);
+
         Task<IReadOnlyList<ChatEscalationDto>> ListEscalationsAsync(ChatEscalationStatus? status, CancellationToken cancellationToken = default);
 
         Task<ChatEscalationDto> ResolveEscalationAsync(

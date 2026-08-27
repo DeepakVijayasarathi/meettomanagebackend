@@ -43,6 +43,12 @@ namespace iucs.readernest.api.Controllers
             return Ok(await _chatbot.ListMyMessagesAsync(UserId(), cancellationToken));
         }
 
+        [HttpPut("messages/{id:guid}/feedback")]
+        public async Task<ActionResult<ChatMessageDto>> SubmitFeedback(Guid id, SubmitChatFeedbackRequest request, CancellationToken cancellationToken)
+        {
+            return Ok(await _chatbot.SubmitFeedbackAsync(UserId(), id, request, cancellationToken));
+        }
+
         // FAQ content management — same audience as Email Templates/Progress Reports.
         [HttpGet("admin/faqs")]
         [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]

@@ -25,5 +25,12 @@ namespace iucs.readernest.domain.Entities.Communication
         public Guid? MatchedFaqId { get; set; }
 
         public ChatFaq? MatchedFaq { get; set; }
+
+        /// <summary>
+        /// User feedback on a Bot answer — null until rated. A matched FAQ can still be the
+        /// wrong answer (e.g. an overly broad keyword overlap), so "helpful: false" escalates
+        /// to a teacher just like a no-match would, instead of trusting the match blindly.
+        /// </summary>
+        public bool? WasHelpful { get; set; }
     }
 }

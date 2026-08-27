@@ -47,12 +47,28 @@ namespace iucs.readernest.application.Dto.Communication
 
         public Guid? MatchedFaqId { get; set; }
 
+        /// <summary>Null until rated; only meaningful on a Bot message that matched an FAQ.</summary>
+        public bool? WasHelpful { get; set; }
+
         public DateTime CreatedAtUtc { get; set; }
     }
 
     public class AskChatbotRequest
     {
         public string Message { get; set; } = string.Empty;
+    }
+
+    public class SubmitChatFeedbackRequest
+    {
+        public bool Helpful { get; set; }
+
+        /// <summary>
+        /// The question that produced this answer — the service has no other way to recover it
+        /// for the escalation it creates on negative feedback, since a ChatMessage row only
+        /// stores its own turn, not the one before it. The client always has this already (it's
+        /// the immediately preceding turn in the conversation it's rendering).
+        /// </summary>
+        public string OriginalQuestion { get; set; } = string.Empty;
     }
 
     public class AskChatbotResponse
@@ -106,6 +122,10 @@ namespace iucs.readernest.application.Dto.Communication
         public int PendingEscalations { get; set; }
 
         public int ActiveUsers { get; set; }
+
+        /// <summary>Bot answers a user explicitly marked unhelpful — a matched FAQ isn't
+        /// necessarily a good answer, so this tracks quality separately from match rate.</summary>
+        public int MarkedUnhelpful { get; set; }
 
         public IReadOnlyList<string> TopUnansweredQuestions { get; set; } = Array.Empty<string>();
     }
