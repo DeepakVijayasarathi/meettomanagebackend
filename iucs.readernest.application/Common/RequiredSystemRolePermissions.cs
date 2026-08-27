@@ -17,6 +17,18 @@ namespace iucs.readernest.application.Common
         public static readonly IReadOnlyList<RequiredGrant> All =
         [
             new("teacher", PermissionModule.Payouts, View: true),
+            // Lets a teacher see and resolve doubts the "Ask a Doubt" chatbot escalated —
+            // Communication already gates Progress Reports/Email Templates for the same module.
+            new("teacher", PermissionModule.Communication, View: true, Edit: true),
+            new("coordinator", PermissionModule.Communication, View: true, Edit: true),
+            // SessionService.IsSessionParticipantAsync's SubAdmin branch requires CanEdit
+            // specifically (not just View) before letting a coordinator join a live class as a
+            // monitor — the seeded default grants Edit, but nothing protected it from being
+            // silently wiped by a preset re-save missing that checkbox, unlike every other
+            // required grant here. Confirmed live: a coordinator account could see every class
+            // on the calendar fine (View survives) but got 403 "You do not have access to this
+            // session" on every single Join Class click, with no per-session pattern to it.
+            new("coordinator", PermissionModule.SessionCalendarManagement, View: true, Create: true, Edit: true),
             new("parent", PermissionModule.SessionCalendarManagement, View: true),
             new("parent", PermissionModule.ContentAccessManagement, View: true),
             new("parent", PermissionModule.BillingFinance, View: true),
