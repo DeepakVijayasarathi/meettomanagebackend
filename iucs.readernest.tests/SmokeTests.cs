@@ -116,7 +116,7 @@ namespace iucs.readernest.tests
             await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 1000,
+                RatePerMinute = 1000,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
 
@@ -128,7 +128,7 @@ namespace iucs.readernest.tests
             Assert.Equal(SessionStatus.CarriedForward, (await _db.Context.ClassSessions.FindAsync(carried.Id))!.Status);
             var item = Assert.Single(_db.Context.PayoutItems.ToList());
             Assert.Equal(PayoutItemType.TeacherNoShowDeduction, item.Type);
-            Assert.Equal(-1000m, item.Amount); // default penalty: 100% of the session rate
+            Assert.Equal(-45000m, item.Amount); // default penalty: 100% of the session rate (1000/min * 45 min)
         }
 
         [Fact]
@@ -239,7 +239,7 @@ namespace iucs.readernest.tests
             await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 1000,
+                RatePerMinute = 1000,
                 TeacherNoShowPenaltyPercent = 150, // WBS p.31 "Penalty configuration"
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
@@ -249,7 +249,7 @@ namespace iucs.readernest.tests
 
             var item = Assert.Single(_db.Context.PayoutItems.ToList());
             Assert.Equal(PayoutItemType.TeacherNoShowDeduction, item.Type);
-            Assert.Equal(-1500m, item.Amount);
+            Assert.Equal(-67500m, item.Amount); // 1000/min * 45 min * 150%
             Assert.Contains("150% of session rate", item.Note);
         }
 
@@ -269,7 +269,7 @@ namespace iucs.readernest.tests
             await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 1000,
+                RatePerMinute = 1000,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
             // Deliberately no SessionAttendance row at all for this session.
@@ -278,7 +278,7 @@ namespace iucs.readernest.tests
 
             var item = Assert.Single(_db.Context.PayoutItems.ToList());
             Assert.Equal(PayoutItemType.SessionEarning, item.Type);
-            Assert.Equal(1000m, item.Amount); // still full scheduled-duration rate -- no proration
+            Assert.Equal(45000m, item.Amount); // still the full scheduled-duration rate (1000/min * 45 min) -- no proration
             Assert.True(item.RequiresReview);
             Assert.Contains("No attendance was ever recorded", item.Note);
         }
@@ -298,7 +298,7 @@ namespace iucs.readernest.tests
             await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 1000,
+                RatePerMinute = 1000,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
             var joinedAt = DateTime.UtcNow.AddMinutes(-10);
@@ -317,7 +317,7 @@ namespace iucs.readernest.tests
 
             var item = Assert.Single(_db.Context.PayoutItems.ToList());
             Assert.Equal(PayoutItemType.SessionEarning, item.Type);
-            Assert.Equal(1000m, item.Amount); // full scheduled-duration rate -- no proration
+            Assert.Equal(45000m, item.Amount); // full scheduled-duration rate (1000/min * 45 min) -- no proration
             Assert.True(item.RequiresReview);
             Assert.Contains("attended only 10 of 45 scheduled minutes", item.Note);
         }
@@ -329,7 +329,7 @@ namespace iucs.readernest.tests
             await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 1000,
+                RatePerMinute = 1000,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
             var joinedAt = DateTime.UtcNow.AddMinutes(-40);
@@ -364,7 +364,7 @@ namespace iucs.readernest.tests
             await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 1000,
+                RatePerMinute = 1000,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
             _db.Context.AppSettings.Add(new AppSetting
@@ -406,7 +406,7 @@ namespace iucs.readernest.tests
             await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 1000,
+                RatePerMinute = 1000,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
             var teacherProfile = await _db.Context.TeacherProfiles.FindAsync(session.TeacherProfileId);
@@ -433,7 +433,7 @@ namespace iucs.readernest.tests
 
             var item = Assert.Single(_db.Context.PayoutItems.ToList());
             Assert.False(item.RequiresReview);
-            Assert.Equal(1000m, item.Amount);
+            Assert.Equal(45000m, item.Amount); // 1000/min * 45 min
         }
 
         /// <summary>
@@ -450,7 +450,7 @@ namespace iucs.readernest.tests
             await payouts.SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 1000,
+                RatePerMinute = 1000,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
             var joinedAt = DateTime.UtcNow.AddMinutes(-10);
@@ -474,16 +474,16 @@ namespace iucs.readernest.tests
 
             var adjusted = await payouts.AdjustItemAsync(payout.Id, flaggedItem.Id, new AdjustPayoutItemRequest
             {
-                NewAmount = 250m, // roughly proportional to the 10 of 45 minutes actually taught
+                NewAmount = 10000m, // exactly proportional to the 10 of 45 minutes actually taught (45000 * 10/45)
                 Reason = "Teacher left after 10 minutes; prorated by hand.",
             });
-            Assert.Equal(250m, adjusted.TotalAmount);
+            Assert.Equal(10000m, adjusted.TotalAmount);
             var adjustedItem = Assert.Single(adjusted.Items);
             Assert.False(adjustedItem.RequiresReview);
-            Assert.Contains("Adjusted from 1000.00 to 250.00", adjustedItem.Note);
+            Assert.Contains("Adjusted from 45000.00 to 10000.00", adjustedItem.Note);
 
             var finalized = await payouts.FinalizeAsync(payout.Id);
-            Assert.Equal(250m, finalized.TotalAmount);
+            Assert.Equal(10000m, finalized.TotalAmount);
         }
 
         /// <summary>
@@ -504,7 +504,7 @@ namespace iucs.readernest.tests
             await payouts.SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 1000,
+                RatePerMinute = 1000,
                 TeacherNoShowPenaltyPercent = 150,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
@@ -513,7 +513,7 @@ namespace iucs.readernest.tests
                 session.Id, new MarkNoShowRequest { Party = NoShowParty.Teacher });
 
             var item = Assert.Single(_db.Context.PayoutItems.ToList());
-            Assert.Equal(-1500m, item.Amount); // the raw, honest line-item deduction
+            Assert.Equal(-67500m, item.Amount); // the raw, honest line-item deduction (1000/min * 45 min * 150%)
 
             var payout = await _db.Context.Payouts.AsNoTracking().FirstAsync();
             var finalized = await payouts.FinalizeAsync(payout.Id);
@@ -531,20 +531,20 @@ namespace iucs.readernest.tests
             await payoutService.SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = null,
-                RatePerSession = 800,
+                RatePerMinute = 800,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
 
             await CreateSessionService().CompleteAsync(session.Id);
             var defaultPaid = Assert.Single(_db.Context.PayoutItems.ToList());
             Assert.Equal(PayoutItemType.SessionEarning, defaultPaid.Type);
-            Assert.Equal(800m, defaultPaid.Amount); // paid from the default card
+            Assert.Equal(36000m, defaultPaid.Amount); // paid from the default card (800/min * 45 min)
 
             // The teacher's own rate takes precedence over the default from then on
             await payoutService.SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 1200,
+                RatePerMinute = 1200,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
 
@@ -562,7 +562,7 @@ namespace iucs.readernest.tests
 
             await CreateSessionService().CompleteAsync(second.Id);
             var overridden = _db.Context.PayoutItems.Single(i => i.ClassSessionId == second.Id);
-            Assert.Equal(1200m, overridden.Amount);
+            Assert.Equal(54000m, overridden.Amount); // 1200/min * 45 min
         }
 
         [Fact]
@@ -2119,7 +2119,7 @@ namespace iucs.readernest.tests
             await payoutService.SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 900,
+                RatePerMinute = 900,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
             await SeedFullTeacherAttendanceAsync(session);
@@ -2133,7 +2133,7 @@ namespace iucs.readernest.tests
             // Persistence check (the AsNoTracking-mutation bug this caught): re-read from the DB.
             var finalized = await _db.Context.Payouts.FirstAsync(p => p.Id == payout.Id);
             Assert.Equal(PayoutStatus.Finalized, finalized.Status);
-            Assert.Equal(900, finalized.TotalAmount);
+            Assert.Equal(40500, finalized.TotalAmount); // 900/min * 45 min
             _db.Context.ChangeTracker.Clear();
 
             await payoutService.MarkPaidAsync(payout.Id);
@@ -3651,7 +3651,7 @@ namespace iucs.readernest.tests
             await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 1100,
+                RatePerMinute = 1100,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
 
@@ -3660,8 +3660,8 @@ namespace iucs.readernest.tests
             var payout = Assert.Single(_db.Context.Payouts.ToList());
             var item = Assert.Single(_db.Context.PayoutItems.ToList());
             Assert.Equal(PayoutItemType.SessionEarning, item.Type);
-            Assert.Equal(1100, item.Amount);
-            Assert.Equal(1100, payout.TotalAmount);
+            Assert.Equal(49500, item.Amount); // 1100/min * 45 min
+            Assert.Equal(49500, payout.TotalAmount);
             Assert.Equal(PayoutStatus.Pending, payout.Status);
         }
 
@@ -3672,7 +3672,7 @@ namespace iucs.readernest.tests
             await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
             {
                 TeacherProfileId = session.TeacherProfileId,
-                RatePerSession = 1100,
+                RatePerMinute = 1100,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
 
@@ -3684,7 +3684,7 @@ namespace iucs.readernest.tests
             Assert.Equal(session.ScheduledStartAtUtc.AddDays(7), carried.ScheduledStartAtUtc);
             var item = Assert.Single(_db.Context.PayoutItems.ToList());
             Assert.Equal(PayoutItemType.StudentNoShowWaiting, item.Type);
-            Assert.Equal(1100, item.Amount);
+            Assert.Equal(49500, item.Amount); // 1100/min * 45 min
         }
 
         [Fact]
@@ -4813,7 +4813,7 @@ namespace iucs.readernest.tests
             var payouts = CreatePayoutService();
             await payouts.SetRateAsync(new SavePayoutRateRequest
             {
-                RatePerSession = 500, EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
+                RatePerMinute = 500, EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
             });
             await SeedFullTeacherAttendanceAsync(session);
             await CreateSessionService().CompleteAsync(session.Id, new CompleteSessionRequest());
@@ -5325,23 +5325,23 @@ namespace iucs.readernest.tests
             var payouts = CreatePayoutService();
             var effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
 
-            // A negative per-session rate makes every completed class DEDUCT from the teacher.
+            // A negative per-minute rate makes every completed class DEDUCT from the teacher.
             await Assert.ThrowsAsync<DomainValidationException>(() => payouts.SetRateAsync(new SavePayoutRateRequest
             {
-                RatePerSession = -500, EffectiveFrom = effectiveFrom,
+                RatePerMinute = -500, EffectiveFrom = effectiveFrom,
             }));
 
             // A negative penalty percent inverts the sign of the no-show deduction
             // (-(rate * -100 / 100) = +rate), turning a missed class into a BONUS.
             await Assert.ThrowsAsync<DomainValidationException>(() => payouts.SetRateAsync(new SavePayoutRateRequest
             {
-                RatePerSession = 500, TeacherNoShowPenaltyPercent = -100, EffectiveFrom = effectiveFrom,
+                RatePerMinute = 500, TeacherNoShowPenaltyPercent = -100, EffectiveFrom = effectiveFrom,
             }));
 
             // Deducting many times the session's worth is not a configuration, it's a typo.
             await Assert.ThrowsAsync<DomainValidationException>(() => payouts.SetRateAsync(new SavePayoutRateRequest
             {
-                RatePerSession = 500, TeacherNoShowPenaltyPercent = 10_000, EffectiveFrom = effectiveFrom,
+                RatePerMinute = 500, TeacherNoShowPenaltyPercent = 10_000, EffectiveFrom = effectiveFrom,
             }));
 
             // The legitimate range still saves: 0% is a warning-only no-show, and >100% stays
@@ -5349,52 +5349,62 @@ namespace iucs.readernest.tests
             // policy (WBS p.31), which is why the guard bounds the sign and typos, not the policy.
             var saved = await payouts.SetRateAsync(new SavePayoutRateRequest
             {
-                RatePerSession = 500, TeacherNoShowPenaltyPercent = 0, EffectiveFrom = effectiveFrom,
+                RatePerMinute = 500, TeacherNoShowPenaltyPercent = 0, EffectiveFrom = effectiveFrom,
             });
             Assert.Equal(0m, saved.TeacherNoShowPenaltyPercent);
 
             var punitive = await payouts.SetRateAsync(new SavePayoutRateRequest
             {
-                RatePerSession = 500, TeacherNoShowPenaltyPercent = 150, EffectiveFrom = effectiveFrom,
+                RatePerMinute = 500, TeacherNoShowPenaltyPercent = 150, EffectiveFrom = effectiveFrom,
             });
             Assert.Equal(150m, punitive.TeacherNoShowPenaltyPercent);
         }
 
         [Fact]
-        public async Task CompletingASession_AccruesTheFlatRate_RegardlessOfDuration()
+        public async Task CompletingASession_AccruesRatePerMinuteTimesTheSessionsScheduledDuration()
         {
-            // Rate cards are flat per teacher (or the centre default) -- no per-duration
-            // tiers, so a session's own length has zero bearing on which rate it gets. This
-            // is the actual proof: a 50-minute session prices from the single configured
-            // rate exactly like a 30/45/60-minute one would.
+            // Rate cards price per minute now, not a flat amount per session -- the same
+            // configured rate must NOT pay a 30-minute class and a 50-minute class the same
+            // amount. This is the actual proof: two sessions at one rate, priced strictly
+            // by each session's own scheduled duration.
             var teacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
             var teacher = new TeacherProfile { UserId = teacherUser.Id };
             var category = new CourseCategory { Name = $"Cat-{Guid.NewGuid():N}", DepartmentId = WellKnownDepartments.Phonics };
             var course = new Course
             {
-                CourseCategory = category, Name = "Custom Length Course", Type = CourseType.Group,
-                DurationMinutes = 50, Price = 100, TotalSessions = 1, DepartmentId = WellKnownDepartments.Phonics,
+                CourseCategory = category, Name = "Mixed Length Course", Type = CourseType.Group,
+                DurationMinutes = 50, Price = 100, TotalSessions = 2, DepartmentId = WellKnownDepartments.Phonics,
             };
             var batch = new Batch { Course = course, TeacherProfile = teacher, Name = "Batch", Capacity = 5 };
-            var session = new ClassSession
+            var shortSession = new ClassSession
             {
                 Batch = batch, TeacherProfile = teacher,
                 ScheduledStartAtUtc = DateTime.UtcNow.AddDays(1),
-                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(1).AddMinutes(50),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(1).AddMinutes(30),
             };
-            _db.Context.AddRange(teacher, category, course, batch, session);
+            var longSession = new ClassSession
+            {
+                Batch = batch, TeacherProfile = teacher,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(2),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(2).AddMinutes(50),
+            };
+            _db.Context.AddRange(teacher, category, course, batch, shortSession, longSession);
             await _db.Context.SaveChangesAsync();
             _db.CurrentUser.UserId = teacherUser.Id;
 
             await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
             {
-                RatePerSession = 750, EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
+                RatePerMinute = 15, EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
             });
-            await SeedFullTeacherAttendanceAsync(session);
-            await CreateSessionService().CompleteAsync(session.Id, new CompleteSessionRequest());
+            await SeedFullTeacherAttendanceAsync(shortSession);
+            await SeedFullTeacherAttendanceAsync(longSession);
+            await CreateSessionService().CompleteAsync(shortSession.Id, new CompleteSessionRequest());
+            await CreateSessionService().CompleteAsync(longSession.Id, new CompleteSessionRequest());
 
-            var item = await _db.Context.PayoutItems.AsNoTracking().FirstAsync(i => i.ClassSessionId == session.Id);
-            Assert.Equal(750m, item.Amount);
+            var shortItem = await _db.Context.PayoutItems.AsNoTracking().FirstAsync(i => i.ClassSessionId == shortSession.Id);
+            var longItem = await _db.Context.PayoutItems.AsNoTracking().FirstAsync(i => i.ClassSessionId == longSession.Id);
+            Assert.Equal(450m, shortItem.Amount); // 15/min * 30 min
+            Assert.Equal(750m, longItem.Amount); // 15/min * 50 min
         }
 
         private static RecordEngagementRequest EngagementRequest() => new()

@@ -50,9 +50,9 @@ namespace iucs.readernest.application.Services
             // completed class deduct from the teacher instead of paying them; a negative penalty
             // percent inverts the sign of the no-show deduction (-(rate * -100 / 100) = +rate),
             // silently turning a missed class into a bonus.
-            if (request.RatePerSession < 0)
+            if (request.RatePerMinute < 0)
             {
-                throw new DomainValidationException("Rate per session cannot be negative.");
+                throw new DomainValidationException("Rate per minute cannot be negative.");
             }
 
             // Deliberately NOT capped at 100: deducting more than the missed session was worth
@@ -93,7 +93,7 @@ namespace iucs.readernest.application.Services
                 await _unitOfWork.Repository<PayoutRate>().AddAsync(rate, cancellationToken);
             }
 
-            rate.RatePerSession = request.RatePerSession;
+            rate.RatePerMinute = request.RatePerMinute;
             rate.TeacherNoShowPenaltyPercent = request.TeacherNoShowPenaltyPercent;
             rate.IsActive = true;
 
@@ -173,15 +173,21 @@ namespace iucs.readernest.application.Services
                 .OrderByDescending(r => r.EffectiveFrom)
                 .FirstOrDefaultAsync(cancellationToken);
 
+            // Priced off the scheduled duration, not the teacher's actual attendance --
+            // a session's full rate is fixed the moment it's scheduled, so a dropped
+            // connection or early finish doesn't shrink pay on its own (that's what
+            // RequiresReview below is for; it flags the case for a human, never changes
+            // the amount itself).
+            var sessionRate = Math.Round((rate?.RatePerMinute ?? 0m) * durationMinutes, 2);
             var amount = type switch
             {
-                PayoutItemType.SessionEarning => rate?.RatePerSession ?? 0m,
-                PayoutItemType.StudentNoShowWaiting => rate?.RatePerSession ?? 0m,
+                PayoutItemType.SessionEarning => sessionRate,
+                PayoutItemType.StudentNoShowWaiting => sessionRate,
                 // The configured no-show penalty (WBS "Penalty configuration"): a percentage
                 // of the session rate, so centres can deduct less, exactly, or more than
                 // the missed session was worth.
                 PayoutItemType.TeacherNoShowDeduction =>
-                    -Math.Round((rate?.RatePerSession ?? 0m) * (rate?.TeacherNoShowPenaltyPercent ?? 100m) / 100m, 2),
+                    -Math.Round(sessionRate * (rate?.TeacherNoShowPenaltyPercent ?? 100m) / 100m, 2),
                 _ => 0m,
             };
 

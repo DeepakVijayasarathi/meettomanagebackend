@@ -14,7 +14,7 @@ namespace iucs.readernest.application.Mappings
                 TeacherName = rate.TeacherProfile is null
                     ? "All teachers (default)"
                     : $"{rate.TeacherProfile.User.FirstName} {rate.TeacherProfile.User.LastName}".Trim(),
-                RatePerSession = rate.RatePerSession,
+                RatePerMinute = rate.RatePerMinute,
                 TeacherNoShowPenaltyPercent = rate.TeacherNoShowPenaltyPercent,
                 EffectiveFrom = rate.EffectiveFrom,
                 IsActive = rate.IsActive,

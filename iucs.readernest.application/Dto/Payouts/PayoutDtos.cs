@@ -12,7 +12,7 @@ namespace iucs.readernest.application.Dto.Payouts
 
         public string TeacherName { get; set; } = null!;
 
-        public decimal RatePerSession { get; set; }
+        public decimal RatePerMinute { get; set; }
 
         public decimal TeacherNoShowPenaltyPercent { get; set; }
 
@@ -28,7 +28,7 @@ namespace iucs.readernest.application.Dto.Payouts
 
         [Required]
         [Range(0, 9_999_999)]
-        public decimal RatePerSession { get; set; }
+        public decimal RatePerMinute { get; set; }
 
         /// <summary>Teacher no-show deduction as % of the session rate (100 = full rate; 0 disables the deduction).</summary>
         [Range(0, 300)]
