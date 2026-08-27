@@ -3021,6 +3021,48 @@ namespace iucs.readernest.tests
             Assert.StartsWith("RCP-", transaction.ReceiptNumber);
         }
 
+        /// <summary>
+        /// Same gap SettleGatewayTransactionAsync had (782d0d0): RecordPaymentAsync -- an admin
+        /// manually recording a payment collected through any method, independent of both the
+        /// gateway webhook and the parent's own cash-intent flow -- only ever notified Admins.
+        /// Method-specific: a Cash recording should read as "cash payment" (matching
+        /// ConfirmCashIntentAsync's own wording and carrying a receipt number), everything else
+        /// as the generic gateway-style confirmation.
+        /// </summary>
+        [Fact]
+        public async Task RecordPayment_NotifiesTheParent_WithMethodSpecificTemplate()
+        {
+            var cashParentUser = await _db.SeedUserAsync($"cash-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var cashParentProfile = new ParentProfile { UserId = cashParentUser.Id };
+            var cardParentUser = await _db.SeedUserAsync($"card-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var cardParentProfile = new ParentProfile { UserId = cardParentUser.Id };
+            _db.Context.AddRange(cashParentProfile, cardParentProfile);
+            _db.Context.PaymentAccounts.Add(new PaymentAccount
+            {
+                Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "test", GatewayAccountRef = "acc-1",
+            });
+            await _db.Context.SaveChangesAsync();
+
+            var billing = CreateBillingService();
+            var cashInvoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = cashParentProfile.Id, DepartmentId = WellKnownDepartments.Phonics,
+                Amount = 500, DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+            var cardInvoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = cardParentProfile.Id, DepartmentId = WellKnownDepartments.Phonics,
+                Amount = 700, DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+            _emailSender.Sent.Clear();
+
+            await billing.RecordPaymentAsync(cashInvoice.Id, new RecordPaymentRequest { Amount = 500, Method = PaymentMethod.Cash });
+            await billing.RecordPaymentAsync(cardInvoice.Id, new RecordPaymentRequest { Amount = 700, Method = PaymentMethod.Card });
+
+            Assert.Contains(_emailSender.Sent, m => m.To == cashParentUser.Email && m.Subject.StartsWith("Cash payment received"));
+            Assert.Contains(_emailSender.Sent, m => m.To == cardParentUser.Email && m.Subject.StartsWith("Payment received"));
+        }
+
         [Fact]
         public async Task CreateInvoice_RoutesThroughParentAccountOverride_WhenSet()
         {

@@ -580,7 +580,7 @@ namespace iucs.readernest.application.Services
             // of ₹1000. SERIALIZABLE (with the invoice re-read fresh inside, not the value
             // fetched before this block started) makes PostgreSQL abort one of two truly
             // concurrent attempts instead of letting them silently clobber each other.
-            var invoice = await _unitOfWork.ExecuteInSerializableTransactionAsync(async ct =>
+            var settled = await _unitOfWork.ExecuteInSerializableTransactionAsync(async ct =>
             {
                 var inv = await _unitOfWork.Repository<Invoice>().GetByIdAsync(invoiceId, ct)
                     ?? throw new NotFoundException(nameof(Invoice), invoiceId);
@@ -607,16 +607,19 @@ namespace iucs.readernest.application.Services
                             ct)
                     : null;
 
+                string receiptNumber;
                 if (pendingIntent is not null)
                 {
+                    receiptNumber = GenerateNumber("RCP");
                     pendingIntent.Amount = request.Amount;
                     pendingIntent.Status = TransactionStatus.Success;
                     pendingIntent.PaidAtUtc = DateTime.UtcNow;
-                    pendingIntent.ReceiptNumber = GenerateNumber("RCP");
+                    pendingIntent.ReceiptNumber = receiptNumber;
                     _unitOfWork.Repository<PaymentTransaction>().Update(pendingIntent);
                 }
                 else
                 {
+                    receiptNumber = GenerateNumber("RCP");
                     await _unitOfWork.Repository<PaymentTransaction>().AddAsync(
                         new PaymentTransaction
                         {
@@ -628,7 +631,7 @@ namespace iucs.readernest.application.Services
                             GatewayTransactionId = request.GatewayTransactionId,
                             Method = request.Method,
                             PaidAtUtc = DateTime.UtcNow,
-                            ReceiptNumber = GenerateNumber("RCP"),
+                            ReceiptNumber = receiptNumber,
                         },
                         ct);
                 }
@@ -638,8 +641,10 @@ namespace iucs.readernest.application.Services
                 await _auditLog.StageAsync(AuditAction.Payment, nameof(Invoice), inv.Id.ToString(),
                     changesJson: $"{{\"amount\":{request.Amount}}}", cancellationToken: ct);
                 await _unitOfWork.SaveChangesAsync(ct);
-                return inv;
+                return (Invoice: inv, ReceiptNumber: receiptNumber);
             }, cancellationToken);
+
+            var invoice = settled.Invoice;
 
             // Outside the transaction: a retried attempt must not re-send this email.
             await NotifyAdminsAsync(
@@ -653,6 +658,49 @@ namespace iucs.readernest.application.Services
                     ["Status"] = invoice.Status.ToString(),
                 },
                 cancellationToken);
+
+            // Caught live: RecordPaymentAsync (an admin manually recording a payment collected
+            // through any method -- bank transfer, cheque, or a cash payment that never went
+            // through the parent's own "I'll pay in cash" intent) only ever notified Admins,
+            // same gap as SettleGatewayTransactionAsync had. Method-specific template so a cash
+            // recording still reads as "cash payment" (and carries the receipt number), matching
+            // what ConfirmCashIntentAsync already sends for that same wording.
+            var parentUser = await _unitOfWork.Repository<ParentProfile>().Query()
+                .Where(p => p.Id == invoice.ParentProfileId)
+                .Select(p => p.User)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (parentUser is not null)
+            {
+                if (request.Method == PaymentMethod.Cash)
+                {
+                    await NotifyUserAsync(
+                        parentUser,
+                        NotificationType.PaymentReceived,
+                        "cash-payment-confirmed-parent",
+                        new Dictionary<string, string>
+                        {
+                            ["Amount"] = request.Amount.ToString("0.00"),
+                            ["Currency"] = invoice.Currency,
+                            ["InvoiceNumber"] = invoice.InvoiceNumber,
+                            ["ReceiptNumber"] = settled.ReceiptNumber,
+                        },
+                        cancellationToken);
+                }
+                else
+                {
+                    await NotifyUserAsync(
+                        parentUser,
+                        NotificationType.PaymentReceived,
+                        "gateway-payment-confirmed-parent",
+                        new Dictionary<string, string>
+                        {
+                            ["Amount"] = request.Amount.ToString("0.00"),
+                            ["Currency"] = invoice.Currency,
+                            ["InvoiceNumber"] = invoice.InvoiceNumber,
+                        },
+                        cancellationToken);
+                }
+            }
 
             return invoice.ToDto();
         }
