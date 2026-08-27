@@ -1,3 +1,4 @@
+using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Payouts;
 using iucs.readernest.application.Mappings;
@@ -13,13 +14,6 @@ namespace iucs.readernest.application.Services
     public class PayoutService : IPayoutService
     {
         private static readonly int[] AllowedDurations = [30, 45, 60];
-
-        /// <summary>
-        /// Below half the scheduled duration is flagged for review; at or above it is not. Loose
-        /// enough that ordinary lateness or a brief reconnect never trips it, tight enough to
-        /// catch a class genuinely cut short.
-        /// </summary>
-        private const double MinAttendanceFractionForNoReview = 0.5;
 
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
@@ -220,28 +214,42 @@ namespace iucs.readernest.application.Services
             // tell them apart (see PayoutItem.RequiresReview's own doc comment). This only flags
             // for review; it never changes the amount itself.
             var requiresReview = false;
-            if (type == PayoutItemType.SessionEarning)
+            if (type == PayoutItemType.SessionEarning && durationMinutes > 0)
             {
                 var attendance = await _unitOfWork.Repository<SessionAttendance>().Query()
                     .Where(a => a.ClassSessionId == session.Id && a.TeacherProfileId == session.TeacherProfileId)
                     .FirstOrDefaultAsync(cancellationToken);
 
-                // LeftAtUtc is only set once the teacher's hub connection actually disconnects,
-                // which for a self-completed class happens AFTER this call (Complete → then the
-                // page unmounts and drops the connection) -- so at this exact moment it is only
-                // populated when someone completes the class well after the teacher already left
-                // (e.g. an admin cleaning up later). Falling back to "now" correctly treats a
-                // still-connected teacher's own Complete click as the real end of their attendance.
                 if (attendance?.JoinedAtUtc is { } joinedAtUtc)
                 {
+                    // LeftAtUtc is only set once the teacher's hub connection actually
+                    // disconnects, which for a self-completed class happens AFTER this call
+                    // (Complete → then the page unmounts and drops the connection) -- so at this
+                    // exact moment it is only populated when someone completes the class well
+                    // after the teacher already left (e.g. an admin cleaning up later). Falling
+                    // back to "now" correctly treats a still-connected teacher's own Complete
+                    // click as the real end of their attendance.
                     var attendedEndUtc = attendance.LeftAtUtc ?? DateTime.UtcNow;
                     var attendedMinutes = (attendedEndUtc - joinedAtUtc).TotalMinutes;
-                    if (durationMinutes > 0 && attendedMinutes < durationMinutes * MinAttendanceFractionForNoReview)
+                    var minFraction = await PayrollSettings.GetMinAttendanceFractionForReviewAsync(_unitOfWork, cancellationToken);
+                    if (attendedMinutes < durationMinutes * minFraction)
                     {
                         requiresReview = true;
                         var attendedNote = $"Teacher attended only {Math.Max(0, attendedMinutes):0} of {durationMinutes} scheduled minutes -- review before finalizing.";
                         note = string.IsNullOrEmpty(note) ? attendedNote : $"{note} ({attendedNote})";
                     }
+                }
+                else
+                {
+                    // No SessionAttendance row at all (or one with no JoinedAtUtc) -- the
+                    // platform has zero evidence the teacher ever actually joined. Completing a
+                    // session doesn't require having joined the live classroom hub first (an
+                    // admin, or the teacher via a direct API call, can mark it done regardless),
+                    // so this is at least as worth a human's attention as attendance that fell
+                    // short -- arguably more, since here there is no attendance at all to weigh.
+                    requiresReview = true;
+                    const string noAttendanceNote = "No attendance was ever recorded for the teacher on this session -- review before finalizing.";
+                    note = string.IsNullOrEmpty(note) ? noAttendanceNote : $"{note} ({noAttendanceNote})";
                 }
             }
 

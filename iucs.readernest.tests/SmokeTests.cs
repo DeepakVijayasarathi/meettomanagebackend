@@ -1,3 +1,4 @@
+using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Academics;
 using iucs.readernest.application.Dto.Admission;
@@ -255,6 +256,37 @@ namespace iucs.readernest.tests
         }
 
         /// <summary>
+        /// Caught live, checking edge cases beyond the "attended some but not enough" case: a
+        /// session can be marked Completed (by an admin, or the teacher via a direct API call)
+        /// with ZERO SessionAttendance ever recorded -- Complete doesn't require having joined
+        /// the live classroom hub at all. That is at least as worth a human's attention as
+        /// attendance that merely fell short; before this test it silently paid the full rate
+        /// with no flag at all, arguably a worse gap than the short-attendance case since here
+        /// there is no evidence of attendance to weigh.
+        /// </summary>
+        [Fact]
+        public async Task Complete_FlagsPayoutItemForReview_WhenNoAttendanceWasEverRecorded()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1); // 45-minute session
+            await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
+            {
+                TeacherProfileId = session.TeacherProfileId,
+                DurationMinutes = 45,
+                RatePerSession = 1000,
+                EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
+            });
+            // Deliberately no SessionAttendance row at all for this session.
+
+            await CreateSessionService().CompleteAsync(session.Id);
+
+            var item = Assert.Single(_db.Context.PayoutItems.ToList());
+            Assert.Equal(PayoutItemType.SessionEarning, item.Type);
+            Assert.Equal(1000m, item.Amount); // still full scheduled-duration rate -- no proration
+            Assert.True(item.RequiresReview);
+            Assert.Contains("No attendance was ever recorded", item.Note);
+        }
+
+        /// <summary>
         /// Caught live: a teacher who joins a live class and leaves after a few minutes was
         /// indistinguishable from one who taught the whole thing -- no-show detection only checks
         /// whether the teacher ever joined at all, and the payout amount is computed purely from
@@ -321,6 +353,48 @@ namespace iucs.readernest.tests
 
             var item = Assert.Single(_db.Context.PayoutItems.ToList());
             Assert.False(item.RequiresReview);
+        }
+
+        /// <summary>
+        /// The 50%/20-minute defaults (PayrollSettings) used to be fixed constants with no way
+        /// for a centre to tune either without a code change and redeploy. Proves the actual
+        /// AppSetting value is read, not just the fallback: 40 of 45 minutes (89%) sits above the
+        /// default 50% threshold (would NOT flag) but below an admin-tightened 90% threshold
+        /// (WOULD flag) -- same attendance, different outcome purely from Settings → Payroll.
+        /// </summary>
+        [Fact]
+        public async Task Complete_UsesConfiguredMinAttendancePercent_InsteadOfHardcodedDefault()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1); // 45-minute session
+            await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
+            {
+                TeacherProfileId = session.TeacherProfileId,
+                DurationMinutes = 45,
+                RatePerSession = 1000,
+                EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
+            });
+            _db.Context.AppSettings.Add(new AppSetting
+            {
+                Category = SettingCategory.General,
+                Key = PayrollSettings.MinAttendancePercentForReviewKey,
+                Value = "90",
+            });
+            var joinedAt = DateTime.UtcNow.AddMinutes(-40);
+            _db.Context.SessionAttendances.Add(new SessionAttendance
+            {
+                ClassSessionId = session.Id,
+                ParticipantType = ParticipantType.Teacher,
+                TeacherProfileId = session.TeacherProfileId,
+                Status = AttendanceStatus.Present,
+                JoinedAtUtc = joinedAt,
+                LeftAtUtc = joinedAt.AddMinutes(40), // 40 of 45 = 89%, below a 90% configured threshold
+            });
+            await _db.Context.SaveChangesAsync();
+
+            await CreateSessionService().CompleteAsync(session.Id);
+
+            var item = Assert.Single(_db.Context.PayoutItems.ToList());
+            Assert.True(item.RequiresReview);
         }
 
         /// <summary>
@@ -1868,6 +1942,7 @@ namespace iucs.readernest.tests
                 RatePerSession = 900,
                 EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
             });
+            await SeedFullTeacherAttendanceAsync(session);
             await CreateSessionService().CompleteAsync(session.Id); // accrues the earning
             var payout = await _db.Context.Payouts.FirstAsync();
             _db.Context.ChangeTracker.Clear(); // fresh request scope
@@ -4362,6 +4437,7 @@ namespace iucs.readernest.tests
             {
                 DurationMinutes = 45, RatePerSession = 500, EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
             });
+            await SeedFullTeacherAttendanceAsync(session);
             await CreateSessionService().CompleteAsync(session.Id, new CompleteSessionRequest());
             var payout = await _db.Context.Payouts.AsNoTracking().FirstAsync();
 
@@ -4948,6 +5024,27 @@ namespace iucs.readernest.tests
             // (an unrelated teacher, a parent) overwrite this after seeding.
             _db.CurrentUser.UserId = teacherUser.Id;
             return (batch, course, session);
+        }
+
+        /// <summary>
+        /// For tests whose own concern is downstream of accrual (finalize, mark-paid, ...) and
+        /// just need CompleteAsync to accrue a plain, unflagged SessionEarning -- without this,
+        /// completing a seeded session with no SessionAttendance row trips the "no attendance was
+        /// ever recorded" review flag (see PayoutService.AccrueForSessionAsync), which is correct
+        /// behavior but not what these tests are about.
+        /// </summary>
+        private async Task SeedFullTeacherAttendanceAsync(ClassSession session)
+        {
+            _db.Context.SessionAttendances.Add(new SessionAttendance
+            {
+                ClassSessionId = session.Id,
+                ParticipantType = ParticipantType.Teacher,
+                TeacherProfileId = session.TeacherProfileId,
+                Status = AttendanceStatus.Present,
+                JoinedAtUtc = session.ScheduledStartAtUtc,
+                LeftAtUtc = session.ScheduledEndAtUtc,
+            });
+            await _db.Context.SaveChangesAsync();
         }
 
         // ---- QA round 7: regression coverage ----
