@@ -1529,6 +1529,21 @@ namespace iucs.readernest.application.Services
             var saved = await _unitOfWork.Repository<Refund>().Query()
                 .Include(r => r.PaymentTransaction).ThenInclude(t => t.Invoice)
                 .FirstAsync(r => r.Id == refundId, cancellationToken);
+
+            // Caught live: nothing told billing staff a refund needed review at all -- the only
+            // way to notice one was requested was to happen to check Billing & Finance → Refunds.
+            await NotifyBillingStaffAsync(
+                NotificationType.PaymentReceived,
+                "refund-requested-billing-staff",
+                new Dictionary<string, string>
+                {
+                    ["Amount"] = saved.Amount.ToString("0.00"),
+                    ["Currency"] = saved.PaymentTransaction.Currency,
+                    ["InvoiceNumber"] = saved.PaymentTransaction.Invoice?.InvoiceNumber ?? "—",
+                    ["Reason"] = saved.Reason,
+                },
+                cancellationToken);
+
             return ToDto(saved);
         }
 
@@ -1644,6 +1659,31 @@ namespace iucs.readernest.application.Services
             var saved = await _unitOfWork.Repository<Refund>().Query()
                 .Include(r => r.PaymentTransaction).ThenInclude(t => t.Invoice)
                 .FirstAsync(r => r.Id == id, cancellationToken);
+
+            // Caught live: the parent learned nothing either way -- not that their refund was
+            // rejected, and not that an approved one had actually been paid out.
+            var refundParentUser = saved.PaymentTransaction.Invoice is { } refundInvoice
+                ? await _unitOfWork.Repository<ParentProfile>().Query()
+                    .Where(p => p.Id == refundInvoice.ParentProfileId)
+                    .Select(p => p.User)
+                    .FirstOrDefaultAsync(cancellationToken)
+                : null;
+            if (refundParentUser is not null)
+            {
+                var refundTokens = new Dictionary<string, string>
+                {
+                    ["Amount"] = saved.Amount.ToString("0.00"),
+                    ["Currency"] = saved.PaymentTransaction.Currency,
+                    ["InvoiceNumber"] = saved.PaymentTransaction.Invoice!.InvoiceNumber,
+                };
+                await NotifyUserAsync(
+                    refundParentUser,
+                    NotificationType.PaymentReceived,
+                    saved.Status == RefundStatus.Rejected ? "refund-rejected-parent" : "refund-processed-parent",
+                    refundTokens,
+                    cancellationToken);
+            }
+
             return ToDto(saved);
         }
 

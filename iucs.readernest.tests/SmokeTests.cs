@@ -1469,6 +1469,47 @@ namespace iucs.readernest.tests
             Assert.Equal(RefundStatus.Processed, (await _db.Context.Refunds.FirstAsync(r => r.Id == refund.Id)).Status);
         }
 
+        /// <summary>
+        /// Caught live: the entire refund lifecycle had zero communication -- billing staff had no
+        /// way to notice a refund needed review short of checking the screen, and the parent never
+        /// learned whether theirs was rejected or actually paid out.
+        /// </summary>
+        [Fact]
+        public async Task Refund_NotifiesBillingStaffOnRequest_AndParentOnRejectOrProcess()
+        {
+            var adminUser = await _db.SeedUserAsync($"admin-{Guid.NewGuid():N}@test.com", "x", UserRole.Admin);
+            var parentUser = await _db.SeedUserAsync($"ref-notify-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            _db.Context.AddRange(parentProfile,
+                new PaymentAccount { Name = "P", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "t", GatewayAccountRef = "p" });
+            await _db.Context.SaveChangesAsync();
+            var billing = CreateBillingService();
+            var invoice = await billing.CreateInvoiceAsync(new CreateInvoiceRequest
+            {
+                ParentProfileId = parentProfile.Id, DepartmentId = WellKnownDepartments.Phonics, Amount = 1000,
+                DueDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7)),
+            });
+            await billing.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 1000 });
+            var txn = await _db.Context.PaymentTransactions.FirstAsync();
+            _emailSender.Sent.Clear();
+
+            var toReject = await billing.RequestRefundAsync(new RequestRefundRequest
+            {
+                PaymentTransactionId = txn.Id, Amount = 100, Reason = "Wrong course",
+            });
+            Assert.Contains(_emailSender.Sent, m => m.To == adminUser.Email && m.Subject.StartsWith("Refund requested"));
+
+            await billing.ReviewRefundAsync(toReject.Id, new ReviewRefundRequest { Approve = false });
+            Assert.Contains(_emailSender.Sent, m => m.To == parentUser.Email && m.Subject.Contains("not approved"));
+
+            var toApprove = await billing.RequestRefundAsync(new RequestRefundRequest
+            {
+                PaymentTransactionId = txn.Id, Amount = 150, Reason = "Overcharged",
+            });
+            await billing.ReviewRefundAsync(toApprove.Id, new ReviewRefundRequest { Approve = true });
+            Assert.Contains(_emailSender.Sent, m => m.To == parentUser.Email && m.Subject.StartsWith("Your refund has been processed"));
+        }
+
         /// <summary>A paid invoice with a Requested refund on its transaction, ready to review.</summary>
         private async Task<RefundDto> SeedRequestedRefundAsync(FakePaymentGateway gateway)
         {

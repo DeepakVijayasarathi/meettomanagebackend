@@ -291,6 +291,39 @@ namespace iucs.readernest.application.Common
                     """,
                     "Amount", "Currency", "InvoiceNumber", "ReceiptNumber"),
 
+                // Caught live: the entire refund lifecycle (request -> approve/reject -> process)
+                // had zero communication at all -- neither billing staff learning a refund needs
+                // review, nor the parent ever learning whether theirs was rejected or actually
+                // paid out. No dedicated NotificationType exists for refunds; PaymentReceived is
+                // reused since a refund is the same category of money-movement event.
+                New("refund-requested-billing-staff", "Refund Requested (Billing Staff)",
+                    "Sent to Admin/Admission Team when a refund is requested against a payment.",
+                    NotificationType.PaymentReceived, "Refund requested — invoice {{InvoiceNumber}}",
+                    """
+                    <p>A refund of <strong>{{Amount}} {{Currency}}</strong> was requested against invoice {{InvoiceNumber}}.</p>
+                    <p>Reason given: {{Reason}}</p>
+                    <p>Review it in Billing &amp; Finance → Refunds.</p>
+                    """,
+                    "Amount", "Currency", "InvoiceNumber", "Reason"),
+
+                New("refund-rejected-parent", "Refund Rejected (Parent)",
+                    "Sent to the parent when their refund request is rejected.",
+                    NotificationType.PaymentReceived, "Your refund request was not approved — invoice {{InvoiceNumber}}",
+                    """
+                    <p>Your refund request of <strong>{{Amount}} {{Currency}}</strong> for invoice {{InvoiceNumber}} was not approved.</p>
+                    <p>Contact the centre if you have questions about this decision.</p>
+                    """,
+                    "Amount", "Currency", "InvoiceNumber"),
+
+                New("refund-processed-parent", "Refund Processed (Parent)",
+                    "Sent to the parent once their approved refund is actually paid out.",
+                    NotificationType.PaymentReceived, "Your refund has been processed — invoice {{InvoiceNumber}}",
+                    """
+                    <p>Your refund of <strong>{{Amount}} {{Currency}}</strong> for invoice {{InvoiceNumber}} has been processed.</p>
+                    <p>It may take a few business days to reflect in your original payment method.</p>
+                    """,
+                    "Amount", "Currency", "InvoiceNumber"),
+
                 // Caught live: SettleGatewayTransactionAsync (the real Razorpay/Cashfree webhook
                 // path -- what actually fires when a parent pays online) only ever notified
                 // Admins (payment-received-admin), never the parent themselves. A parent paying
