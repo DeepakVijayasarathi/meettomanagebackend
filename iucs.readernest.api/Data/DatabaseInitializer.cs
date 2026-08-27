@@ -62,6 +62,7 @@ namespace iucs.readernest.api.Data
             await EnsureProgressReportsMenuAsync(context);
             await EnsureStoreInquiriesMenuAsync(context);
             await EnsureParentRecordingsMenuAsync(context);
+            await EnsureChatbotMenusAsync(context);
             await BackfillPlainTextNotificationBodiesAsync(context);
 
             await context.SaveChangesAsync();
@@ -484,12 +485,14 @@ namespace iucs.readernest.api.Data
             ("admin", "Insights", "Bulk Email", "/admin/bulk-email", "Mail", PermissionModule.Communication),
             ("admin", "Insights", "Email Templates", "/admin/email-templates", "FileText", PermissionModule.Communication),
             ("admin", "Insights", "Progress Reports", "/admin/progress-reports", "ScrollText", PermissionModule.Communication),
+            ("admin", "Insights", "Doubt Chatbot", "/admin/chatbot", "MessageCircleQuestion", PermissionModule.Communication),
             ("admin", "System", "Settings & Branding", "/admin/settings", "Settings", PermissionModule.Settings),
             ("teacher", null, "Dashboard", "/teacher", "LayoutDashboard", null),
             ("teacher", "Teaching", "My Classes", "/teacher/classes", "CalendarClock", PermissionModule.SessionCalendarManagement),
             ("teacher", "Teaching", "Live Classroom", "/teacher/live/s-1", "Video", PermissionModule.SessionCalendarManagement),
             ("teacher", "Teaching", "Attendance & Records", "/teacher/attendance", "ClipboardList", PermissionModule.SessionCalendarManagement),
             ("teacher", "Teaching", "Demo Feedback", "/teacher/demo-feedback", "ClipboardCheck", PermissionModule.SessionCalendarManagement),
+            ("teacher", "Teaching", "Student Doubts", "/teacher/doubts", "MessageCircleQuestion", PermissionModule.Communication),
             ("teacher", "My Account", "Leave Management", "/teacher/leave", "CalendarOff", PermissionModule.LeaveManagement),
             ("teacher", "My Account", "My Payout", "/teacher/payout", "Banknote", PermissionModule.Payouts),
             ("teacher", "My Account", "Resources", "/teacher/resources", "FolderOpen", PermissionModule.ContentAccessManagement),
@@ -1031,6 +1034,54 @@ namespace iucs.readernest.api.Data
                 IsActive = true,
                 RequiredModule = PermissionModule.Communication,
             });
+        }
+
+        /// <summary>
+        /// Retrofits the Admin "Doubt Chatbot" and Teacher "Student Doubts" menu items into a
+        /// database seeded before the chatbot feature existed (mirrors EnsureProgressReportsMenuAsync).
+        /// Fresh databases already get both from MenuSeedItems().
+        /// </summary>
+        private static async Task EnsureChatbotMenusAsync(ReaderNestDbContext context)
+        {
+            if (!context.MenuItems.Local.Any(m => m.Portal == "admin" && m.Path == "/admin/chatbot") &&
+                !await context.MenuItems.AnyAsync(m => m.Portal == "admin" && m.Path == "/admin/chatbot"))
+            {
+                var progressReports = await context.MenuItems
+                    .FirstOrDefaultAsync(m => m.Portal == "admin" && m.Path == "/admin/progress-reports");
+
+                context.MenuItems.Add(new MenuItem
+                {
+                    Portal = "admin",
+                    Section = "Insights",
+                    SectionOrder = progressReports?.SectionOrder ?? 4,
+                    Label = "Doubt Chatbot",
+                    Path = "/admin/chatbot",
+                    Icon = "MessageCircleQuestion",
+                    SortOrder = (progressReports?.SortOrder ?? 0) + 1,
+                    IsActive = true,
+                    RequiredModule = PermissionModule.Communication,
+                });
+            }
+
+            if (!context.MenuItems.Local.Any(m => m.Portal == "teacher" && m.Path == "/teacher/doubts") &&
+                !await context.MenuItems.AnyAsync(m => m.Portal == "teacher" && m.Path == "/teacher/doubts"))
+            {
+                var demoFeedback = await context.MenuItems
+                    .FirstOrDefaultAsync(m => m.Portal == "teacher" && m.Path == "/teacher/demo-feedback");
+
+                context.MenuItems.Add(new MenuItem
+                {
+                    Portal = "teacher",
+                    Section = "Teaching",
+                    SectionOrder = demoFeedback?.SectionOrder ?? 0,
+                    Label = "Student Doubts",
+                    Path = "/teacher/doubts",
+                    Icon = "MessageCircleQuestion",
+                    SortOrder = (demoFeedback?.SortOrder ?? 0) + 1,
+                    IsActive = true,
+                    RequiredModule = PermissionModule.Communication,
+                });
+            }
         }
 
         /// <summary>

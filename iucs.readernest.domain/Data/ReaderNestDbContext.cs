@@ -90,6 +90,11 @@ namespace iucs.readernest.domain.Data
         public DbSet<ProgressReport> ProgressReports => Set<ProgressReport>();
         public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
+        // "Ask a Doubt" chatbot
+        public DbSet<ChatFaq> ChatFaqs => Set<ChatFaq>();
+        public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
+        public DbSet<ChatEscalation> ChatEscalations => Set<ChatEscalation>();
+
         // Notes
         public DbSet<FloatingNote> FloatingNotes => Set<FloatingNote>();
 
