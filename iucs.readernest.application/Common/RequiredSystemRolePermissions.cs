@@ -17,6 +17,10 @@ namespace iucs.readernest.application.Common
         public static readonly IReadOnlyList<RequiredGrant> All =
         [
             new("teacher", PermissionModule.Payouts, View: true),
+            // Lets a teacher see and resolve doubts the "Ask a Doubt" chatbot escalated —
+            // Communication already gates Progress Reports/Email Templates for the same module.
+            new("teacher", PermissionModule.Communication, View: true, Edit: true),
+            new("coordinator", PermissionModule.Communication, View: true, Edit: true),
             new("parent", PermissionModule.SessionCalendarManagement, View: true),
             new("parent", PermissionModule.ContentAccessManagement, View: true),
             new("parent", PermissionModule.BillingFinance, View: true),
