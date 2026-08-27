@@ -41,6 +41,8 @@ namespace iucs.readernest.application.Mappings
                     {
                         Id = i.Id,
                         ClassSessionId = i.ClassSessionId,
+                        ClassName = i.ClassSession?.Batch?.Name,
+                        SessionDate = i.ClassSession?.ScheduledStartAtUtc,
                         Type = i.Type,
                         Amount = i.Amount,
                         Note = i.Note,
