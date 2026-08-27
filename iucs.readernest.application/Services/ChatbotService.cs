@@ -86,14 +86,33 @@ namespace iucs.readernest.application.Services
                 throw new DomainValidationException("Enter a question to ask.");
             }
 
+            var userMessage = new ChatMessage { UserId = userId, Sender = ChatMessageSender.User, Text = question };
+            await _unitOfWork.Repository<ChatMessage>().AddAsync(userMessage, cancellationToken);
+
+            // Smalltalk short-circuits before FAQ matching/escalation entirely — "hi" is not a
+            // doubt, and routing it to a teacher (which used to happen, since no FAQ token
+            // overlaps with a greeting) just spammed the escalation queue with non-questions.
+            var smallTalkReply = FindSmallTalkReply(question);
+            if (smallTalkReply is not null)
+            {
+                var greetingMessage = new ChatMessage { UserId = userId, Sender = ChatMessageSender.Bot, Text = smallTalkReply };
+                await _unitOfWork.Repository<ChatMessage>().AddAsync(greetingMessage, cancellationToken);
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+                return new AskChatbotResponse
+                {
+                    UserMessage = ToDto(userMessage),
+                    BotMessage = ToDto(greetingMessage),
+                    Matched = true,
+                    Escalated = false,
+                };
+            }
+
             var faqs = await _unitOfWork.Repository<ChatFaq>().Query()
                 .Where(f => f.IsActive)
                 .ToListAsync(cancellationToken);
 
             var match = FindBestMatch(question, faqs);
-
-            var userMessage = new ChatMessage { UserId = userId, Sender = ChatMessageSender.User, Text = question };
-            await _unitOfWork.Repository<ChatMessage>().AddAsync(userMessage, cancellationToken);
 
             var escalated = match is null;
             var botMessage = new ChatMessage
@@ -240,6 +259,49 @@ namespace iucs.readernest.application.Services
             faq.Category = string.IsNullOrWhiteSpace(request.Category) ? null : request.Category.Trim();
             faq.IsActive = request.IsActive;
             faq.SortOrder = request.SortOrder;
+        }
+
+        /// <summary>Checked in order; the first category whose trigger the question starts with wins.</summary>
+        private static readonly (string[] Triggers, string Reply)[] SmallTalkReplies =
+        [
+            (["hi", "hii", "hey", "hello", "helo", "hlo", "yo", "good morning", "good afternoon", "good evening"],
+             "Hi! How can I help with your doubt today?"),
+            (["thanks", "thank you", "thankyou", "thx", "ty"],
+             "You're welcome! Let me know if you have any other doubts."),
+            (["bye", "goodbye", "good bye", "see you", "cya"],
+             "Bye! Come back anytime you have a doubt."),
+            (["how are you", "how r u", "hows it going", "how's it going"],
+             "I'm doing well, thanks for asking! What doubt can I help you with?"),
+            (["help", "what can you do", "who are you"],
+             "I can answer common questions about classes, fees, login, recordings, attendance and more. If I don't know something, I'll forward it to a teacher so they can help directly."),
+        ];
+
+        /// <summary>
+        /// Recognizes a short greeting/smalltalk turn so it gets a friendly reply instead of
+        /// being treated as an unanswerable doubt and escalated to a teacher. Deliberately
+        /// conservative: only short inputs qualify, so "hi, how do I pay my fees?" still falls
+        /// through to real FAQ matching rather than being swallowed by the "hi" trigger.
+        /// </summary>
+        private static string? FindSmallTalkReply(string question)
+        {
+            var normalized = question.Trim().ToLowerInvariant().TrimEnd('!', '?', '.', ',');
+            if (normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length > 4)
+            {
+                return null;
+            }
+
+            foreach (var (triggers, reply) in SmallTalkReplies)
+            {
+                foreach (var trigger in triggers)
+                {
+                    if (normalized == trigger || normalized.StartsWith(trigger + " ", StringComparison.Ordinal))
+                    {
+                        return reply;
+                    }
+                }
+            }
+
+            return null;
         }
 
         /// <summary>

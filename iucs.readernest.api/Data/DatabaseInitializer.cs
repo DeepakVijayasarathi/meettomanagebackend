@@ -64,6 +64,7 @@ namespace iucs.readernest.api.Data
             await EnsureParentRecordingsMenuAsync(context);
             await EnsureChatbotMenusAsync(context);
             await SeedChatFaqsAsync(context);
+            await EnsureAdditionalChatFaqsAsync(context);
             await BackfillPlainTextNotificationBodiesAsync(context);
 
             await context.SaveChangesAsync();
@@ -1138,6 +1139,71 @@ namespace iucs.readernest.api.Data
                     Category = category,
                     IsActive = true,
                     SortOrder = i,
+                });
+            }
+        }
+
+        /// <summary>
+        /// Widens the chatbot's free, rule-based coverage with more common doubts, added after
+        /// the original starter set shipped. SeedChatFaqsAsync only ever runs once (it bails
+        /// the instant any ChatFaq row exists), so new starter entries need their own
+        /// idempotent, per-question backfill here instead of just growing that seed array.
+        /// </summary>
+        private static async Task EnsureAdditionalChatFaqsAsync(ReaderNestDbContext context)
+        {
+            (string Question, string Answer, string Keywords, string Category)[] additions =
+            [
+                ("My audio or video isn't working during class",
+                 "Refresh the page and rejoin first — that fixes it most of the time. Otherwise check your browser has given the site camera/microphone permission, and that no other app (Zoom, another tab) is already using your camera or mic.",
+                 "audio, video, mic, microphone, camera, sound, hear, see, not working", "Classes"),
+                ("How do I use the whiteboard in class?",
+                 "The whiteboard opens automatically inside the live classroom. Your teacher controls who can draw — if you can't, ask them to give you board access during the session.",
+                 "whiteboard, draw, board, write", "Classes"),
+                ("How does the quiz during class work?",
+                 "When a teacher launches a live quiz, it pops up automatically in your classroom window — just pick your answer before time runs out. There's nothing to open separately.",
+                 "quiz, test, question, live quiz", "Classes"),
+                ("Can I get a refund if I cancel?",
+                 "Refund and cancellation requests are reviewed case-by-case — raise it here or with Admission and a teacher/admin will get back to you with the details for your enrollment.",
+                 "refund, cancel, cancellation, money back", "Billing"),
+                ("How do I add another child to my account?",
+                 "Use Add Child from your parent portal menu to enroll a sibling under the same account — you'll see both children from the same login afterward.",
+                 "add child, sibling, another child, second child, enroll", "Account"),
+                ("How do I request leave as a teacher?",
+                 "Use Leave Management in your portal menu to submit a request with your dates — your coordinator gets notified and approves or declines it there.",
+                 "leave, time off, absence, sick, vacation", "Account"),
+                ("When will I get my payout?",
+                 "Check My Payout in your portal menu for the schedule and status of your upcoming payout — it's calculated from your completed, attendance-confirmed classes.",
+                 "payout, salary, payment, earn, earnings, paid", "Billing"),
+                ("What if my internet disconnects during class?",
+                 "Just rejoin the same class link as soon as you're back online — the session keeps running, and you'll rejoin right where it is. Recordings are also available afterward if you miss too much.",
+                 "internet, disconnect, connection, dropped, lost, reconnect", "Classes"),
+            ];
+
+            var existingQuestions = (context.ChatFaqs.Local.Count > 0 ? context.ChatFaqs.Local.AsEnumerable() : [])
+                .Concat(await context.ChatFaqs.ToListAsync())
+                .Select(f => f.Question)
+                .ToHashSet();
+
+            var nextSortOrder = (context.ChatFaqs.Local.Count > 0 ? context.ChatFaqs.Local.Max(f => (int?)f.SortOrder) : null)
+                ?? await context.ChatFaqs.MaxAsync(f => (int?)f.SortOrder)
+                ?? -1;
+            nextSortOrder++;
+
+            foreach (var (question, answer, keywords, category) in additions)
+            {
+                if (existingQuestions.Contains(question))
+                {
+                    continue;
+                }
+
+                context.ChatFaqs.Add(new ChatFaq
+                {
+                    Question = question,
+                    Answer = answer,
+                    Keywords = keywords,
+                    Category = category,
+                    IsActive = true,
+                    SortOrder = nextSortOrder++,
                 });
             }
         }
