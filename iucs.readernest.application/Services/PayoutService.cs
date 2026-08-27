@@ -13,8 +13,6 @@ namespace iucs.readernest.application.Services
 {
     public class PayoutService : IPayoutService
     {
-        private static readonly int[] AllowedDurations = [30, 45, 60];
-
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
         private readonly INotificationService _notificationService;
@@ -47,9 +45,9 @@ namespace iucs.readernest.application.Services
 
         public async Task<PayoutRateDto> SetRateAsync(SavePayoutRateRequest request, CancellationToken cancellationToken = default)
         {
-            if (!AllowedDurations.Contains(request.DurationMinutes))
+            if (request.DurationMinutes <= 0)
             {
-                throw new DomainValidationException("Duration must be 30, 45 or 60 minutes.");
+                throw new DomainValidationException("Duration must be a positive number of minutes.");
             }
 
             // A rate card drives real money with no downstream sanity check, so the bounds are

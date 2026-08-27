@@ -15,8 +15,6 @@ namespace iucs.readernest.application.Services
 {
     public class CourseService : ICourseService
     {
-        private static readonly int[] AllowedDurations = [30, 45, 60];
-
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
         private readonly IBulkFileReader _bulkFileReader;
@@ -341,9 +339,9 @@ namespace iucs.readernest.application.Services
         private async Task<(CourseCategory Category, Department Department)> ValidateAsync(
             SaveCourseRequest request, CancellationToken cancellationToken)
         {
-            if (!AllowedDurations.Contains(request.DurationMinutes))
+            if (request.DurationMinutes <= 0)
             {
-                throw new DomainValidationException("Class duration must be 30, 45 or 60 minutes.");
+                throw new DomainValidationException("Class duration must be a positive number of minutes.");
             }
 
             var department = await _unitOfWork.Repository<Department>().GetByIdAsync(request.DepartmentId, cancellationToken)

@@ -2795,7 +2795,7 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
-        public async Task CreateCourse_RejectsInvalidDuration()
+        public async Task CreateCourse_RejectsNonPositiveDuration_ButAllowsAnyCustomLength()
         {
             var courseService = CreateCourseService();
             var category = await courseService.CreateCategoryAsync(
@@ -2806,11 +2806,25 @@ namespace iucs.readernest.tests
                 CourseCategoryId = category.Id,
                 Name = "Bad",
                 Type = CourseType.Group,
-                DurationMinutes = 50,
+                DurationMinutes = 0,
                 Price = 1,
                 TotalSessions = 1,
                 DepartmentId = WellKnownDepartments.Phonics,
             }));
+
+            // Regression: duration used to be locked to exactly 30/45/60 -- a centre running
+            // shorter (10-minute) or longer (90-minute) classes had no way to configure that.
+            var course = await courseService.CreateAsync(new SaveCourseRequest
+            {
+                CourseCategoryId = category.Id,
+                Name = "Custom Length",
+                Type = CourseType.Group,
+                DurationMinutes = 50,
+                Price = 1,
+                TotalSessions = 1,
+                DepartmentId = WellKnownDepartments.Phonics,
+            });
+            Assert.Equal(50, course.DurationMinutes);
         }
 
         /// <summary>
@@ -5207,6 +5221,65 @@ namespace iucs.readernest.tests
                 DurationMinutes = 60, RatePerSession = 500, TeacherNoShowPenaltyPercent = 150, EffectiveFrom = effectiveFrom,
             });
             Assert.Equal(150m, punitive.TeacherNoShowPenaltyPercent);
+        }
+
+        [Fact]
+        public async Task PayoutRate_RejectsNonPositiveDuration_ButAllowsAnyCustomLength()
+        {
+            var payouts = CreatePayoutService();
+            var effectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => payouts.SetRateAsync(new SavePayoutRateRequest
+            {
+                DurationMinutes = 0, RatePerSession = 500, EffectiveFrom = effectiveFrom,
+            }));
+
+            // Regression: rate-card durations used to be locked to exactly 30/45/60, so a
+            // session scheduled at any other length (now freely configurable) accrued a silent
+            // ₹0 payout with no rate to match against.
+            var saved = await payouts.SetRateAsync(new SavePayoutRateRequest
+            {
+                DurationMinutes = 10, RatePerSession = 250, EffectiveFrom = effectiveFrom,
+            });
+            Assert.Equal(10, saved.DurationMinutes);
+            Assert.Equal(250m, saved.RatePerSession);
+        }
+
+        [Fact]
+        public async Task CompletingACustomDurationSession_AccruesTheMatchingRate_NotAZeroPayout()
+        {
+            // End-to-end: a session scheduled at a length that used to be impossible to configure
+            // (50 minutes, not 30/45/60) must still price correctly once a rate exists for it --
+            // AccrueForSessionAsync matches by exact duration, so this is the actual proof the
+            // "no hardcoded duration list" fix doesn't leave real sessions paying ₹0.
+            var teacherUser = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var teacher = new TeacherProfile { UserId = teacherUser.Id };
+            var category = new CourseCategory { Name = $"Cat-{Guid.NewGuid():N}", DepartmentId = WellKnownDepartments.Phonics };
+            var course = new Course
+            {
+                CourseCategory = category, Name = "Custom Length Course", Type = CourseType.Group,
+                DurationMinutes = 50, Price = 100, TotalSessions = 1, DepartmentId = WellKnownDepartments.Phonics,
+            };
+            var batch = new Batch { Course = course, TeacherProfile = teacher, Name = "Batch", Capacity = 5 };
+            var session = new ClassSession
+            {
+                Batch = batch, TeacherProfile = teacher,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(1),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(1).AddMinutes(50),
+            };
+            _db.Context.AddRange(teacher, category, course, batch, session);
+            await _db.Context.SaveChangesAsync();
+            _db.CurrentUser.UserId = teacherUser.Id;
+
+            await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
+            {
+                DurationMinutes = 50, RatePerSession = 750, EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
+            });
+            await SeedFullTeacherAttendanceAsync(session);
+            await CreateSessionService().CompleteAsync(session.Id, new CompleteSessionRequest());
+
+            var item = await _db.Context.PayoutItems.AsNoTracking().FirstAsync(i => i.ClassSessionId == session.Id);
+            Assert.Equal(750m, item.Amount);
         }
 
         private static RecordEngagementRequest EngagementRequest() => new()

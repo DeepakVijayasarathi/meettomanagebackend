@@ -46,6 +46,7 @@ namespace iucs.readernest.application.Mappings
                 Id = batch.Id,
                 CourseId = batch.CourseId,
                 CourseName = batch.Course?.Name ?? string.Empty,
+                CourseDurationMinutes = batch.Course?.DurationMinutes ?? 0,
                 TeacherProfileId = batch.TeacherProfileId,
                 TeacherName = batch.TeacherProfile?.User is { } u ? $"{u.FirstName} {u.LastName}" : string.Empty,
                 Name = batch.Name,

@@ -28,7 +28,7 @@ namespace iucs.readernest.application.Dto.Payouts
         /// <summary>Omit (null) to save the centre-wide default rate card that pays teachers without their own rates.</summary>
         public Guid? TeacherProfileId { get; set; }
 
-        /// <summary>Allowed values: 30, 45 or 60 (validated in the service).</summary>
+        /// <summary>Any positive number of minutes (validated in the service) -- must match a real session length exactly to price it.</summary>
         [Required]
         public int DurationMinutes { get; set; }
 

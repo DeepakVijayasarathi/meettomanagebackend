@@ -18,7 +18,7 @@ namespace iucs.readernest.domain.Entities.Academics
 
         public CourseType Type { get; set; }
 
-        /// <summary>Configured class length; business rule allows 30, 45 or 60 minutes.</summary>
+        /// <summary>Configured class length in minutes; any positive value is allowed.</summary>
         public int DurationMinutes { get; set; }
 
         public decimal Price { get; set; }
