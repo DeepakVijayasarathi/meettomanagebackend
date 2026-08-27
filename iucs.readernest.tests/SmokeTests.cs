@@ -3117,6 +3117,10 @@ namespace iucs.readernest.tests
             var storedInvoice = await _db.Context.Invoices.FirstAsync(i => i.Id == invoice.Id);
             Assert.Equal(InvoiceStatus.Paid, storedInvoice.Status);
             Assert.Equal(800, storedInvoice.AmountPaid);
+
+            // Caught live: this used to only notify Admins -- a parent paying online got nothing
+            // from the platform confirming it. Also proves the retry above didn't double-send.
+            Assert.Single(_emailSender.Sent, m => m.To == parentUser.Email && m.Subject.StartsWith("Payment received"));
             var settled = await _db.Context.PaymentTransactions.SingleAsync(t => t.InvoiceId == invoice.Id);
             Assert.Equal(TransactionStatus.Success, settled.Status);
             Assert.StartsWith("RCP-", settled.ReceiptNumber);

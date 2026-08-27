@@ -1116,6 +1116,29 @@ namespace iucs.readernest.application.Services
                     ["Status"] = settled.Value.Invoice.Status.ToString(),
                 },
                 cancellationToken);
+
+            // Caught live: this webhook path (the real Razorpay/Cashfree settlement -- what
+            // actually fires when a parent pays online) used to only notify Admins. A parent
+            // paying by cash gets ConfirmCashIntentAsync's own confirmation email the moment
+            // staff confirm it; a parent paying online got nothing from the platform at all.
+            var parentUser = await _unitOfWork.Repository<ParentProfile>().Query()
+                .Where(p => p.Id == settled.Value.Invoice.ParentProfileId)
+                .Select(p => p.User)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (parentUser is not null)
+            {
+                await NotifyUserAsync(
+                    parentUser,
+                    NotificationType.PaymentReceived,
+                    "gateway-payment-confirmed-parent",
+                    new Dictionary<string, string>
+                    {
+                        ["Amount"] = settled.Value.Amount.ToString("0.00"),
+                        ["Currency"] = settled.Value.Invoice.Currency,
+                        ["InvoiceNumber"] = settled.Value.Invoice.InvoiceNumber,
+                    },
+                    cancellationToken);
+            }
         }
 
         public async Task<IReadOnlyList<CashIntentDto>> ListPendingCashIntentsAsync(CancellationToken cancellationToken = default)

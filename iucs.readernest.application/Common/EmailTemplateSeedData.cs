@@ -291,11 +291,26 @@ namespace iucs.readernest.application.Common
                     """,
                     "Amount", "Currency", "InvoiceNumber", "ReceiptNumber"),
 
+                // Caught live: SettleGatewayTransactionAsync (the real Razorpay/Cashfree webhook
+                // path -- what actually fires when a parent pays online) only ever notified
+                // Admins (payment-received-admin), never the parent themselves. A parent paying
+                // by cash got a confirmation email the moment staff confirmed it; a parent paying
+                // online got nothing from the platform at all, only whatever receipt the gateway
+                // itself happens to send under its own name.
+                New("gateway-payment-confirmed-parent", "Online Payment Confirmed (Parent)",
+                    "Sent to the parent once their online payment (Razorpay/Cashfree) settles.",
+                    NotificationType.PaymentReceived, "Payment received — invoice {{InvoiceNumber}}",
+                    """
+                    <p>We have received your payment of <strong>{{Amount}} {{Currency}}</strong> for invoice {{InvoiceNumber}}.</p>
+                    <p>Thank you.</p>
+                    """,
+                    "Amount", "Currency", "InvoiceNumber"),
+
                 New("weekly-kpi-digest", "Weekly KPI Digest (Admin)",
                     "Sent to Admins every Monday with the week's headline KPI numbers.",
                     NotificationType.General, "Weekly KPI digest",
                     """
-                    <p>Weekly Reader Nest KPI digest:</p>
+                    <p>Weekly {{OrgName}} KPI digest:</p>
                     <table style="width:100%;background:#F9FAFB;border-radius:6px;margin:16px 0;">
                       <tr><td style="padding:10px 16px;color:#6B7280;">Students</td><td style="padding:10px 16px;font-weight:600;">{{TotalStudents}} total / {{ActiveStudents}} active</td></tr>
                       <tr><td style="padding:10px 16px;color:#6B7280;">Revenue</td><td style="padding:10px 16px;font-weight:600;">{{RevenueCollected}} collected, {{RevenuePending}} pending</td></tr>
