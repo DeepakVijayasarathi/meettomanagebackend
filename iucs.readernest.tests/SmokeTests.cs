@@ -1857,6 +1857,80 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task RenewSubscription_ReactivatesAnExpiredSubscription_NotJustACancelledOne()
+        {
+            // RenewSubscriptionAsync's guard only checks "not already Active" -- Expired is a
+            // new-to-this-feature FROM-state (set by BillingBackgroundService's validity-days
+            // sweep, never by an explicit cancel action) that deserves its own direct check
+            // rather than trusting it behaves the same as the already-tested Cancelled path.
+            var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var plan = new PackagePlan { Name = "10-Session Pack", BillingType = BillingType.SessionBased, BillingCycle = BillingCycle.OneTime, Price = 5000, ValidityDays = 30 };
+            var account = new PaymentAccount { Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "simulated", GatewayAccountRef = "ph" };
+            _db.Context.AddRange(parentProfile, plan, account);
+            await _db.Context.SaveChangesAsync();
+            var child = new Child { ParentProfileId = parentProfile.Id, FirstName = "Kid", LastName = "One", IsActive = true };
+            _db.Context.Children.Add(child);
+            await _db.Context.SaveChangesAsync();
+            var billing = CreateBillingService();
+            var sub = await billing.CreateSubscriptionAsync(new CreateSubscriptionRequest
+            {
+                ParentProfileId = parentProfile.Id, ChildId = child.Id, PackagePlanId = plan.Id,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-40),
+            });
+            // Simulate exactly what BillingBackgroundService's expiry sweep does to a lapsed
+            // row -- flip Status to Expired and clear NextBillingAtUtc -- without running the
+            // background service itself, same simulate-the-sweep's-outcome pattern the existing
+            // overdue-invoice/suspension tests already use.
+            var tracked = await _db.Context.Subscriptions.FirstAsync(s => s.Id == sub.Id);
+            tracked.Status = SubscriptionStatus.Expired;
+            tracked.NextBillingAtUtc = null;
+            await _db.Context.SaveChangesAsync();
+
+            var renewed = await billing.RenewSubscriptionAsync(sub.Id);
+
+            Assert.Equal(SubscriptionStatus.Active, renewed.Status);
+            Assert.Equal(DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30), renewed.EndDate);
+        }
+
+        [Fact]
+        public async Task CreateSubscription_AllowsFreshSubscription_WhenThePreviousOneOnThatPlanHasExpired()
+        {
+            // The one-active-subscription-per-child+plan duplicate check only blocks on
+            // Status == Active -- confirms Expired (like Cancelled) correctly does NOT count
+            // as still occupying that slot, so a family can re-subscribe to the same plan
+            // after their previous pack lapsed.
+            var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var plan = new PackagePlan { Name = "10-Session Pack", BillingType = BillingType.SessionBased, BillingCycle = BillingCycle.OneTime, Price = 5000, ValidityDays = 30 };
+            var account = new PaymentAccount { Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "simulated", GatewayAccountRef = "ph" };
+            _db.Context.AddRange(parentProfile, plan, account);
+            await _db.Context.SaveChangesAsync();
+            var child = new Child { ParentProfileId = parentProfile.Id, FirstName = "Kid", LastName = "One", IsActive = true };
+            _db.Context.Children.Add(child);
+            await _db.Context.SaveChangesAsync();
+            var billing = CreateBillingService();
+            var firstSub = await billing.CreateSubscriptionAsync(new CreateSubscriptionRequest
+            {
+                ParentProfileId = parentProfile.Id, ChildId = child.Id, PackagePlanId = plan.Id,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-40),
+            });
+            var trackedFirst = await _db.Context.Subscriptions.FirstAsync(s => s.Id == firstSub.Id);
+            trackedFirst.Status = SubscriptionStatus.Expired;
+            trackedFirst.NextBillingAtUtc = null;
+            await _db.Context.SaveChangesAsync();
+
+            var secondSub = await billing.CreateSubscriptionAsync(new CreateSubscriptionRequest
+            {
+                ParentProfileId = parentProfile.Id, ChildId = child.Id, PackagePlanId = plan.Id,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            });
+
+            Assert.NotEqual(firstSub.Id, secondSub.Id);
+            Assert.Equal(SubscriptionStatus.Active, secondSub.Status);
+        }
+
+        [Fact]
         public async Task CancelSubscription_CancelsItsStillOpenInvoice_ButLeavesAPaidOneAlone()
         {
             var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
