@@ -233,7 +233,7 @@ namespace iucs.readernest.application.Services
                     faqTokens.Add(token);
                 }
 
-                var score = askedTokens.Count(faqTokens.Contains);
+                var score = askedTokens.Count(t => TokenMatches(t, faqTokens));
                 if (score > bestScore)
                 {
                     bestScore = score;
@@ -251,6 +251,66 @@ namespace iucs.readernest.application.Services
                 .Select(t => t.ToLowerInvariant())
                 .Where(t => t.Length > 2 && !StopWords.Contains(t))
                 .ToHashSet();
+
+        /// <summary>
+        /// True on an exact token match, or a "close enough" one — a typo like "schdule" for
+        /// "schedule" would otherwise never overlap at all, even though a human reads it as
+        /// the obvious same word. The allowed edit distance grows with word length so short
+        /// words (where one edit can turn one real word into a completely different one,
+        /// e.g. "fee" → "few") still require an exact match.
+        /// </summary>
+        private static bool TokenMatches(string askedToken, HashSet<string> faqTokens)
+        {
+            if (faqTokens.Contains(askedToken))
+            {
+                return true;
+            }
+
+            var maxDistance = MaxEditDistanceFor(askedToken.Length);
+            if (maxDistance == 0)
+            {
+                return false;
+            }
+
+            foreach (var faqToken in faqTokens)
+            {
+                if (Math.Abs(faqToken.Length - askedToken.Length) <= maxDistance &&
+                    LevenshteinDistance(askedToken, faqToken) <= maxDistance)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static int MaxEditDistanceFor(int wordLength) => wordLength switch
+        {
+            <= 4 => 0,
+            <= 7 => 1,
+            _ => 2,
+        };
+
+        /// <summary>Classic DP edit distance — small inputs only (single tokens), so O(n*m) is fine.</summary>
+        private static int LevenshteinDistance(string a, string b)
+        {
+            var distances = new int[a.Length + 1, b.Length + 1];
+            for (var i = 0; i <= a.Length; i++) distances[i, 0] = i;
+            for (var j = 0; j <= b.Length; j++) distances[0, j] = j;
+
+            for (var i = 1; i <= a.Length; i++)
+            {
+                for (var j = 1; j <= b.Length; j++)
+                {
+                    var cost = a[i - 1] == b[j - 1] ? 0 : 1;
+                    distances[i, j] = Math.Min(
+                        Math.Min(distances[i - 1, j] + 1, distances[i, j - 1] + 1),
+                        distances[i - 1, j - 1] + cost);
+                }
+            }
+
+            return distances[a.Length, b.Length];
+        }
 
         private static ChatFaqDto ToDto(ChatFaq faq) => new()
         {

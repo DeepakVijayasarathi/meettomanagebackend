@@ -63,6 +63,7 @@ namespace iucs.readernest.api.Data
             await EnsureStoreInquiriesMenuAsync(context);
             await EnsureParentRecordingsMenuAsync(context);
             await EnsureChatbotMenusAsync(context);
+            await SeedChatFaqsAsync(context);
             await BackfillPlainTextNotificationBodiesAsync(context);
 
             await context.SaveChangesAsync();
@@ -1080,6 +1081,63 @@ namespace iucs.readernest.api.Data
                     SortOrder = (demoFeedback?.SortOrder ?? 0) + 1,
                     IsActive = true,
                     RequiredModule = PermissionModule.Communication,
+                });
+            }
+        }
+
+        /// <summary>
+        /// Starter FAQ knowledge base for the "Ask a Doubt" chatbot — without this, a fresh
+        /// database has zero FAQs and every question (including a plain "hi") falls through
+        /// to teacher escalation, which is technically correct but useless out of the box.
+        /// Only runs once: skipped entirely once any ChatFaq row exists, so an admin's own
+        /// edits/deletes here are never re-added or overwritten on the next startup.
+        /// </summary>
+        private static async Task SeedChatFaqsAsync(ReaderNestDbContext context)
+        {
+            if (context.ChatFaqs.Local.Count > 0 || await context.ChatFaqs.AnyAsync())
+            {
+                return;
+            }
+
+            (string Question, string Answer, string Keywords, string Category)[] seeds =
+            [
+                ("How do I join my live class?",
+                 "Go to Schedule & Live Class (or My Classes if you're a teacher) and tap \"Join\" once the session shows as live — it opens a few minutes before the scheduled start time.",
+                 "join, live, class, session, meeting, link", "Classes"),
+                ("How do I schedule a demo class?",
+                 "Demo scheduling is handled by our Admission team — reach out via the contact details on your enrollment confirmation, or ask here and a teacher will follow up to arrange a time.",
+                 "schedule, demo, trial, book, appointment", "Classes"),
+                ("How do I pay my fees?",
+                 "Open Payments & Billing from your portal menu, pick the invoice, and pay by card, UPI, or bank transfer. You'll get a receipt by email once it clears.",
+                 "pay, fees, fee, billing, invoice, payment, money", "Billing"),
+                ("I forgot my password, what do I do?",
+                 "Use \"Forgot password\" on the login screen to reset it by email. If you don't get the email within a few minutes, check your spam folder or contact your coordinator.",
+                 "forgot, password, pin, login, reset, locked, access", "Account"),
+                ("Where can I find recordings of past classes?",
+                 "Recordings live under Recordings in your portal menu, listed by course and date, usually available within a couple of hours after the class ends.",
+                 "recording, recordings, video, past, missed, replay", "Classes"),
+                ("How do I check attendance?",
+                 "Attendance & Records shows every session's status. Teachers mark it right after class; it usually reflects within a few minutes.",
+                 "attendance, present, absent, records", "Classes"),
+                ("How do I contact my teacher?",
+                 "Use Notifications & Reports to message through the platform, or ask during your next live class — teachers don't share personal contact details directly.",
+                 "contact, teacher, message, talk, reach", "Communication"),
+                ("Where do I get homework or study resources?",
+                 "Check Resources in your portal menu — teachers upload homework, worksheets and study material there, organized by course.",
+                 "homework, resources, worksheet, study, material, assignment", "Classes"),
+            ];
+
+            for (var i = 0; i < seeds.Length; i++)
+            {
+                var (question, answer, keywords, category) = seeds[i];
+                context.ChatFaqs.Add(new ChatFaq
+                {
+                    Question = question,
+                    Answer = answer,
+                    Keywords = keywords,
+                    Category = category,
+                    IsActive = true,
+                    SortOrder = i,
                 });
             }
         }
