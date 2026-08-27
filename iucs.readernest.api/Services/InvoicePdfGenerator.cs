@@ -65,7 +65,10 @@ namespace iucs.readernest.api.Services
 
                         col.Item().PaddingTop(20).Row(row =>
                         {
-                            row.RelativeItem().Column(c =>
+                            // Fixed width sized to "Bill To:"'s actually-short content (name + phone), not
+                            // a 50/50 split — Payment Info was stranding itself out near page-center with a
+                            // dead gap in between whenever Bill To's two short lines didn't need half the page.
+                            row.ConstantItem(180).Column(c =>
                             {
                                 c.Item().Text("Bill To:").Bold();
                                 c.Item().PaddingTop(4).Text(data.ParentName);
