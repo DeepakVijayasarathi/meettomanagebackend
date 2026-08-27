@@ -526,6 +526,16 @@ namespace iucs.readernest.application.Services
                     .FirstOrDefaultAsync(b => b.Id == bookingId, ct)
                     ?? throw new NotFoundException(nameof(DemoBooking), bookingId);
 
+                // The frontend only offers this action for a still-scheduled demo, but that's a
+                // UI convenience, not a boundary — this is the actual enforcement point. Without
+                // it, a booking reached directly by id could get "reassigned" after the demo
+                // already happened, was cancelled, or converted, silently emailing a teacher who
+                // has nothing to do.
+                if (booking.ConversionStatus != ConversionStatus.DemoScheduled)
+                {
+                    throw new DomainValidationException("Only a demo that is still scheduled can have its teacher reassigned.");
+                }
+
                 if (booking.ClassSessionId is not { } classSessionId)
                 {
                     throw new DomainValidationException("This booking has no linked class session to reassign.");
@@ -728,9 +738,23 @@ namespace iucs.readernest.application.Services
 
             return logs.Select(log =>
             {
-                var payload = string.IsNullOrWhiteSpace(log.ChangesJson)
-                    ? null
-                    : JsonSerializer.Deserialize<ReassignmentAuditPayload>(log.ChangesJson);
+                // This audit trail is only ever written by ReassignTeacherAsync above, so a
+                // malformed payload shouldn't occur -- but one bad row (e.g. rewritten by an
+                // untested future caller) failing to parse must not 500 the entire history for
+                // this booking; it just renders with the fields it can't recover blanked out.
+                ReassignmentAuditPayload? payload = null;
+                if (!string.IsNullOrWhiteSpace(log.ChangesJson))
+                {
+                    try
+                    {
+                        payload = JsonSerializer.Deserialize<ReassignmentAuditPayload>(log.ChangesJson);
+                    }
+                    catch (JsonException)
+                    {
+                        _logger.LogWarning("Unparseable teacher-reassignment audit payload on log {LogId} for booking {BookingId}", log.Id, bookingId);
+                    }
+                }
+
                 return new DemoReassignmentHistoryDto
                 {
                     Id = log.Id,

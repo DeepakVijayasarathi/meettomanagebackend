@@ -2671,6 +2671,35 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task ReassignTeacher_RejectsOnceTheDemoIsNoLongerScheduled()
+        {
+            var oldTeacherUser = await _db.SeedUserAsync($"old2-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var newTeacherUser = await _db.SeedUserAsync($"new2-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var oldTeacher = new TeacherProfile { UserId = oldTeacherUser.Id };
+            var newTeacher = new TeacherProfile { UserId = newTeacherUser.Id };
+            _db.Context.TeacherProfiles.AddRange(oldTeacher, newTeacher);
+            await _db.Context.SaveChangesAsync();
+
+            var demoBooking = CreateDemoBookingService();
+            var booking = await demoBooking.CreateAsync(new CreateDemoBookingRequest
+            {
+                ParentName = "Parent", ParentEmail = "already-done-parent@test.com", ChildName = "Kid",
+                TeacherProfileId = oldTeacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(1),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(1).AddMinutes(30),
+            });
+
+            // Regression: the frontend only offers "Reassign" for a still-scheduled demo, but
+            // that's a UI convenience, not the actual boundary -- a booking reached directly by
+            // id (already completed, cancelled, or converted) must not be silently reassignable,
+            // which would email a teacher about a demo that has nothing to do with them anymore.
+            await demoBooking.UpdateConversionStatusAsync(booking.Id, new UpdateConversionStatusRequest { ConversionStatus = ConversionStatus.NotInterested });
+
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                demoBooking.ReassignTeacherAsync(booking.Id, new ReassignTeacherRequest { TeacherProfileId = newTeacher.Id }));
+        }
+
+        [Fact]
         public async Task TeacherWorkload_FlagsBusyTeacherAndOrdersFreeTeachersFirst()
         {
             var freeTeacherUser = await _db.SeedUserAsync($"free-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
