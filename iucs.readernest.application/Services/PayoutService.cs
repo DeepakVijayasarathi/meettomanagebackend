@@ -1,3 +1,4 @@
+using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Payouts;
 using iucs.readernest.application.Mappings;
@@ -13,13 +14,6 @@ namespace iucs.readernest.application.Services
     public class PayoutService : IPayoutService
     {
         private static readonly int[] AllowedDurations = [30, 45, 60];
-
-        /// <summary>
-        /// Below half the scheduled duration is flagged for review; at or above it is not. Loose
-        /// enough that ordinary lateness or a brief reconnect never trips it, tight enough to
-        /// catch a class genuinely cut short.
-        /// </summary>
-        private const double MinAttendanceFractionForNoReview = 0.5;
 
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
@@ -237,7 +231,8 @@ namespace iucs.readernest.application.Services
                     // click as the real end of their attendance.
                     var attendedEndUtc = attendance.LeftAtUtc ?? DateTime.UtcNow;
                     var attendedMinutes = (attendedEndUtc - joinedAtUtc).TotalMinutes;
-                    if (attendedMinutes < durationMinutes * MinAttendanceFractionForNoReview)
+                    var minFraction = await PayrollSettings.GetMinAttendanceFractionForReviewAsync(_unitOfWork, cancellationToken);
+                    if (attendedMinutes < durationMinutes * minFraction)
                     {
                         requiresReview = true;
                         var attendedNote = $"Teacher attended only {Math.Max(0, attendedMinutes):0} of {durationMinutes} scheduled minutes -- review before finalizing.";

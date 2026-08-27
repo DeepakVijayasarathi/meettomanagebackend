@@ -1,3 +1,4 @@
+using iucs.readernest.application.Common;
 using iucs.readernest.application.Common.Exceptions;
 using iucs.readernest.application.Dto.Academics;
 using iucs.readernest.application.Dto.Admission;
@@ -352,6 +353,48 @@ namespace iucs.readernest.tests
 
             var item = Assert.Single(_db.Context.PayoutItems.ToList());
             Assert.False(item.RequiresReview);
+        }
+
+        /// <summary>
+        /// The 50%/20-minute defaults (PayrollSettings) used to be fixed constants with no way
+        /// for a centre to tune either without a code change and redeploy. Proves the actual
+        /// AppSetting value is read, not just the fallback: 40 of 45 minutes (89%) sits above the
+        /// default 50% threshold (would NOT flag) but below an admin-tightened 90% threshold
+        /// (WOULD flag) -- same attendance, different outcome purely from Settings → Payroll.
+        /// </summary>
+        [Fact]
+        public async Task Complete_UsesConfiguredMinAttendancePercent_InsteadOfHardcodedDefault()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1); // 45-minute session
+            await CreatePayoutService().SetRateAsync(new SavePayoutRateRequest
+            {
+                TeacherProfileId = session.TeacherProfileId,
+                DurationMinutes = 45,
+                RatePerSession = 1000,
+                EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
+            });
+            _db.Context.AppSettings.Add(new AppSetting
+            {
+                Category = SettingCategory.General,
+                Key = PayrollSettings.MinAttendancePercentForReviewKey,
+                Value = "90",
+            });
+            var joinedAt = DateTime.UtcNow.AddMinutes(-40);
+            _db.Context.SessionAttendances.Add(new SessionAttendance
+            {
+                ClassSessionId = session.Id,
+                ParticipantType = ParticipantType.Teacher,
+                TeacherProfileId = session.TeacherProfileId,
+                Status = AttendanceStatus.Present,
+                JoinedAtUtc = joinedAt,
+                LeftAtUtc = joinedAt.AddMinutes(40), // 40 of 45 = 89%, below a 90% configured threshold
+            });
+            await _db.Context.SaveChangesAsync();
+
+            await CreateSessionService().CompleteAsync(session.Id);
+
+            var item = Assert.Single(_db.Context.PayoutItems.ToList());
+            Assert.True(item.RequiresReview);
         }
 
         /// <summary>

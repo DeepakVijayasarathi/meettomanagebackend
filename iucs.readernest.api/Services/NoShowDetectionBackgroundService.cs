@@ -1,3 +1,4 @@
+using iucs.readernest.application.Common;
 using iucs.readernest.application.Dto.Sessions;
 using iucs.readernest.application.Services;
 using iucs.readernest.domain.Entities.Admission;
@@ -15,7 +16,8 @@ namespace iucs.readernest.api.Services
     /// step, not require an admin to notice and click a button. Runs every 10 minutes;
     /// each cycle looks at every still-<see cref="SessionStatus.Scheduled"/> or
     /// <see cref="SessionStatus.CarriedForward"/> session whose scheduled start is more
-    /// than <see cref="GracePeriod"/> in the past and — going only by who has actually
+    /// than the configured grace period (Settings → Payroll, <see cref="PayrollSettings.GetNoShowGraceAsync"/>)
+    /// in the past and — going only by who has actually
     /// been captured present (join-based <see cref="SessionAttendance"/> for a regular
     /// class, <see cref="DemoBooking.ParentJoinedAtUtc"/>/<see cref="DemoParticipant.HasJoined"/>
     /// for a demo) — flags whichever side never showed via
@@ -30,13 +32,6 @@ namespace iucs.readernest.api.Services
     public class NoShowDetectionBackgroundService : BackgroundService
     {
         private static readonly TimeSpan Interval = TimeSpan.FromMinutes(10);
-
-        // Deliberately more generous than SessionReminderBackgroundService's "delayed
-        // session" alert (fired ~10-20 minutes after start): that alert already gives a
-        // human the chance to step in on a merely-late teacher/student before this job
-        // ever treats the gap as a genuine no-show and triggers the payout/carry-forward
-        // side effects.
-        private static readonly TimeSpan GracePeriod = TimeSpan.FromMinutes(20);
 
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<NoShowDetectionBackgroundService> _logger;
@@ -72,7 +67,13 @@ namespace iucs.readernest.api.Services
             var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
             var sessionService = scope.ServiceProvider.GetRequiredService<ISessionService>();
 
-            var cutoff = DateTime.UtcNow.Subtract(GracePeriod);
+            // Deliberately more generous by default than SessionReminderBackgroundService's
+            // "delayed session" alert (fired ~10-20 minutes after start): that alert already
+            // gives a human the chance to step in on a merely-late teacher/student before this
+            // job ever treats the gap as a genuine no-show and triggers the payout/carry-forward
+            // side effects. Admin-configurable (Settings → Payroll) rather than fixed in code.
+            var gracePeriod = await PayrollSettings.GetNoShowGraceAsync(unitOfWork, cancellationToken);
+            var cutoff = DateTime.UtcNow.Subtract(gracePeriod);
             var candidates = await unitOfWork.Repository<ClassSession>().Query()
                 .Where(s => (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward)
                             && s.ScheduledStartAtUtc <= cutoff)
@@ -99,7 +100,7 @@ namespace iucs.readernest.api.Services
                     {
                         await sessionService.MarkNoShowSystemAsync(
                             session.Id, NoShowParty.Teacher,
-                            $"Auto-detected: teacher never joined within {GracePeriod.TotalMinutes:0} minutes of the scheduled start.",
+                            $"Auto-detected: teacher never joined within {gracePeriod.TotalMinutes:0} minutes of the scheduled start.",
                             cancellationToken);
                         teacherNoShows++;
                         continue;
@@ -117,7 +118,7 @@ namespace iucs.readernest.api.Services
                     {
                         await sessionService.MarkNoShowSystemAsync(
                             session.Id, NoShowParty.Student,
-                            $"Auto-detected: no student/parent joined within {GracePeriod.TotalMinutes:0} minutes of the scheduled start.",
+                            $"Auto-detected: no student/parent joined within {gracePeriod.TotalMinutes:0} minutes of the scheduled start.",
                             cancellationToken);
                         studentNoShows++;
                     }
