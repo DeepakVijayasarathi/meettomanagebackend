@@ -291,6 +291,31 @@ namespace iucs.readernest.application.Common
                     """,
                     "Amount", "Currency", "InvoiceNumber", "ReceiptNumber"),
 
+                // Caught live: NotificationType.FeeSuspension exists in the enum -- clearly
+                // intended for exactly this -- but had zero templates using it anywhere. A
+                // parent's access to sessions/content gets cut off by BillingBackgroundService's
+                // auto-suspend sweep with no warning or explanation at all; they'd only find out
+                // by trying to access something and being blocked. The auto-lift-on-payment case
+                // (ApplyPaymentToInvoiceAsync) deliberately isn't given its own email here -- the
+                // payment confirmation the parent already gets from that same event covers "you're
+                // square now" without a redundant second email; a manual admin lift (a goodwill
+                // gesture, possibly with no payment involved) still needs its own notification.
+                New("fee-suspended-parent", "Fee Suspension Applied (Parent)",
+                    "Sent to the parent when their account is automatically suspended for an overdue invoice.",
+                    NotificationType.FeeSuspension, "Your account has been suspended — invoice {{InvoiceNumber}}",
+                    """
+                    <p>Your account has been suspended because invoice {{InvoiceNumber}} is overdue.</p>
+                    <p>Sessions and content are paused until the outstanding balance is settled. Pay now to restore access immediately.</p>
+                    """,
+                    "InvoiceNumber"),
+
+                New("fee-suspension-lifted-parent", "Fee Suspension Lifted (Parent)",
+                    "Sent to the parent when an admin manually lifts their fee suspension.",
+                    NotificationType.FeeSuspension, "Your account access has been restored",
+                    """
+                    <p>Your account suspension has been lifted. Sessions and content are accessible again.</p>
+                    """),
+
                 // Caught live: the entire refund lifecycle (request -> approve/reject -> process)
                 // had zero communication at all -- neither billing staff learning a refund needs
                 // review, nor the parent ever learning whether theirs was rejected or actually

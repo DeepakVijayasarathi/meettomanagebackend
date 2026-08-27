@@ -1428,6 +1428,15 @@ namespace iucs.readernest.application.Services
                 .Include(s => s.ParentProfile).ThenInclude(p => p.User)
                 .Include(s => s.Invoice)
                 .FirstAsync(s => s.Id == id, cancellationToken);
+
+            // Caught live: nothing told the parent their access was restored either.
+            await NotifyUserAsync(
+                saved.ParentProfile.User,
+                NotificationType.FeeSuspension,
+                "fee-suspension-lifted-parent",
+                new Dictionary<string, string>(),
+                cancellationToken);
+
             return ToDto(saved);
         }
 

@@ -4569,6 +4569,10 @@ namespace iucs.readernest.tests
             var lifted = await billing.LiftSuspensionAsync(suspension.Id);
             Assert.Equal(SuspensionStatus.Lifted, lifted.Status);
 
+            // Regression: NotificationType.FeeSuspension existed with zero templates wired to it --
+            // a manually-lifted suspension told the parent nothing about their restored access.
+            Assert.Contains(_emailSender.Sent, m => m.To == parentUser.Email && m.Subject.Contains("restored"));
+
             await Assert.ThrowsAsync<DomainValidationException>(() => billing.LiftSuspensionAsync(suspension.Id));
         }
 
