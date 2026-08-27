@@ -490,7 +490,7 @@ namespace iucs.readernest.application.Services
         private IQueryable<Payout> BaseQuery()
         {
             return _unitOfWork.Repository<Payout>().Query()
-                .Include(p => p.Items)
+                .Include(p => p.Items).ThenInclude(i => i.ClassSession).ThenInclude(cs => cs!.Batch)
                 .Include(p => p.TeacherProfile).ThenInclude(t => t.User);
         }
     }

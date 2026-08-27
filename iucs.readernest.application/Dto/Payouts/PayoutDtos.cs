@@ -50,6 +50,12 @@ namespace iucs.readernest.application.Dto.Payouts
 
         public Guid? ClassSessionId { get; set; }
 
+        /// <summary>The batch this item's class belongs to — null for items with no ClassSessionId (a bonus/adjustment with no single class behind it).</summary>
+        public string? ClassName { get; set; }
+
+        /// <summary>The class's own scheduled start, not when this payout item was created — lets a teacher see earnings "class wise" by actual session date.</summary>
+        public DateTime? SessionDate { get; set; }
+
         public PayoutItemType Type { get; set; }
 
         public decimal Amount { get; set; }
