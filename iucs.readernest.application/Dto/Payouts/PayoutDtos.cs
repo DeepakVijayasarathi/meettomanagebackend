@@ -12,8 +12,6 @@ namespace iucs.readernest.application.Dto.Payouts
 
         public string TeacherName { get; set; } = null!;
 
-        public int DurationMinutes { get; set; }
-
         public decimal RatePerSession { get; set; }
 
         public decimal TeacherNoShowPenaltyPercent { get; set; }
@@ -27,10 +25,6 @@ namespace iucs.readernest.application.Dto.Payouts
     {
         /// <summary>Omit (null) to save the centre-wide default rate card that pays teachers without their own rates.</summary>
         public Guid? TeacherProfileId { get; set; }
-
-        /// <summary>Any positive number of minutes (validated in the service) -- must match a real session length exactly to price it.</summary>
-        [Required]
-        public int DurationMinutes { get; set; }
 
         [Required]
         [Range(0, 9_999_999)]

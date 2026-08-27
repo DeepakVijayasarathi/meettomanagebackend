@@ -38,18 +38,13 @@ namespace iucs.readernest.application.Services
             }
 
             var rates = await filtered
-                .OrderBy(r => r.TeacherProfileId).ThenBy(r => r.DurationMinutes).ThenByDescending(r => r.EffectiveFrom)
+                .OrderBy(r => r.TeacherProfileId).ThenByDescending(r => r.EffectiveFrom)
                 .ToListAsync(cancellationToken);
             return rates.Select(r => r.ToDto()).ToList();
         }
 
         public async Task<PayoutRateDto> SetRateAsync(SavePayoutRateRequest request, CancellationToken cancellationToken = default)
         {
-            if (request.DurationMinutes <= 0)
-            {
-                throw new DomainValidationException("Duration must be a positive number of minutes.");
-            }
-
             // A rate card drives real money with no downstream sanity check, so the bounds are
             // enforced here rather than trusted from the DTO. A negative rate makes every
             // completed class deduct from the teacher instead of paying them; a negative penalty
@@ -81,11 +76,10 @@ namespace iucs.readernest.application.Services
                 }
             }
 
-            // Same teacher/duration/effective-date updates in place; a new effective
-            // date appends a row so past payouts stay reproducible.
+            // Same teacher/effective-date updates in place; a new effective date appends a
+            // row so past payouts stay reproducible.
             var rate = await _unitOfWork.Repository<PayoutRate>().FirstOrDefaultAsync(
                 r => r.TeacherProfileId == request.TeacherProfileId
-                     && r.DurationMinutes == request.DurationMinutes
                      && r.EffectiveFrom == request.EffectiveFrom,
                 cancellationToken);
 
@@ -94,7 +88,6 @@ namespace iucs.readernest.application.Services
                 rate = new PayoutRate
                 {
                     TeacherProfileId = request.TeacherProfileId,
-                    DurationMinutes = request.DurationMinutes,
                     EffectiveFrom = request.EffectiveFrom,
                 };
                 await _unitOfWork.Repository<PayoutRate>().AddAsync(rate, cancellationToken);
@@ -168,7 +161,6 @@ namespace iucs.readernest.application.Services
             // statement, never silent.
             var rate = await _unitOfWork.Repository<PayoutRate>().Query()
                 .Where(r => r.TeacherProfileId == session.TeacherProfileId
-                            && r.DurationMinutes == durationMinutes
                             && r.IsActive
                             && r.EffectiveFrom <= sessionDate)
                 .OrderByDescending(r => r.EffectiveFrom)
@@ -176,7 +168,6 @@ namespace iucs.readernest.application.Services
 
             rate ??= await _unitOfWork.Repository<PayoutRate>().Query()
                 .Where(r => r.TeacherProfileId == null
-                            && r.DurationMinutes == durationMinutes
                             && r.IsActive
                             && r.EffectiveFrom <= sessionDate)
                 .OrderByDescending(r => r.EffectiveFrom)
@@ -197,8 +188,8 @@ namespace iucs.readernest.application.Services
             if (rate is null)
             {
                 note = string.IsNullOrEmpty(note)
-                    ? $"No payout rate configured for {durationMinutes}-minute sessions."
-                    : $"{note} (no payout rate configured for {durationMinutes}-minute sessions)";
+                    ? "No payout rate configured for this teacher."
+                    : $"{note} (no payout rate configured for this teacher)";
             }
             else if (type == PayoutItemType.TeacherNoShowDeduction && rate.TeacherNoShowPenaltyPercent != 100m)
             {

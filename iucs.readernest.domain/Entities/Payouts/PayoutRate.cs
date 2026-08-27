@@ -5,20 +5,19 @@ using Microsoft.EntityFrameworkCore;
 namespace iucs.readernest.domain.Entities.Payouts
 {
     /// <summary>
-    /// Admin-configured per-session rate by batch duration (30/45/60-minute classes).
-    /// A null TeacherProfileId is the centre's DEFAULT rate card — it pays any teacher
-    /// who has no rate of their own, so payroll works from one configuration; rows with
-    /// a teacher override the default for that teacher. Rate changes create a new row
-    /// with a later EffectiveFrom so historical payouts stay reproducible.
+    /// Admin-configured flat per-session rate — one rate per teacher (or the centre
+    /// default) regardless of how long any given session runs. A null TeacherProfileId
+    /// is the centre's DEFAULT rate card — it pays any teacher who has no rate of their
+    /// own, so payroll works from one configuration; rows with a teacher override the
+    /// default for that teacher. Rate changes create a new row with a later
+    /// EffectiveFrom so historical payouts stay reproducible.
     /// </summary>
-    [Index(nameof(TeacherProfileId), nameof(DurationMinutes), nameof(EffectiveFrom), IsUnique = true)]
+    [Index(nameof(TeacherProfileId), nameof(EffectiveFrom), IsUnique = true)]
     public class PayoutRate : AuditEntity
     {
         public Guid? TeacherProfileId { get; set; }
 
         public TeacherProfile? TeacherProfile { get; set; }
-
-        public int DurationMinutes { get; set; }
 
         public decimal RatePerSession { get; set; }
 
