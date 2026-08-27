@@ -27,6 +27,7 @@ namespace iucs.readernest.application.Mappings
                 ConversionStatus = booking.ConversionStatus,
                 FollowUpNotes = booking.FollowUpNotes,
                 ScheduledStartAtUtc = booking.ClassSession?.ScheduledStartAtUtc,
+                ScheduledEndAtUtc = booking.ClassSession?.ScheduledEndAtUtc,
                 MeetingRoomId = booking.ClassSession?.MeetingRoomId,
                 TeacherProfileId = booking.ClassSession?.TeacherProfileId,
                 TeacherName = teacher?.User is { } u ? $"{u.FirstName} {u.LastName}" : null,

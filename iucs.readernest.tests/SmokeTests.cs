@@ -103,7 +103,7 @@ namespace iucs.readernest.tests
         private ResourceService CreateResourceService() => new(_db.UnitOfWork, _auditLog);
 
         private DemoBookingService CreateDemoBookingService() =>
-            new(_db.UnitOfWork, _auditLog, _emailSender, _emailTemplates, new FakeCrmNotifier(), new FakeJitsiTokenService(), NullLogger<DemoBookingService>.Instance);
+            new(_db.UnitOfWork, _auditLog, _emailSender, _emailTemplates, new FakeCrmNotifier(), new FakeJitsiTokenService(), _notifications, NullLogger<DemoBookingService>.Instance);
 
         private QuizQuestionService CreateQuizQuestionService() => new(_db.UnitOfWork, _auditLog, CreateSessionService(), _bulkFileReader);
 
@@ -2579,7 +2579,7 @@ namespace iucs.readernest.tests
 
             var service = new DemoBookingService(
                 _db.UnitOfWork, _auditLog, new ThrowingEmailSender(), _emailTemplates,
-                new FakeCrmNotifier(), new FakeJitsiTokenService(), NullLogger<DemoBookingService>.Instance);
+                new FakeCrmNotifier(), new FakeJitsiTokenService(), _notifications, NullLogger<DemoBookingService>.Instance);
 
             // An SMTP failure (confirmed in production logs as an uncaught exception here) must
             // not turn an already-committed booking into a 500 — the booking is real by the time
@@ -2596,6 +2596,116 @@ namespace iucs.readernest.tests
 
             Assert.NotEqual(Guid.Empty, dto.Id);
             Assert.NotNull(await _db.Context.DemoBookings.FirstOrDefaultAsync(b => b.Id == dto.Id));
+        }
+
+        [Fact]
+        public async Task ReassignTeacher_NotifiesBothTeachers_AndRecordsAuditHistory()
+        {
+            var oldTeacherUser = await _db.SeedUserAsync($"old-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var newTeacherUser = await _db.SeedUserAsync($"new-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var oldTeacher = new TeacherProfile { UserId = oldTeacherUser.Id };
+            var newTeacher = new TeacherProfile { UserId = newTeacherUser.Id };
+            _db.Context.TeacherProfiles.AddRange(oldTeacher, newTeacher);
+            await _db.Context.SaveChangesAsync();
+
+            var demoBooking = CreateDemoBookingService();
+            var booking = await demoBooking.CreateAsync(new CreateDemoBookingRequest
+            {
+                ParentName = "Parent", ParentEmail = "reassign-parent@test.com", ChildName = "Kid",
+                TeacherProfileId = oldTeacher.Id,
+                ScheduledStartAtUtc = DateTime.UtcNow.AddDays(1),
+                ScheduledEndAtUtc = DateTime.UtcNow.AddDays(1).AddMinutes(30),
+            });
+            _emailSender.Sent.Clear();
+
+            var reassigned = await demoBooking.ReassignTeacherAsync(booking.Id,
+                new ReassignTeacherRequest { TeacherProfileId = newTeacher.Id, Reason = "Original teacher called in sick" });
+
+            Assert.Equal(newTeacher.Id, reassigned.TeacherProfileId);
+
+            // Regression: overriding a demo's assigned teacher had no notification path at all --
+            // the newly-assigned teacher had to check their dashboard to find out, and the
+            // displaced teacher kept preparing for a demo that was no longer theirs.
+            Assert.Contains(_emailSender.Sent, m => m.To == newTeacherUser.Email && m.Subject.Contains("assigned a demo"));
+            Assert.Contains(_emailSender.Sent, m => m.To == oldTeacherUser.Email && m.Subject.Contains("unassigned"));
+
+            var history = await demoBooking.GetReassignmentHistoryAsync(booking.Id);
+            var entry = Assert.Single(history);
+            Assert.Equal("Original teacher called in sick", entry.Reason);
+            Assert.Equal($"{newTeacherUser.FirstName} {newTeacherUser.LastName}", entry.NewTeacherName);
+            Assert.Equal($"{oldTeacherUser.FirstName} {oldTeacherUser.LastName}", entry.OldTeacherName);
+        }
+
+        [Fact]
+        public async Task ReassignTeacher_RejectsWhenNewTeacherAlreadyBusyAtThatSlot()
+        {
+            var teacherAUser = await _db.SeedUserAsync($"a-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var teacherBUser = await _db.SeedUserAsync($"b-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var teacherA = new TeacherProfile { UserId = teacherAUser.Id };
+            var teacherB = new TeacherProfile { UserId = teacherBUser.Id };
+            _db.Context.TeacherProfiles.AddRange(teacherA, teacherB);
+            await _db.Context.SaveChangesAsync();
+
+            var demoBooking = CreateDemoBookingService();
+            var slotStart = DateTime.UtcNow.AddDays(2);
+
+            // Teacher B is already busy with this other booking at the exact slot in question.
+            await demoBooking.CreateAsync(new CreateDemoBookingRequest
+            {
+                ParentName = "Other Parent", ParentEmail = "other-parent@test.com", ChildName = "Other Kid",
+                TeacherProfileId = teacherB.Id,
+                ScheduledStartAtUtc = slotStart,
+                ScheduledEndAtUtc = slotStart.AddMinutes(30),
+            });
+
+            var booking = await demoBooking.CreateAsync(new CreateDemoBookingRequest
+            {
+                ParentName = "Parent", ParentEmail = "busy-conflict-parent@test.com", ChildName = "Kid",
+                TeacherProfileId = teacherA.Id,
+                ScheduledStartAtUtc = slotStart,
+                ScheduledEndAtUtc = slotStart.AddMinutes(30),
+            });
+
+            await Assert.ThrowsAsync<DomainValidationException>(() =>
+                demoBooking.ReassignTeacherAsync(booking.Id, new ReassignTeacherRequest { TeacherProfileId = teacherB.Id }));
+        }
+
+        [Fact]
+        public async Task TeacherWorkload_FlagsBusyTeacherAndOrdersFreeTeachersFirst()
+        {
+            var freeTeacherUser = await _db.SeedUserAsync($"free-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var busyTeacherUser = await _db.SeedUserAsync($"busy-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+            var freeTeacher = new TeacherProfile { UserId = freeTeacherUser.Id };
+            var busyTeacher = new TeacherProfile { UserId = busyTeacherUser.Id };
+            _db.Context.TeacherProfiles.AddRange(freeTeacher, busyTeacher);
+            await _db.Context.SaveChangesAsync();
+
+            var demoBooking = CreateDemoBookingService();
+            var slotStart = DateTime.UtcNow.AddDays(3);
+
+            await demoBooking.CreateAsync(new CreateDemoBookingRequest
+            {
+                ParentName = "Other Parent", ParentEmail = "workload-other@test.com", ChildName = "Other Kid",
+                TeacherProfileId = busyTeacher.Id,
+                ScheduledStartAtUtc = slotStart,
+                ScheduledEndAtUtc = slotStart.AddMinutes(30),
+            });
+
+            var booking = await demoBooking.CreateAsync(new CreateDemoBookingRequest
+            {
+                ParentName = "Parent", ParentEmail = "workload-parent@test.com", ChildName = "Kid",
+                TeacherProfileId = freeTeacher.Id,
+                ScheduledStartAtUtc = slotStart,
+                ScheduledEndAtUtc = slotStart.AddMinutes(30),
+            });
+
+            var workload = await demoBooking.GetTeacherWorkloadAsync(booking.Id);
+
+            var busyEntry = workload.Single(w => w.TeacherProfileId == busyTeacher.Id);
+            Assert.True(busyEntry.IsBusyAtSlot);
+            var freeIndex = workload.ToList().FindIndex(w => w.TeacherProfileId == freeTeacher.Id);
+            var busyIndex = workload.ToList().FindIndex(w => w.TeacherProfileId == busyTeacher.Id);
+            Assert.True(freeIndex < busyIndex);
         }
 
         [Fact]
@@ -3925,10 +4035,11 @@ namespace iucs.readernest.tests
             var (context2, uow2) = _db.CreateConcurrentSession();
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
             var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
+            var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, NullLogger<NotificationService>.Instance);
             var service1 = CreateStoreService();
             var service2 = new StoreService(
                 uow2, auditLog2,
-                new DemoBookingService(uow2, auditLog2, _emailSender, emailTemplates2, new FakeCrmNotifier(), new FakeJitsiTokenService(), NullLogger<DemoBookingService>.Instance));
+                new DemoBookingService(uow2, auditLog2, _emailSender, emailTemplates2, new FakeCrmNotifier(), new FakeJitsiTokenService(), notifications2, NullLogger<DemoBookingService>.Instance));
 
             var request1 = new CreateStoreDemoBookingRequest
             {

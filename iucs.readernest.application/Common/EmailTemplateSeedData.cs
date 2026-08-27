@@ -99,6 +99,30 @@ namespace iucs.readernest.application.Common
                     """,
                     "ChildName", "WhenLocal", "JoinUrl"),
 
+                // Caught live: overriding a demo's assigned teacher (e.g. the original one calls
+                // in sick) had no notification path at all -- the newly-assigned teacher would
+                // only find out by checking their dashboard, and the displaced teacher would keep
+                // preparing for a demo that was no longer theirs.
+                New("demo-teacher-assigned", "Demo Teacher Assigned (Override)",
+                    "Sent to the teacher when they are manually assigned to a demo, replacing whoever was assigned before.",
+                    NotificationType.BookingConfirmation, "You've been assigned a demo class",
+                    """
+                    <p>You've been assigned to a demo class for <strong>{{ChildName}}</strong>:</p>
+                    <p style="font-weight:600;">{{StartAtLocal}} &ndash; {{EndAtLocal}}</p>
+                    <p>{{Reason}}</p>
+                    """,
+                    "ChildName", "StartAtLocal", "EndAtLocal", "Reason"),
+
+                New("demo-teacher-unassigned", "Demo Teacher Unassigned (Override)",
+                    "Sent to the teacher when they are manually removed from a demo they were assigned to.",
+                    NotificationType.BookingConfirmation, "You've been unassigned from a demo class",
+                    """
+                    <p>You've been removed from the demo class for <strong>{{ChildName}}</strong> previously scheduled for:</p>
+                    <p style="font-weight:600;">{{StartAtLocal}} &ndash; {{EndAtLocal}}</p>
+                    <p>No action is needed from you for this session.</p>
+                    """,
+                    "ChildName", "StartAtLocal", "EndAtLocal"),
+
                 New("session-reminder-teacher", "Class Reminder (Teacher)",
                     "Sent to the teacher one hour before their class starts.",
                     NotificationType.SessionReminder, "Your class starts in 1 hour",
