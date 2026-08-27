@@ -238,6 +238,7 @@ namespace iucs.readernest.application.Services
                 BillingCycle = request.BillingCycle,
                 Price = request.Price,
                 SessionsIncluded = request.SessionsIncluded,
+                ValidityDays = request.ValidityDays,
                 IsActive = request.IsActive,
             };
             await _unitOfWork.Repository<PackagePlan>().AddAsync(plan, cancellationToken);
@@ -261,6 +262,7 @@ namespace iucs.readernest.application.Services
             plan.BillingCycle = request.BillingCycle;
             plan.Price = request.Price;
             plan.SessionsIncluded = request.SessionsIncluded;
+            plan.ValidityDays = request.ValidityDays;
             plan.IsActive = request.IsActive;
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(PackagePlan), plan.Id.ToString(), cancellationToken: cancellationToken);
@@ -322,6 +324,17 @@ namespace iucs.readernest.application.Services
                         sessionsIncluded = parsedSessions;
                     }
 
+                    int? validityDays = null;
+                    var validityText = row.GetOrNull("ValidityDays");
+                    if (validityText is not null)
+                    {
+                        if (!int.TryParse(validityText, out var parsedValidity))
+                        {
+                            throw new DomainValidationException($"ValidityDays '{validityText}' is not a whole number.");
+                        }
+                        validityDays = parsedValidity;
+                    }
+
                     await CreatePlanAsync(
                         new SavePackagePlanRequest
                         {
@@ -331,6 +344,7 @@ namespace iucs.readernest.application.Services
                             BillingCycle = billingCycle,
                             Price = price,
                             SessionsIncluded = sessionsIncluded,
+                            ValidityDays = validityDays,
                             IsActive = row.GetBool("IsActive"),
                         },
                         cancellationToken);
@@ -354,7 +368,7 @@ namespace iucs.readernest.application.Services
                 .Where(c => courseIds.Contains(c.Id))
                 .ToDictionaryAsync(c => c.Id, c => c.Name, cancellationToken);
 
-            string[] headers = ["Name", "CourseName", "BillingType", "BillingCycle", "Price", "SessionsIncluded", "IsActive"];
+            string[] headers = ["Name", "CourseName", "BillingType", "BillingCycle", "Price", "SessionsIncluded", "ValidityDays", "IsActive"];
             var rows = plans.Select(p => new List<string?>
             {
                 p.Name,
@@ -363,6 +377,7 @@ namespace iucs.readernest.application.Services
                 p.BillingCycle.ToString(),
                 p.Price.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 p.SessionsIncluded?.ToString(),
+                p.ValidityDays?.ToString(),
                 p.IsActive ? "true" : "false",
             });
             return CsvWriter.BuildCsv(headers, rows);
@@ -1843,6 +1858,7 @@ namespace iucs.readernest.application.Services
                 ChildId = request.ChildId,
                 PackagePlanId = request.PackagePlanId,
                 StartDate = request.StartDate,
+                EndDate = plan.ValidityDays.HasValue ? request.StartDate.AddDays(plan.ValidityDays.Value) : null,
                 // Started subscriptions get their first invoice below, so the pointer moves
                 // one cycle out; a future start leaves the first invoice to the billing job
                 // on the start date itself.
@@ -1923,6 +1939,13 @@ namespace iucs.readernest.application.Services
             subscription.Status = SubscriptionStatus.Active;
             subscription.CancelledAtUtc = null;
             subscription.NextBillingAtUtc = NextBillingFrom(DateTime.UtcNow, plan.BillingCycle);
+            // Same reasoning as NextBillingAtUtc above: renewal restarts the clock from now, not
+            // the original StartDate -- without this a validity-days plan's stale, already-past
+            // EndDate would leave the just-renewed subscription immediately re-expirable by the
+            // next sweep.
+            subscription.EndDate = plan.ValidityDays.HasValue
+                ? DateOnly.FromDateTime(DateTime.UtcNow).AddDays(plan.ValidityDays.Value)
+                : null;
             _unitOfWork.Repository<Subscription>().Update(subscription);
 
             // Renewal conversion is tracked in the audit trail for the renewal-rate report
@@ -2044,6 +2067,7 @@ namespace iucs.readernest.application.Services
                 PlanName = subscription.PackagePlan.Name,
                 Status = subscription.Status,
                 StartDate = subscription.StartDate,
+                EndDate = subscription.EndDate,
                 NextBillingAtUtc = subscription.NextBillingAtUtc,
                 CancelledAtUtc = subscription.CancelledAtUtc,
             };

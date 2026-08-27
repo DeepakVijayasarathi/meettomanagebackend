@@ -19,6 +19,9 @@ namespace iucs.readernest.application.Dto.Billing
 
         public int? SessionsIncluded { get; set; }
 
+        /// <summary>How many days of access this plan grants from a subscription's start date; null means the plan never expires on its own (a recurring Subscription plan typically leaves this unset — BillingCycle already governs it).</summary>
+        public int? ValidityDays { get; set; }
+
         public bool IsActive { get; set; }
     }
 
@@ -42,6 +45,10 @@ namespace iucs.readernest.application.Dto.Billing
 
         [Range(1, 1000)]
         public int? SessionsIncluded { get; set; }
+
+        /// <summary>Days of access from a subscription's start date; leave unset for a plan that never expires on its own.</summary>
+        [Range(1, 3650)]
+        public int? ValidityDays { get; set; }
 
         public bool IsActive { get; set; } = true;
     }
@@ -172,6 +179,9 @@ namespace iucs.readernest.application.Dto.Billing
         public SubscriptionStatus Status { get; set; }
 
         public DateOnly StartDate { get; set; }
+
+        /// <summary>When this subscription's access lapses on its own, from the plan's ValidityDays; null for a plan with no set validity window.</summary>
+        public DateOnly? EndDate { get; set; }
 
         public DateTime? NextBillingAtUtc { get; set; }
 

@@ -1780,6 +1780,83 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task CreateSubscription_ComputesEndDate_FromPlanValidityDays()
+        {
+            var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var plan = new PackagePlan { Name = "10-Session Pack", BillingType = BillingType.SessionBased, BillingCycle = BillingCycle.OneTime, Price = 5000, ValidityDays = 60 };
+            var account = new PaymentAccount { Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "simulated", GatewayAccountRef = "ph" };
+            _db.Context.AddRange(parentProfile, plan, account);
+            await _db.Context.SaveChangesAsync();
+            var child = new Child { ParentProfileId = parentProfile.Id, FirstName = "Kid", LastName = "One", IsActive = true };
+            _db.Context.Children.Add(child);
+            await _db.Context.SaveChangesAsync();
+            var billing = CreateBillingService();
+            var startDate = DateOnly.FromDateTime(DateTime.UtcNow);
+
+            var sub = await billing.CreateSubscriptionAsync(new CreateSubscriptionRequest
+            {
+                ParentProfileId = parentProfile.Id, ChildId = child.Id, PackagePlanId = plan.Id, StartDate = startDate,
+            });
+
+            Assert.Equal(startDate.AddDays(60), sub.EndDate);
+        }
+
+        [Fact]
+        public async Task CreateSubscription_LeavesEndDateNull_WhenPlanHasNoValidityDays()
+        {
+            var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var plan = new PackagePlan { Name = "Monthly", BillingType = BillingType.Subscription, BillingCycle = BillingCycle.Monthly, Price = 2000 };
+            var account = new PaymentAccount { Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "simulated", GatewayAccountRef = "ph" };
+            _db.Context.AddRange(parentProfile, plan, account);
+            await _db.Context.SaveChangesAsync();
+            var child = new Child { ParentProfileId = parentProfile.Id, FirstName = "Kid", LastName = "One", IsActive = true };
+            _db.Context.Children.Add(child);
+            await _db.Context.SaveChangesAsync();
+            var billing = CreateBillingService();
+
+            var sub = await billing.CreateSubscriptionAsync(new CreateSubscriptionRequest
+            {
+                ParentProfileId = parentProfile.Id, ChildId = child.Id, PackagePlanId = plan.Id,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            });
+
+            Assert.Null(sub.EndDate);
+        }
+
+        [Fact]
+        public async Task RenewSubscription_RecomputesEndDate_InsteadOfLeavingItStale()
+        {
+            var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            var parentProfile = new ParentProfile { UserId = parentUser.Id };
+            var plan = new PackagePlan { Name = "10-Session Pack", BillingType = BillingType.SessionBased, BillingCycle = BillingCycle.OneTime, Price = 5000, ValidityDays = 30 };
+            var account = new PaymentAccount { Name = "Phonics", DepartmentId = WellKnownDepartments.Phonics, GatewayProvider = "simulated", GatewayAccountRef = "ph" };
+            _db.Context.AddRange(parentProfile, plan, account);
+            await _db.Context.SaveChangesAsync();
+            var child = new Child { ParentProfileId = parentProfile.Id, FirstName = "Kid", LastName = "One", IsActive = true };
+            _db.Context.Children.Add(child);
+            await _db.Context.SaveChangesAsync();
+            var billing = CreateBillingService();
+            var sub = await billing.CreateSubscriptionAsync(new CreateSubscriptionRequest
+            {
+                ParentProfileId = parentProfile.Id, ChildId = child.Id, PackagePlanId = plan.Id,
+                StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
+            });
+            await billing.CancelSubscriptionAsync(sub.Id);
+            // Simulate the subscription having lapsed well past its original EndDate before
+            // being renewed -- exactly the case a stale, un-recomputed EndDate would break.
+            var tracked = await _db.Context.Subscriptions.FirstAsync(s => s.Id == sub.Id);
+            tracked.EndDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-5);
+            await _db.Context.SaveChangesAsync();
+
+            var renewed = await billing.RenewSubscriptionAsync(sub.Id);
+
+            Assert.Equal(SubscriptionStatus.Active, renewed.Status);
+            Assert.Equal(DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30), renewed.EndDate);
+        }
+
+        [Fact]
         public async Task CancelSubscription_CancelsItsStillOpenInvoice_ButLeavesAPaidOneAlone()
         {
             var parentUser = await _db.SeedUserAsync($"sub-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);

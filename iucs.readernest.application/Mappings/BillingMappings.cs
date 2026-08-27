@@ -18,6 +18,7 @@ namespace iucs.readernest.application.Mappings
                 BillingCycle = plan.BillingCycle,
                 Price = plan.Price,
                 SessionsIncluded = plan.SessionsIncluded,
+                ValidityDays = plan.ValidityDays,
                 IsActive = plan.IsActive,
             };
         }

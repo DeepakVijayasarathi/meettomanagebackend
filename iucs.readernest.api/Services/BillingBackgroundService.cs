@@ -14,7 +14,8 @@ namespace iucs.readernest.api.Services
     /// <summary>
     /// Auto billing: on an hourly cycle, generates the next invoice for every active
     /// subscription whose billing date has arrived, advances its next-billing pointer
-    /// by the plan's cycle, and flags unpaid invoices past their due date as Overdue.
+    /// by the plan's cycle, flags unpaid invoices past their due date as Overdue, and expires
+    /// any active subscription whose plan's ValidityDays window has passed.
     /// </summary>
     public class BillingBackgroundService : BackgroundService
     {
@@ -164,6 +165,21 @@ namespace iucs.readernest.api.Services
                     .SetProperty(i => i.UpdatedAtUtc, now),
                 cancellationToken);
 
+            // Validity-days expiry: a plan's ValidityDays computes EndDate once at
+            // subscription creation (see BillingService.CreateSubscriptionAsync); this is the
+            // only place that date is actually enforced. Bulk update, same pattern as the
+            // overdue sweep above -- no need to load full Subscription entities just to flip a
+            // status and clear a pointer.
+            var expiredCount = await unitOfWork.Repository<Subscription>().ExecuteUpdateAsync(
+                s => s.Status == SubscriptionStatus.Active
+                     && s.EndDate != null
+                     && s.EndDate < today,
+                setters => setters
+                    .SetProperty(s => s.Status, SubscriptionStatus.Expired)
+                    .SetProperty(s => s.NextBillingAtUtc, (DateTime?)null)
+                    .SetProperty(s => s.UpdatedAtUtc, now),
+                cancellationToken);
+
             // Commit the subscription pointers before the suspension sweep below queries
             // Invoice via a no-tracking Query() (a direct DB read). The overdue flip above
             // is already committed by its own UPDATE statement, so invoices that turned
@@ -249,11 +265,11 @@ namespace iucs.readernest.api.Services
                 }
             }
 
-            if (dueSubscriptions.Count > 0 || overdueCount > 0 || suspendedCount > 0)
+            if (dueSubscriptions.Count > 0 || overdueCount > 0 || suspendedCount > 0 || expiredCount > 0)
             {
                 _logger.LogInformation(
-                    "Auto billing: generated {InvoiceCount} invoice(s) ({DueCount} subscription(s) due, {FailedCount} failed), marked {OverdueCount} overdue, suspended {SuspendedCount} account(s).",
-                    invoicedCount, dueSubscriptions.Count, failedSubscriptionCount, overdueCount, suspendedCount);
+                    "Auto billing: generated {InvoiceCount} invoice(s) ({DueCount} subscription(s) due, {FailedCount} failed), marked {OverdueCount} overdue, suspended {SuspendedCount} account(s), expired {ExpiredCount} subscription(s).",
+                    invoicedCount, dueSubscriptions.Count, failedSubscriptionCount, overdueCount, suspendedCount, expiredCount);
             }
 
             // Pull-based payment settlement: catch any gateway payment whose webhook never
