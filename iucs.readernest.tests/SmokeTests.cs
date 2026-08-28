@@ -6459,7 +6459,7 @@ namespace iucs.readernest.tests
             });
             var (fallback, _) = await _emailTemplates.RenderAsync(
                 "qa-substitution", new Dictionary<string, string> { ["Name"] = "Ann" });
-            Assert.Equal("Notification from The Reader Nest", fallback);
+            Assert.Equal("Notification from Meet to Manage", fallback);
         }
 
         /// <summary>
