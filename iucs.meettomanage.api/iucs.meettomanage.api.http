@@ -1,0 +1,6 @@
+@iucs.meettomanage.api_HostAddress = http://localhost:5288
+
+GET {{iucs.meettomanage.api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

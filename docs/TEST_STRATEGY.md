@@ -3,7 +3,7 @@
 ## Test pyramid
 | Layer | Tooling | Scope | Owner |
 |---|---|---|---|
-| Unit/service smoke | xUnit + SQLite in-memory (`iucs.readernest.tests`) | Services against the real DbContext + audit interceptor | Devs, per PR (runs in CI) |
+| Unit/service smoke | xUnit + SQLite in-memory (`iucs.meettomanage.tests`) | Services against the real DbContext + audit interceptor | Devs, per PR (runs in CI) |
 | API integration | PowerShell/REST scripts now → WebApplicationFactory later | Auth, RBAC gates, CRUD contracts, ProblemDetails | Squad F, per sprint |
 | E2E UI | Playwright (already a frontend devDependency) | Login → portal flows per role | Squad F, Sprint 2+ |
 | Load | k6 against self-hosted Jitsi + API | Live-classroom concurrency | Sprint 3 scripting, Sprint 5 execution |
@@ -17,6 +17,6 @@
 | Production | Go-live | Real; migrations gated by manual approval |
 
 ## Conventions
-- Every regression wave (Sprints 2–4) adds tests to `iucs.readernest.tests`
+- Every regression wave (Sprints 2–4) adds tests to `iucs.meettomanage.tests`
   instead of one-off scripts; the CI test step is a required check.
 - Bug fixes land with a reproducing test.

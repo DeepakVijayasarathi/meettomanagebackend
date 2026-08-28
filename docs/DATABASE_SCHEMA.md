@@ -1,7 +1,7 @@
-# Reader Nest — Database Schema Design (Sprint 0)
+# Meet to Manage — Database Schema Design (Sprint 0)
 
 EF Core 9 code-first model over PostgreSQL. All entities live in
-`iucs.readernest.domain/Entities/<area>` and derive from one of two abstractions in
+`iucs.meettomanage.domain/Entities/<area>` and derive from one of two abstractions in
 `Entities/Common`:
 
 | Abstraction | Adds | Used for |
@@ -80,6 +80,6 @@ query filter, stores enums as strings, defaults decimals to `numeric(12,2)` and 
 
 ```bash
 # from reader-nest-backend/
-dotnet ef migrations add <Name> --project iucs.readernest.domain --startup-project iucs.readernest.api
-dotnet ef database update --project iucs.readernest.domain --startup-project iucs.readernest.api
+dotnet ef migrations add <Name> --project iucs.meettomanage.domain --startup-project iucs.meettomanage.api
+dotnet ef database update --project iucs.meettomanage.domain --startup-project iucs.meettomanage.api
 ```

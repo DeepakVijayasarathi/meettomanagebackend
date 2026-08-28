@@ -1,0 +1,40 @@
+using iucs.meettomanage.application.Dto.Billing;
+using iucs.meettomanage.application.Dto.Portal;
+using iucs.meettomanage.application.Dto.Resources;
+using iucs.meettomanage.application.Dto.Sessions;
+
+namespace iucs.meettomanage.application.Services
+{
+    public interface IParentPortalService
+    {
+        /// <summary>Unified multi-child dashboard: classes done/remaining, attendance %, fee status, suspension flag.</summary>
+        Task<ParentDashboardDto> GetDashboardAsync(Guid parentUserId, CancellationToken cancellationToken = default);
+
+        /// <summary>Sessions of every batch the parent's children are enrolled in.</summary>
+        Task<IReadOnlyList<ClassSessionDto>> GetScheduleAsync(
+            Guid parentUserId,
+            DateTime fromUtc,
+            DateTime toUtc,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>Resources granted to this parent; blocked while fee-suspended.</summary>
+        Task<IReadOnlyList<ResourceDto>> GetResourcesAsync(Guid parentUserId, CancellationToken cancellationToken = default);
+
+        Task<IReadOnlyList<InvoiceDto>> GetInvoicesAsync(Guid parentUserId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Validates the grant, downloadability flag and suspension state before
+        /// handing back the resource for a parent download.
+        /// </summary>
+        Task<ResourceDto> GetResourceForDownloadAsync(Guid parentUserId, Guid resourceId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Non-expired recordings for a session, once the caller's own child is confirmed
+        /// enrolled in that session's batch. The "15-day parent view window" this feature
+        /// is documented around (SessionService.AddRecordingAsync, Batch.CompletedAtUtc)
+        /// had no parent-reachable endpoint anywhere until this one.
+        /// </summary>
+        Task<IReadOnlyList<SessionRecordingDto>> GetRecordingsAsync(
+            Guid parentUserId, Guid sessionId, CancellationToken cancellationToken = default);
+    }
+}

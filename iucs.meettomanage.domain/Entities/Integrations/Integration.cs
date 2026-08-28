@@ -1,0 +1,37 @@
+using System.ComponentModel.DataAnnotations;
+using iucs.meettomanage.domain.Entities.Common;
+using iucs.meettomanage.domain.Enums;
+using Microsoft.EntityFrameworkCore;
+
+namespace iucs.meettomanage.domain.Entities.Integrations
+{
+    /// <summary>
+    /// Master record for one third-party integration (Email, WhatsApp, Razorpay,
+    /// Cashfree, Zoom, Jitsi Meet, ...). Admin-managed via Settings → Integrations;
+    /// ConfigJson is the live source of truth read by PaymentGatewayDispatcher and
+    /// PaymentsWebhookController at request time — there is no appsettings fallback.
+    /// </summary>
+    [Index(nameof(Key), IsUnique = true)]
+    public class Integration : AuditEntity
+    {
+        /// <summary>Stable kebab-case identifier, e.g. "razorpay".</summary>
+        [MaxLength(64)]
+        public string Key { get; set; } = null!;
+
+        [MaxLength(100)]
+        public string Name { get; set; } = null!;
+
+        public IntegrationCategory Category { get; set; }
+
+        [MaxLength(500)]
+        public string? Description { get; set; }
+
+        public bool IsEnabled { get; set; }
+
+        /// <summary>Provider-specific fields (api keys, webhook URLs, ...) as a JSON object string.</summary>
+        public string? ConfigJson { get; set; }
+
+        /// <summary>Seeded integrations the platform ships with; protected from deletion.</summary>
+        public bool IsSystem { get; set; }
+    }
+}

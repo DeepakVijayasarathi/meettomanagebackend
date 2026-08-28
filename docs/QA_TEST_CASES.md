@@ -62,7 +62,7 @@ Every test case in this document follows this exact shape:
 
 | Item | Value |
 |---|---|
-| Backend local run | `docker compose up -d` (Postgres, host port 5433) then `dotnet run --project iucs.readernest.api --launch-profile http` → `http://localhost:5288` |
+| Backend local run | `docker compose up -d` (Postgres, host port 5433) then `dotnet run --project iucs.meettomanage.api --launch-profile http` → `http://localhost:5288` |
 | Frontend local run | `npm run dev` → `http://localhost:5173`; set `VITE_API_BASE_URL=http://localhost:5288` in `.env.development` for API mode, leave unset for Demo mode |
 | Seeded admin login (API mode) | `admin@readernest.com` / `Admin@12345` (from `DatabaseInitializer` dev seed) |
 | Demo mode login | `/login` shows a "Preview as (demo)" role selector — no real credentials needed, bypasses auth entirely |
@@ -4694,7 +4694,7 @@ sections in whatever order matches the current sprint's focus area.
 
 - **No automated tests are written here** — this is a manual/exploratory test *case* suite. Per
   `TEST_STRATEGY.md`, Playwright E2E automation is Sprint 2+ scope and currently has no config or
-  test files; `iucs.readernest.tests` (xUnit) covers services, not these user flows.
+  test files; `iucs.meettomanage.tests` (xUnit) covers services, not these user flows.
 - **Load/concurrency testing is explicitly out of scope** here (TC-CLS-026 notes this) — that's a
   Sprint 5 k6/`jitsi-meet-torture` activity per `TEST_STRATEGY.md`, not something this suite
   attempts to substitute for.

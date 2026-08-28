@@ -8,7 +8,7 @@ cloud account; nothing else blocks provisioning.
 | Component | Runs as | Sizing (pilot) |
 |---|---|---|
 | PostgreSQL 17 | Managed database (or container + volume) | 2 vCPU / 4 GB |
-| API (`iucs.readernest.api`) | Container, `ASPNETCORE_ENVIRONMENT=Production` | 2 vCPU / 2 GB |
+| API (`iucs.meettomanage.api`) | Container, `ASPNETCORE_ENVIRONMENT=Production` | 2 vCPU / 2 GB |
 | Frontend (Vite build) | Static hosting / CDN behind the client domain | – |
 | Jitsi stack (web, prosody, jicofo, JVB, Jibri) | Docker compose on a dedicated VM (`meet.techmisai.com`) | 4 vCPU / 8 GB + Jibri 4 vCPU |
 | Recording storage | Object storage bucket, lifecycle delete after 16 days | see LONG_DURATION_SESSIONS.md |

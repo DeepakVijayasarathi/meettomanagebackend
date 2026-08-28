@@ -21,7 +21,7 @@ services:
   api:
     build:
       context: .
-      dockerfile: iucs.readernest.api/Dockerfile
+      dockerfile: iucs.meettomanage.api/Dockerfile
     restart: unless-stopped
     depends_on:
       postgres:

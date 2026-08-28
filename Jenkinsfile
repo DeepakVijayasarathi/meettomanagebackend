@@ -45,7 +45,7 @@ pipeline {
                 sh """
                     docker build \
                       -t ${IMAGE_NAME}:latest \
-                      -f iucs.readernest.api/Dockerfile .
+                      -f iucs.meettomanage.api/Dockerfile .
                 """
             }
         }

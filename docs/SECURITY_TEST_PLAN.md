@@ -17,7 +17,7 @@
    must be overridden in staging/prod via environment/user-secrets).
 
 ## Method
-- Sprint 2: manual abuse-case pass per the matrix above + automated 403 tests in `iucs.readernest.tests`.
+- Sprint 2: manual abuse-case pass per the matrix above + automated 403 tests in `iucs.meettomanage.tests`.
 - Sprint 5: full pass including dependency audit (`dotnet list package --vulnerable`, `npm audit`)
   and a scan (OWASP ZAP baseline) against staging.
 

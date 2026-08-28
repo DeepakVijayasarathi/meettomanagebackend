@@ -1,0 +1,166 @@
+using iucs.meettomanage.api.Auth;
+using iucs.meettomanage.application.Dto.Billing;
+using iucs.meettomanage.application.Dto.Common;
+using iucs.meettomanage.application.Services;
+using iucs.meettomanage.domain.Enums;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace iucs.meettomanage.api.Controllers
+{
+    // Parent also carries BillingFinance:View (for their own /parent/billing screen,
+    // served separately by ParentPortalController) and AdmissionTeam carries
+    // BillingFinance:View/Create/Approve (for payment-tracking during conversion) — the
+    // same claims this whole admin console runs on. Without a role restriction, either
+    // could call this unscoped List and enumerate every family's invoices/amounts, or
+    // target another family specifically via ?parentProfileId=. AdmissionTeam is kept
+    // in the allow-list since its seeded grants look deliberate; Parent never is.
+    [ApiController]
+    [Route("api/invoices")]
+    [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
+    public class InvoicesController : ControllerBase
+    {
+        private readonly IBillingService _billingService;
+
+        public InvoicesController(IBillingService billingService)
+        {
+            _billingService = billingService;
+        }
+
+        /// <summary>
+        /// Newest-first page of invoices. pageSize is clamped to 200 by the service — asking
+        /// for more silently returns 200 rather than erroring, so an over-eager caller gets a
+        /// bounded page instead of a table scan.
+        /// </summary>
+        [HttpGet]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.View)]
+        public async Task<ActionResult<PagedResult<InvoiceDto>>> List(
+            [FromQuery] InvoiceStatus? status,
+            [FromQuery] Guid? parentProfileId,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 50,
+            CancellationToken cancellationToken = default)
+        {
+            return Ok(await _billingService.ListInvoicesAsync(status, parentProfileId, page, pageSize, cancellationToken));
+        }
+
+        /// <summary>Downloadable "Bill of Supply" PDF for this invoice, matching the org's own template.</summary>
+        [HttpGet("{id:guid}/pdf")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.View)]
+        public async Task<IActionResult> DownloadPdf(Guid id, CancellationToken cancellationToken)
+        {
+            var (content, fileName) = await _billingService.GenerateInvoicePdfAsync(id, cancellationToken);
+            return File(content, "application/pdf", fileName);
+        }
+
+        [HttpPost]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.Create)]
+        public async Task<ActionResult<InvoiceDto>> Create(CreateInvoiceRequest request, CancellationToken cancellationToken)
+        {
+            var invoice = await _billingService.CreateInvoiceAsync(request, cancellationToken);
+            return CreatedAtAction(nameof(List), null, invoice);
+        }
+
+        [HttpPost("{id:guid}/payments")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.Edit)]
+        public async Task<ActionResult<InvoiceDto>> RecordPayment(
+            Guid id,
+            RecordPaymentRequest request,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await _billingService.RecordPaymentAsync(id, request, cancellationToken));
+        }
+
+        /// <summary>Successful payments on this invoice — what a refund can be requested against.</summary>
+        [HttpGet("{id:guid}/transactions")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.View)]
+        public async Task<ActionResult<IReadOnlyList<PaymentTransactionDto>>> ListInvoiceTransactions(Guid id, CancellationToken cancellationToken)
+        {
+            return Ok(await _billingService.ListInvoiceTransactionsAsync(id, cancellationToken));
+        }
+
+        /// <summary>Shareable Pay Now link, routed through the invoice's department gateway account.</summary>
+        [HttpPost("{id:guid}/payment-link")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.Edit)]
+        public async Task<ActionResult<PaymentLinkDto>> CreatePaymentLink(Guid id, CancellationToken cancellationToken)
+        {
+            return Ok(await _billingService.CreatePaymentLinkAsync(id, cancellationToken));
+        }
+
+        /// <summary>Pending parent cash intents awaiting staff confirmation.</summary>
+        [HttpGet("cash-intents")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.View)]
+        public async Task<ActionResult<IReadOnlyList<CashIntentDto>>> ListCashIntents(CancellationToken cancellationToken)
+        {
+            return Ok(await _billingService.ListPendingCashIntentsAsync(cancellationToken));
+        }
+
+        /// <summary>
+        /// Confirms the cash was collected: settles the intent, generates the receipt and updates
+        /// the invoice. Gated on Approve specifically (not Edit) — a login only sees the confirm
+        /// action once an Admin has explicitly granted it Approve on Billing &amp; Finance.
+        /// </summary>
+        [HttpPost("cash-intents/{transactionId:guid}/confirm")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.Approve)]
+        public async Task<ActionResult<CashIntentDto>> ConfirmCashIntent(
+            Guid transactionId,
+            ConfirmCashIntentRequest request,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await _billingService.ConfirmCashIntentAsync(transactionId, request, cancellationToken));
+        }
+
+        /// <summary>Same Approve gate as confirmation — rejecting is the other half of the same decision.</summary>
+        [HttpPost("cash-intents/{transactionId:guid}/reject")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.Approve)]
+        public async Task<IActionResult> RejectCashIntent(
+            Guid transactionId,
+            RejectCashIntentRequest request,
+            CancellationToken cancellationToken)
+        {
+            await _billingService.RejectCashIntentAsync(transactionId, request, cancellationToken);
+            return NoContent();
+        }
+
+        [HttpGet("suspensions")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.View)]
+        public async Task<ActionResult<IReadOnlyList<FeeSuspensionDto>>> ListSuspensions(
+            [FromQuery] SuspensionStatus? status,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await _billingService.ListSuspensionsAsync(status, cancellationToken));
+        }
+
+        /// <summary>Manual admin restoration of a fee-suspended account.</summary>
+        [HttpPost("suspensions/{id:guid}/lift")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.Approve)]
+        public async Task<ActionResult<FeeSuspensionDto>> LiftSuspension(Guid id, CancellationToken cancellationToken)
+        {
+            return Ok(await _billingService.LiftSuspensionAsync(id, cancellationToken));
+        }
+
+        [HttpGet("refunds")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.View)]
+        public async Task<ActionResult<IReadOnlyList<RefundDto>>> ListRefunds(CancellationToken cancellationToken)
+        {
+            return Ok(await _billingService.ListRefundsAsync(cancellationToken));
+        }
+
+        [HttpPost("refunds")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.Create)]
+        public async Task<ActionResult<RefundDto>> RequestRefund(RequestRefundRequest request, CancellationToken cancellationToken)
+        {
+            return Ok(await _billingService.RequestRefundAsync(request, cancellationToken));
+        }
+
+        [HttpPost("refunds/{id:guid}/review")]
+        [HasPermission(PermissionModule.BillingFinance, PermissionAction.Approve)]
+        public async Task<ActionResult<RefundDto>> ReviewRefund(
+            Guid id,
+            ReviewRefundRequest request,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await _billingService.ReviewRefundAsync(id, request, cancellationToken));
+        }
+    }
+}

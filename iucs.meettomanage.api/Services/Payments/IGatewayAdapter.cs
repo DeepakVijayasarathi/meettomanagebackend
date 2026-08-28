@@ -1,0 +1,67 @@
+using iucs.meettomanage.application.Common.Interfaces;
+using iucs.meettomanage.domain.Entities.Billing;
+
+namespace iucs.meettomanage.api.Services.Payments
+{
+    /// <summary>
+    /// Provider-specific checkout-link creation. Credentials come from the matching
+    /// Settings → Integrations record's config, resolved by the dispatcher per call.
+    /// </summary>
+    public interface IGatewayAdapter
+    {
+        /// <summary>Integration key this adapter serves ("razorpay", "cashfree").</summary>
+        string IntegrationKey { get; }
+
+        /// <summary>True when the integration config carries everything this adapter needs to charge for real.</summary>
+        bool IsConfigured(IReadOnlyDictionary<string, string?> config);
+
+        /// <summary>Human-readable list of the credentials this adapter needs, for a config error message.</summary>
+        string ConfigHint { get; }
+
+        Task<PaymentLinkResult> CreatePaymentLinkAsync(
+            Invoice invoice,
+            PaymentAccount account,
+            IReadOnlyDictionary<string, string?> config,
+            CancellationToken cancellationToken);
+
+        /// <param name="gatewayPaymentId">The concrete payment id captured at settlement (not the payment-link reference).</param>
+        Task<RefundResult> RefundAsync(
+            string gatewayPaymentId,
+            decimal amount,
+            string currency,
+            IReadOnlyDictionary<string, string?> config,
+            CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Polls this provider for a checkout link's current state. Returns
+        /// <see cref="GatewayPaymentState.Unknown"/> when the reference isn't one of this
+        /// provider's (so the dispatcher can try the next adapter) or the status can't be read.
+        /// </summary>
+        Task<GatewayPaymentStatus> GetPaymentStatusAsync(
+            string gatewayReference,
+            IReadOnlyDictionary<string, string?> config,
+            CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Creates a gateway order for an in-page checkout popup. Null means this provider
+        /// has no inline checkout (the dispatcher reports it unavailable); providers that
+        /// do (Razorpay) override.
+        /// </summary>
+        Task<InlineCheckoutResult?> CreateInlineCheckoutAsync(
+            Invoice invoice,
+            PaymentAccount account,
+            InlinePayerInfo payer,
+            IReadOnlyDictionary<string, string?> config,
+            CancellationToken cancellationToken) => Task.FromResult<InlineCheckoutResult?>(null);
+
+        /// <summary>
+        /// Verifies an inline-checkout success signature. Null = the order reference isn't
+        /// this provider's (dispatcher tries the next adapter); true/false = verdict.
+        /// </summary>
+        bool? VerifyInlineCheckoutSignature(
+            string orderReference,
+            string gatewayPaymentId,
+            string signature,
+            IReadOnlyDictionary<string, string?> config) => null;
+    }
+}

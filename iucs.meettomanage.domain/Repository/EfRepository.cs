@@ -1,0 +1,90 @@
+using System.Linq.Expressions;
+using iucs.meettomanage.domain.Data;
+using iucs.meettomanage.domain.Entities.Common;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Query;
+
+namespace iucs.meettomanage.domain.Repository
+{
+    public class EfRepository<TEntity> : IRepository<TEntity> where TEntity : BaseEntity
+    {
+        private readonly MeetToManageDbContext _context;
+        private readonly DbSet<TEntity> _dbSet;
+
+        public EfRepository(MeetToManageDbContext context)
+        {
+            _context = context;
+            _dbSet = context.Set<TEntity>();
+        }
+
+        public async Task<TEntity?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+        {
+            return await _dbSet.FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
+        }
+
+        public async Task<TEntity?> FirstOrDefaultAsync(
+            Expression<Func<TEntity, bool>> predicate,
+            CancellationToken cancellationToken = default)
+        {
+            return await _dbSet.FirstOrDefaultAsync(predicate, cancellationToken);
+        }
+
+        public async Task<IReadOnlyList<TEntity>> ListAsync(CancellationToken cancellationToken = default)
+        {
+            return await _dbSet.AsNoTracking().ToListAsync(cancellationToken);
+        }
+
+        public async Task<IReadOnlyList<TEntity>> ListAsync(
+            Expression<Func<TEntity, bool>> predicate,
+            CancellationToken cancellationToken = default)
+        {
+            return await _dbSet.AsNoTracking().Where(predicate).ToListAsync(cancellationToken);
+        }
+
+        public Task<bool> ExistsAsync(
+            Expression<Func<TEntity, bool>> predicate,
+            CancellationToken cancellationToken = default)
+        {
+            return _dbSet.AnyAsync(predicate, cancellationToken);
+        }
+
+        public async Task AddAsync(TEntity entity, CancellationToken cancellationToken = default)
+        {
+            await _dbSet.AddAsync(entity, cancellationToken);
+        }
+
+        public void Update(TEntity entity)
+        {
+            _dbSet.Update(entity);
+        }
+
+        public void Remove(TEntity entity)
+        {
+            // Soft delete: the audit interceptor converts this to IsDeleted = true
+            _dbSet.Remove(entity);
+        }
+
+        public IQueryable<TEntity> Query()
+        {
+            return _dbSet.AsNoTracking();
+        }
+
+        public IQueryable<TEntity> TrackedQuery()
+        {
+            return _dbSet;
+        }
+
+        /// <inheritdoc />
+        public Task<int> ExecuteUpdateAsync(
+            Expression<Func<TEntity, bool>> predicate,
+            Expression<Func<SetPropertyCalls<TEntity>, SetPropertyCalls<TEntity>>> setters,
+            CancellationToken cancellationToken = default)
+        {
+            // Deliberately NOT .IgnoreQueryFilters(): a soft-deleted row must stay unmatchable
+            // here exactly as it is everywhere else. Runs as its own statement (its own implicit
+            // transaction unless the caller opened one), which is what makes the WHERE clause a
+            // real lock-arbitrated guard rather than an advisory in-memory check.
+            return _dbSet.Where(predicate).ExecuteUpdateAsync(setters, cancellationToken);
+        }
+    }
+}

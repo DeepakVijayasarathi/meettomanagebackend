@@ -1,0 +1,43 @@
+using iucs.meettomanage.application.Dto.Payouts;
+using iucs.meettomanage.domain.Entities.Sessions;
+using iucs.meettomanage.domain.Enums;
+
+namespace iucs.meettomanage.application.Services
+{
+    public interface IPayoutService
+    {
+        Task<IReadOnlyList<PayoutRateDto>> ListRatesAsync(Guid? teacherProfileId, CancellationToken cancellationToken = default);
+
+        /// <summary>Rate changes append a new effective-dated row; history stays reproducible.</summary>
+        Task<PayoutRateDto> SetRateAsync(SavePayoutRateRequest request, CancellationToken cancellationToken = default);
+
+        Task<IReadOnlyList<PayoutDto>> ListAsync(
+            int? year,
+            int? month,
+            Guid? teacherProfileId,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>Visibility rule: a teacher sees only their own payouts.</summary>
+        Task<IReadOnlyList<PayoutDto>> ListForTeacherUserAsync(Guid userId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Adds a line item to the teacher's current-month payout for a session event.
+        /// Amount derives from the teacher's effective per-duration rate; deductions are negative.
+        /// Does not save — participates in the caller's unit of work.
+        /// </summary>
+        Task AccrueForSessionAsync(ClassSession session, PayoutItemType type, string? note, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Admin correction to one accrued line item -- the only way to act on a
+        /// RequiresReview flag (e.g. a teacher's attendance fell well short of the scheduled
+        /// class). Only while the item's payout is still Pending; recalculates the payout's
+        /// TotalAmount from the corrected item and clears the review flag.
+        /// </summary>
+        Task<PayoutDto> AdjustItemAsync(Guid payoutId, Guid itemId, AdjustPayoutItemRequest request, CancellationToken cancellationToken = default);
+
+        /// <summary>Locks the month's total and emails the statement to the teacher.</summary>
+        Task<PayoutDto> FinalizeAsync(Guid payoutId, CancellationToken cancellationToken = default);
+
+        Task<PayoutDto> MarkPaidAsync(Guid payoutId, CancellationToken cancellationToken = default);
+    }
+}

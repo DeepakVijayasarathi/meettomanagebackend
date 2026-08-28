@@ -1,0 +1,36 @@
+using iucs.meettomanage.domain.Enums;
+
+namespace iucs.meettomanage.application.Dto.Users
+{
+    public class UserDto
+    {
+        public Guid Id { get; set; }
+
+        public string Email { get; set; } = null!;
+
+        public string FirstName { get; set; } = null!;
+
+        public string LastName { get; set; } = null!;
+
+        public string FullName => $"{FirstName} {LastName}".Trim();
+
+        public string? Phone { get; set; }
+
+        public UserRole Role { get; set; }
+
+        public UserStatus Status { get; set; }
+
+        public string TimeZoneId { get; set; } = null!;
+
+        public Guid? DepartmentId { get; set; }
+
+        public string? DepartmentName { get; set; }
+
+        /// <summary>Assigned role (preset) id; only meaningful for Sub Admin accounts.</summary>
+        public Guid? RoleDefinitionId { get; set; }
+
+        public DateTime CreatedAtUtc { get; set; }
+
+        public DateTime? LastLoginAtUtc { get; set; }
+    }
+}

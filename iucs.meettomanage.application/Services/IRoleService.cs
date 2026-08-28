@@ -1,0 +1,18 @@
+using iucs.meettomanage.application.Dto.Users;
+
+namespace iucs.meettomanage.application.Services
+{
+    public interface IRoleService
+    {
+        Task<IReadOnlyList<RoleDto>> ListAsync(CancellationToken cancellationToken = default);
+
+        Task<RoleDto> CreateAsync(SaveRoleRequest request, CancellationToken cancellationToken = default);
+
+        Task<RoleDto> UpdateAsync(Guid id, SaveRoleRequest request, CancellationToken cancellationToken = default);
+
+        Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
+
+        /// <summary>Full role record by name (case-insensitive), for applying it to a user; null when no such role exists.</summary>
+        Task<RoleDto?> FindByNameAsync(string name, CancellationToken cancellationToken = default);
+    }
+}
