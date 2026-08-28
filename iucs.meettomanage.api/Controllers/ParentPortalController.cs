@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Dto.Billing;
 using iucs.meettomanage.application.Dto.Enrollment;
 using iucs.meettomanage.application.Dto.Portal;
@@ -81,17 +82,20 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<IActionResult> DownloadInvoice(
             Guid id,
             [FromServices] IBillingService billingService,
+            [FromServices] iucs.meettomanage.domain.Repository.IUnitOfWork unitOfWork,
             CancellationToken cancellationToken)
         {
             var (invoice, parentName) = await billingService.GetParentInvoiceAsync(UserId(), id, cancellationToken);
             var balance = invoice.Amount - invoice.AmountPaid;
+            var orgName = await BrandSettings.GetNameAsync(unitOfWork, cancellationToken);
+            var brandColor = await BrandSettings.GetPrimaryColorAsync(unitOfWork, cancellationToken);
             var html = $$"""
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Invoice {{invoice.InvoiceNumber}}</title>
 <style>
   body { font-family: 'Segoe UI', Arial, sans-serif; margin: 40px; color: #1a1a2e; }
-  .head { display: flex; justify-content: space-between; border-bottom: 3px solid #1E3A5F; padding-bottom: 16px; }
-  .brand { font-size: 22px; font-weight: 800; color: #1E3A5F; }
+  .head { display: flex; justify-content: space-between; border-bottom: 3px solid {{brandColor}}; padding-bottom: 16px; }
+  .brand { font-size: 22px; font-weight: 800; color: {{brandColor}}; }
   h1 { font-size: 18px; margin: 24px 0 4px; }
   table { width: 100%; border-collapse: collapse; margin-top: 16px; }
   th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #e5e7eb; }
@@ -103,7 +107,7 @@ namespace iucs.meettomanage.api.Controllers
 </style></head>
 <body>
   <div class="head">
-    <div><div class="brand">Meet to Manage</div><div class="muted">Learning Management &amp; Virtual Classroom</div></div>
+    <div><div class="brand">{{System.Net.WebUtility.HtmlEncode(orgName)}}</div><div class="muted">Learning Management &amp; Virtual Classroom</div></div>
     <div style="text-align:right"><div style="font-size:20px;font-weight:800">INVOICE</div><div class="muted">{{invoice.InvoiceNumber}}</div></div>
   </div>
   <h1>Billed to</h1>

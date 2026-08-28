@@ -606,8 +606,9 @@ namespace iucs.meettomanage.application.Services
                 ["TemporaryPin"] = temporaryPin,
             };
             // WhatsApp/SMS are plain-text transports, not part of the Email Template Master.
+            var orgName = await BrandSettings.GetNameAsync(_unitOfWork, cancellationToken);
             var plainBody =
-                $"Hello {user.FirstName},\n\nYour Meet to Manage account is ready.\n\n" +
+                $"Hello {user.FirstName},\n\nYour {orgName} account is ready.\n\n" +
                 $"Login: {user.Email}\nTemporary PIN: {temporaryPin}\n\n" +
                 "Please sign in with this PIN. Contact your admin if you need it changed.";
             var (subject, emailHtmlBody) = await _emailTemplateService.RenderAsync(
