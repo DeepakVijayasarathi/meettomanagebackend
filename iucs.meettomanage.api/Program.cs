@@ -258,21 +258,29 @@ var allowedOrigins = (builder.Configuration
     .Select(origin => origin?.Trim().TrimEnd('/') ?? string.Empty)
     .Where(origin => origin.Length > 0)
     .ToArray();
-if (allowedOrigins.Contains("*"))
-{
-    // The policy below uses AllowCredentials(), which the CORS protocol forbids
-    // combining with a wildcard origin — surface the fix instead of the framework's
-    // generic startup crash.
-    throw new InvalidOperationException(
-        "Cors:AllowedOrigins must list explicit origins — '*' is not allowed because the CORS policy " +
-        "sends credentials. Set Cors__AllowedOrigins__0 to the frontend's URL, e.g. https://app.example.com.");
-}
+// The CORS protocol forbids combining a literal wildcard origin with AllowCredentials()
+// (below) — browsers reject it outright. So "*" here doesn't send a literal wildcard;
+// it switches the policy to SetIsOriginAllowed(_ => true), which reflects whatever
+// Origin header the caller sent back as the allowed origin on every request. That's
+// the actual "any origin" mechanism once credentials are involved, and it means every
+// origin can make credentialed calls to this API — only use "*" where that's intended
+// (e.g. local development), never for a real production deployment.
+var allowAnyOrigin = allowedOrigins.Contains("*");
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy =>
-        policy.WithOrigins(allowedOrigins)
-            .AllowAnyHeader()
+    {
+        policy.AllowAnyHeader()
             .WithMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
-            .AllowCredentials()));
+            .AllowCredentials();
+        if (allowAnyOrigin)
+        {
+            policy.SetIsOriginAllowed(_ => true);
+        }
+        else
+        {
+            policy.WithOrigins(allowedOrigins);
+        }
+    }));
 
 var app = builder.Build();
 
