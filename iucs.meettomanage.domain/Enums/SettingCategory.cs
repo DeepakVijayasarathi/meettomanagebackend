@@ -7,6 +7,7 @@ namespace iucs.meettomanage.domain.Enums
         Branding,
         Notifications,
         Integrations,
-        Widgets
+        Widgets,
+        Seo
     }
 }

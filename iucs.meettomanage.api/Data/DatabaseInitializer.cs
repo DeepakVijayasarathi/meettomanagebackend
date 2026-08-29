@@ -50,6 +50,7 @@ namespace iucs.meettomanage.api.Data
             await EnsureAdminMarketingMenuAsync(context);
             await BackfillMenuRequiredModulesAsync(context);
             await SeedBlogPostsAsync(context);
+            await EnsureSeoSettingsAsync(context);
             await SeedIntegrationsAsync(context);
             await EnsureCashPaymentMethodAsync(context);
             await EnsureSmsIntegrationAsync(context);
@@ -208,6 +209,48 @@ namespace iucs.meettomanage.api.Data
                 Setting(SettingCategory.Notifications, "notify.leaveRequests", "true"),
                 Setting(SettingCategory.Notifications, "notify.lowAttendance", "false"),
                 Setting(SettingCategory.Notifications, "notify.weeklyDigest", "true"));
+
+            context.AppSettings.AddRange(SeoSettingDefaults(Setting));
+        }
+
+        /// <summary>
+        /// Per-page SEO title/description overrides for the public marketing site — the
+        /// values already hardcoded as fallbacks in each page's &lt;Seo&gt; call, just also
+        /// editable from Admin Settings without a deploy. Shared between the fresh-seed
+        /// path above and EnsureSeoSettingsAsync's backfill for already-seeded databases.
+        /// </summary>
+        private static AppSetting[] SeoSettingDefaults(Func<SettingCategory, string, string?, bool, AppSetting> setting) =>
+        [
+            setting(SettingCategory.Seo, "seo.home.title", "Meet to Manage — LMS & Virtual Classroom", true),
+            setting(SettingCategory.Seo, "seo.home.description", "Meet to Manage brings live teaching, scheduling, admissions, billing and reporting into one role-based platform for schools and academies.", true),
+            setting(SettingCategory.Seo, "seo.store.title", "Course Catalogue — Meet to Manage", true),
+            setting(SettingCategory.Seo, "seo.store.description", "Browse current courses and book a free demo class — no account needed.", true),
+            setting(SettingCategory.Seo, "seo.demo.title", "Book a Free Demo — Meet to Manage", true),
+            setting(SettingCategory.Seo, "seo.demo.description", "Book a free demo class and see how Meet to Manage's live classroom, scheduling and billing work together.", true),
+            setting(SettingCategory.Seo, "seo.getStarted.title", "Request a Demo — Meet to Manage", true),
+            setting(SettingCategory.Seo, "seo.getStarted.description", "Running an academy? See how Meet to Manage's live classroom, scheduling, admissions and billing work together — request a platform demo.", true),
+            setting(SettingCategory.Seo, "seo.blog.title", "Blog — Meet to Manage", true),
+            setting(SettingCategory.Seo, "seo.blog.description", "Practical notes on running a modern academy: admissions, billing automation, scheduling and more.", true),
+        ];
+
+        /// <summary>
+        /// Backfills the SEO settings above into a database seeded before they existed
+        /// (SeedSettingsAsync only ever creates rows once, on a completely empty table).
+        /// Per-key existence check, unlike a whole-table AnyAsync guard, since some
+        /// installs may already have unrelated settings rows.
+        /// </summary>
+        private static async Task EnsureSeoSettingsAsync(MeetToManageDbContext context)
+        {
+            AppSetting Setting(SettingCategory category, string key, string? value, bool isPublic) =>
+                new() { Category = category, Key = key, Value = value, IsPublic = isPublic };
+
+            var existingKeys = await context.AppSettings
+                .Where(s => s.Key.StartsWith("seo."))
+                .Select(s => s.Key)
+                .ToListAsync();
+
+            var missing = SeoSettingDefaults(Setting).Where(s => !existingKeys.Contains(s.Key));
+            context.AppSettings.AddRange(missing);
         }
 
         private static async Task SeedRolesAsync(MeetToManageDbContext context)
