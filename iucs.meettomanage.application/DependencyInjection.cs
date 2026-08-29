@@ -32,6 +32,8 @@ namespace iucs.meettomanage.application
             services.AddScoped<IPayoutService, PayoutService>();
             services.AddScoped<IProgressReportService, ProgressReportService>();
             services.AddScoped<IStoreService, StoreService>();
+            services.AddScoped<IPlatformDemoRequestService, PlatformDemoRequestService>();
+            services.AddScoped<IBlogService, BlogService>();
             services.AddScoped<IAcademicOpsService, AcademicOpsService>();
             services.AddScoped<IEnrollmentService, EnrollmentService>();
             services.AddScoped<IParentPortalService, ParentPortalService>();

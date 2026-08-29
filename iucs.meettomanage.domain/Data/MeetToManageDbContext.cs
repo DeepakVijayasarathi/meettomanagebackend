@@ -6,6 +6,7 @@ using iucs.meettomanage.domain.Entities.Billing;
 using iucs.meettomanage.domain.Entities.Common;
 using iucs.meettomanage.domain.Entities.Communication;
 using iucs.meettomanage.domain.Entities.Integrations;
+using iucs.meettomanage.domain.Entities.Marketing;
 using iucs.meettomanage.domain.Entities.Navigation;
 using iucs.meettomanage.domain.Entities.Notes;
 using iucs.meettomanage.domain.Entities.Payouts;
@@ -64,6 +65,11 @@ namespace iucs.meettomanage.domain.Data
         public DbSet<DemoParticipant> DemoParticipants => Set<DemoParticipant>();
         public DbSet<DemoFeedback> DemoFeedbacks => Set<DemoFeedback>();
         public DbSet<StoreInquiry> StoreInquiries => Set<StoreInquiry>();
+
+        // Marketing — the platform's own marketing site (leads, blog), distinct from
+        // Admission's academy-facing class demos above.
+        public DbSet<PlatformDemoRequest> PlatformDemoRequests => Set<PlatformDemoRequest>();
+        public DbSet<BlogPost> BlogPosts => Set<BlogPost>();
 
         // Billing
         public DbSet<PaymentAccount> PaymentAccounts => Set<PaymentAccount>();
