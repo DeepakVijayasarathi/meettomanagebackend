@@ -438,6 +438,28 @@ namespace iucs.readernest.api.Controllers
             return Ok(await _sessionService.ListAllRecordingsAsync(page <= 0 ? 1 : page, pageSize <= 0 ? 20 : pageSize, date, null, cancellationToken));
         }
 
+        /// <summary>Admin only: every member's Personal Meeting Room recordings, newest first.
+        /// Each owner sees only their own (GET /api/users/me/meeting-room/recordings); Admin
+        /// oversees all of them from the Recordings page.</summary>
+        [HttpGet("recordings/personal")]
+        [Authorize(Roles = nameof(UserRole.Admin))]
+        public async Task<ActionResult<iucs.readernest.application.Dto.Common.PagedResult<PersonalRoomRecordingDto>>> ListPersonalRoomRecordings(
+            [FromQuery] int page,
+            [FromQuery] int pageSize,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await _sessionService.ListAllPersonalRoomRecordingsAsync(page <= 0 ? 1 : page, pageSize <= 0 ? 20 : pageSize, cancellationToken));
+        }
+
+        /// <summary>Admin only: removes any member's Personal Meeting Room recording (the record; the file stays in storage).</summary>
+        [HttpDelete("recordings/personal/{recordingId:guid}")]
+        [Authorize(Roles = nameof(UserRole.Admin))]
+        public async Task<IActionResult> DeletePersonalRoomRecording(Guid recordingId, CancellationToken cancellationToken)
+        {
+            await _sessionService.DeletePersonalRoomRecordingAsync(null, recordingId, cancellationToken);
+            return NoContent();
+        }
+
         /// <summary>A teacher's own Recordings page — same paged query as the admin-wide one
         /// above, scoped to this caller's own classes. TeacherRecordings.tsx had the identical
         /// completed-session-list-plus-per-session-lookup N+1 shape the admin page did; fixed the
