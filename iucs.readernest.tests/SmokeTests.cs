@@ -709,6 +709,89 @@ namespace iucs.readernest.tests
 
             var finalized = await payouts.FinalizeAsync(payout.Id);
             Assert.Equal(10000m, finalized.TotalAmount);
+
+            // Client: finalizing must not block a genuine correction -- the class turned out to
+            // have run in full, and a bonus is added -- with the before/after kept as history.
+            var corrected = await payouts.AdjustItemAsync(payout.Id, flaggedItem.Id, new AdjustPayoutItemRequest
+            {
+                NewAmount = 45000m,
+                Reason = "Verified from the recording: class ran in full.",
+            });
+            Assert.Equal(PayoutStatus.Finalized, corrected.Status);
+            Assert.Equal(45000m, corrected.TotalAmount);
+            Assert.Null(Assert.Single(corrected.Items).OriginalAmount);
+
+            var withBonus = await payouts.AddItemAsync(payout.Id, new AddPayoutItemRequest { Amount = 500m, Reason = "Festival bonus" });
+            Assert.Equal(45500m, withBonus.TotalAmount);
+            Assert.Equal(2, withBonus.Items.Count);
+
+            var history = await payouts.GetHistoryAsync(payout.Id);
+            Assert.Equal(3, history.Count);
+            Assert.Contains(history, h => h.TotalBefore == 10000m && h.TotalAfter == 45000m && h.Reason.StartsWith("Verified"));
+            Assert.Contains(history, h => h.AmountBefore == 0m && h.AmountAfter == 500m && h.TotalAfter == 45500m);
+        }
+
+        [Fact]
+        public async Task PayoutEmails_ShowSectionedBreakdown_NotEscapedMarkup()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var payouts = CreatePayoutService();
+            await payouts.SetRateAsync(new SavePayoutRateRequest
+            {
+                TeacherProfileId = session.TeacherProfileId, RatePerMinute = 10,
+                EffectiveFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-30)),
+            });
+            await SeedFullTeacherAttendanceAsync(session);
+            await CreateSessionService().CompleteAsync(session.Id);
+            var payout = await _db.Context.Payouts.AsNoTracking().FirstAsync();
+            await payouts.AddItemAsync(payout.Id, new AddPayoutItemRequest { Amount = -75m, Reason = "Late by 10 minutes <twice>" });
+            await payouts.AddItemAsync(payout.Id, new AddPayoutItemRequest { Amount = 200m, Reason = "Festival bonus" });
+            _emailSender.Sent.Clear();
+
+            await payouts.FinalizeAsync(payout.Id);
+            await payouts.MarkPaidAsync(payout.Id);
+
+            Assert.Equal(2, _emailSender.Sent.Count);
+            foreach (var (_, _, body) in _emailSender.Sent)
+            {
+                Assert.Contains("<table", body);
+                Assert.DoesNotContain("&lt;table", body);
+                Assert.Contains("Net payable", body);
+                Assert.Contains("Session details", body);
+                Assert.Contains("Festival bonus", body);
+                Assert.Contains("Late by 10 minutes &lt;twice&gt;", body); // a person's note is still escaped
+                Assert.Contains("₹575.00", body); // 450 + 200 - 75
+            }
+
+            // Set PAYOUT_EMAIL_SAMPLE_DIR to write both emails out as .html files to look at.
+            if (Environment.GetEnvironmentVariable("PAYOUT_EMAIL_SAMPLE_DIR") is { Length: > 0 } dir)
+            {
+                File.WriteAllText(Path.Combine(dir, "payout-statement.html"), _emailSender.Sent[0].Body);
+                File.WriteAllText(Path.Combine(dir, "salary-slip.html"), _emailSender.Sent[1].Body);
+            }
+        }
+
+        [Fact]
+        public async Task StaffPayout_AdjustAsync_ChangesAmount_AndKeepsHistory()
+        {
+            var staff = await _db.SeedUserAsync($"staff-adj-{Guid.NewGuid():N}@test.com", "x", UserRole.AdmissionTeam);
+            var payout = new StaffPayout
+            {
+                UserId = staff.Id, PeriodYear = 2026, PeriodMonth = 8, Basis = CompensationBasis.FixedMonthly,
+                Amount = 20000m, AppliedFixedAmount = 20000m, Status = StaffPayoutStatus.Paid,
+            };
+            _db.Context.StaffPayouts.Add(payout);
+            await _db.Context.SaveChangesAsync();
+            var service = new StaffPayoutService(_db.UnitOfWork, _auditLog);
+
+            var adjusted = await service.AdjustAsync(payout.Id, new AdjustStaffPayoutRequest { NewAmount = 18500m, Reason = "3 days unpaid leave" });
+
+            Assert.Equal(18500m, adjusted.Amount);
+            Assert.Equal(StaffPayoutStatus.Paid, adjusted.Status);
+            var change = Assert.Single(await service.GetHistoryAsync(payout.Id));
+            Assert.Equal(20000m, change.AmountBefore);
+            Assert.Equal(18500m, change.AmountAfter);
+            Assert.Equal("3 days unpaid leave", change.Reason);
         }
 
         /// <summary>
@@ -2117,6 +2200,73 @@ namespace iucs.readernest.tests
                 "trn-personal-doesnotexist", "irrelevant-under-the-fake", "https://jitsi.test/recordings/abc/rec.mp4", 900);
 
             Assert.Null(recording);
+        }
+
+        [Fact]
+        public async Task FinalizeJibriRecording_SavesForOwner_WhenRoomIsPersonalRoom()
+        {
+            var owner = await _db.SeedUserAsync($"pr-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            owner.PersonalMeetingRoomId = $"trn-personal-{Guid.NewGuid():N}";
+            await _db.Context.SaveChangesAsync();
+            var service = CreateSessionService(new FakeJitsiTokenService { ValidateFinalizeTokenResult = true });
+
+            // Twice: the finalize hook retries, and a retry must not create a second row.
+            await service.FinalizeJibriRecordingAsync(owner.PersonalMeetingRoomId, "t", "https://jitsi.test/recordings/p/rec.mp4", 600);
+            await service.FinalizeJibriRecordingAsync(owner.PersonalMeetingRoomId, "t", "https://jitsi.test/recordings/p/rec.mp4", 600);
+
+            var mine = await service.ListPersonalRoomRecordingsAsync(owner.Id);
+            var only = Assert.Single(mine);
+            Assert.Equal(600, only.DurationSeconds);
+
+            await service.DeletePersonalRoomRecordingAsync(owner.Id, only.Id);
+            Assert.Empty(await service.ListPersonalRoomRecordingsAsync(owner.Id));
+        }
+
+        [Fact]
+        public async Task FinalizeJibriRecording_InPersonalRoom_OnlyAttachesToAClassItOverlaps()
+        {
+            // A teacher's personal room is also where their demo classes run. A recording
+            // finishing long after the last demo is a personal meeting, not that demo's.
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var teacherUser = await _db.Context.Users.FirstAsync(u => u.Id == _db.CurrentUser.UserId);
+            teacherUser.PersonalMeetingRoomId = $"trn-personal-{Guid.NewGuid():N}";
+            session.MeetingRoomId = teacherUser.PersonalMeetingRoomId;
+            session.ScheduledStartAtUtc = DateTime.UtcNow.AddDays(-2);
+            session.ScheduledEndAtUtc = DateTime.UtcNow.AddDays(-2).AddMinutes(45);
+            session.Status = SessionStatus.Completed;
+            await _db.Context.SaveChangesAsync();
+            var service = CreateSessionService(new FakeJitsiTokenService { ValidateFinalizeTokenResult = true });
+
+            var personal = await service.FinalizeJibriRecordingAsync(session.MeetingRoomId, "t", "https://jitsi.test/recordings/p/later.mp4", 600);
+
+            Assert.Null(personal);
+            Assert.Single(await service.ListPersonalRoomRecordingsAsync(teacherUser.Id));
+            Assert.False(await _db.Context.SessionRecordings.AnyAsync(r => r.ClassSessionId == session.Id));
+
+            // The same room while that class is running: the recording is the class's.
+            session.Status = SessionStatus.InProgress;
+            await _db.Context.SaveChangesAsync();
+
+            var classRecording = await service.FinalizeJibriRecordingAsync(session.MeetingRoomId, "t", "https://jitsi.test/recordings/p/demo.mp4", 600);
+
+            Assert.NotNull(classRecording);
+            Assert.Equal(session.Id, classRecording!.ClassSessionId);
+            Assert.Single(await service.ListPersonalRoomRecordingsAsync(teacherUser.Id));
+        }
+
+        [Fact]
+        public async Task GetLiveObserverJoin_JoinsOwnersRoom_WhenPersonalRoomHasNoLiveClass()
+        {
+            var owner = await _db.SeedUserAsync($"po-{Guid.NewGuid():N}@test.com", "x", UserRole.Parent);
+            owner.PersonalMeetingRoomId = $"trn-personal-{Guid.NewGuid():N}";
+            await _db.Context.SaveChangesAsync();
+
+            var join = await CreateSessionService().GetLiveObserverJoinAsync(owner.PersonalMeetingRoomId);
+
+            Assert.NotNull(join);
+            Assert.True(join!.IsPersonalRoom);
+            Assert.Equal(owner.Id, join.SessionId);
+            Assert.Null(await CreateSessionService().GetLiveObserverJoinAsync("trn-not-a-room"));
         }
 
         [Fact]
@@ -8063,6 +8213,44 @@ namespace iucs.readernest.tests
             Assert.Equal(1, a.ThisMonthPayments);
             Assert.Equal(3000m, b.ThisMonth);
             Assert.Single(b.Payments);
+        }
+
+        [Fact]
+        public async Task MonthlyFinance_CreditsCounselorUntilEnrollment_ThenLaterInstallmentsAreOthers()
+        {
+            // Client: 4,000 collected while enrolling is the counselor's; the remaining 4,000 the
+            // parent pays after the child is enrolled goes under "Others", not her collection.
+            var counselor = await _db.SeedUserAsync($"counsel-m-{Guid.NewGuid():N}@test.com", "x", UserRole.AdmissionTeam);
+            var (_, invoice) = await SeedInvoiceAsync(amount: 8000);
+            var now = DateTime.UtcNow;
+            var booking = new DemoBooking
+            {
+                ParentName = "Lead Parent", ParentEmail = $"lead-{Guid.NewGuid():N}@test.com", ChildName = "Ira",
+                InvoiceId = invoice.Id, ConversionStatus = ConversionStatus.ReadyForEnrollment,
+                PaymentVerifiedAtUtc = now.AddSeconds(-20),
+            };
+            _db.Context.DemoBookings.Add(booking);
+            await _db.Context.SaveChangesAsync();
+            booking.CreatedBy = counselor.Id;
+            foreach (var paidAt in new[] { now.AddSeconds(-40), now })
+            {
+                _db.Context.PaymentTransactions.Add(new PaymentTransaction
+                {
+                    InvoiceId = invoice.Id, PaymentAccountId = invoice.PaymentAccountId, Amount = 4000m, Currency = invoice.Currency,
+                    Status = TransactionStatus.Success, PaidAtUtc = paidAt, Method = PaymentMethod.Upi,
+                });
+            }
+            await _db.Context.SaveChangesAsync();
+
+            var reports = new ReportsService(_db.UnitOfWork, _notifications);
+            var ist = TimeZoneInfo.ConvertTimeFromUtc(now, TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata"));
+            var summary = await reports.GetMonthlyFinanceSummaryAsync(ist.Year, ist.Month);
+
+            var row = Assert.Single(summary.Counselors, c => c.UserId == counselor.Id);
+            Assert.Equal(4000m, row.AmountCollected);
+            Assert.True(summary.OthersCollected >= 4000m);
+            Assert.Equal(summary.TotalCollected, summary.CounselorCollected + summary.OthersCollected);
+            Assert.Equal(4000m, (await reports.GetMyCollectionsAsync(counselor.Id)).ThisMonth);
         }
 
         [Fact]

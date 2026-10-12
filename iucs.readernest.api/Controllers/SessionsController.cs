@@ -203,7 +203,7 @@ namespace iucs.readernest.api.Controllers
         /// Chrome has no logged-in user — but the token it hands back only ever admits a
         /// moderator-less participant into one specific, currently-InProgress room, same bounded
         /// trust model as recordings/finalize. Returns 204 when the room has no InProgress
-        /// session right now (e.g. a personal room, or a startup race).
+        /// session right now (e.g. a startup race) and isn't a Personal Meeting Room.
         /// </summary>
         /// <summary>
         /// Anonymous by necessity (Jibri's headless Chrome has no logged-in user), which
@@ -371,8 +371,9 @@ namespace iucs.readernest.api.Controllers
         /// docs/JITSI_ARCHITECTURE.md. Deliberately anonymous at the ASP.NET auth layer: the
         /// bearer token in the Authorization header is validated inside the service against the
         /// same appId/appSecret as room-join tokens, which is the actual authorization here.
-        /// Returns 204 rather than a recording body when the room isn't a known ClassSession
-        /// (personal/demo rooms) — not an error, just nothing to attach.
+        /// Returns 204 rather than a recording body when the room isn't a known ClassSession —
+        /// not an error: a Personal Meeting Room recording is saved for the room's owner
+        /// instead, and anything else has nothing to attach to.
         /// </summary>
         [HttpPost("recordings/finalize")]
         [AllowAnonymous]

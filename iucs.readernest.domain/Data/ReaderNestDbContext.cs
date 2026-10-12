@@ -58,6 +58,8 @@ namespace iucs.readernest.domain.Data
         public DbSet<SessionAttendance> SessionAttendances => Set<SessionAttendance>();
         public DbSet<SessionRecording> SessionRecordings => Set<SessionRecording>();
 
+        public DbSet<PersonalRoomRecording> PersonalRoomRecordings => Set<PersonalRoomRecording>();
+
         public DbSet<SessionPresentation> SessionPresentations => Set<SessionPresentation>();
         public DbSet<EngagementEvent> EngagementEvents => Set<EngagementEvent>();
         public DbSet<StudentAward> StudentAwards => Set<StudentAward>();
@@ -93,6 +95,8 @@ namespace iucs.readernest.domain.Data
         public DbSet<PayoutItem> PayoutItems => Set<PayoutItem>();
         public DbSet<StaffCompensationSetting> StaffCompensationSettings => Set<StaffCompensationSetting>();
         public DbSet<StaffPayout> StaffPayouts => Set<StaffPayout>();
+
+        public DbSet<PayoutChange> PayoutChanges => Set<PayoutChange>();
 
         // Resources
         public DbSet<Resource> Resources => Set<Resource>();

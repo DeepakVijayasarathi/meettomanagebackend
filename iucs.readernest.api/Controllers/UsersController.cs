@@ -253,6 +253,30 @@ namespace iucs.readernest.api.Controllers
             return Ok(new { url = $"{apiBaseUrl}/m/{slug}" });
         }
 
+        /// <summary>Recordings made in the signed-in member's own personal meeting room (any role).</summary>
+        [HttpGet("me/meeting-room/recordings")]
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        public async Task<ActionResult<IReadOnlyList<application.Dto.Sessions.PersonalRoomRecordingDto>>> MyMeetingRoomRecordings(
+            [FromServices] ISessionService sessionService,
+            CancellationToken cancellationToken)
+        {
+            var userId = Guid.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+            return Ok(await sessionService.ListPersonalRoomRecordingsAsync(userId, cancellationToken));
+        }
+
+        /// <summary>Removes one of the signed-in member's own personal meeting room recordings.</summary>
+        [HttpDelete("me/meeting-room/recordings/{recordingId:guid}")]
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        public async Task<IActionResult> DeleteMyMeetingRoomRecording(
+            Guid recordingId,
+            [FromServices] ISessionService sessionService,
+            CancellationToken cancellationToken)
+        {
+            var userId = Guid.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+            await sessionService.DeletePersonalRoomRecordingAsync(userId, recordingId, cancellationToken);
+            return NoContent();
+        }
+
         /// <summary>
         /// Public, anonymous lookup backing the in-app guest-join page (<c>/join/personal/{id}</c>,
         /// PersonalRoomGuestJoin.tsx) that a fresh <see cref="MyMeetingRoomShortLink"/> now points
