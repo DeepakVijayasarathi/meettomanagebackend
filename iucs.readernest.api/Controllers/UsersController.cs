@@ -492,12 +492,12 @@ namespace iucs.readernest.api.Controllers
 
         /// <summary>
         /// "View as parent": opens this parent's portal read-only, for 30 minutes, so a
-        /// Relationship Manager can see what the parent sees without knowing their PIN. Same
-        /// grant as Reset PIN (which already lets the caller take over the account outright);
-        /// this is the narrower, audited alternative. Parent accounts only.
+        /// Relationship Manager can see what the parent sees without knowing their PIN. Needs
+        /// only User Management view (ViewAsParent.RequiredPermission) -- the session can't
+        /// change anything, and every one is audited. Parent accounts only.
         /// </summary>
         [HttpPost("{id:guid}/view-as")]
-        [HasPermission(PermissionModule.UserManagement, PermissionAction.Edit)]
+        [HasPermission(PermissionModule.UserManagement, PermissionAction.View)]
         public async Task<ActionResult<application.Dto.Auth.LoginResponse>> ViewAsParent(
             Guid id,
             [FromServices] IAuthService authService,
