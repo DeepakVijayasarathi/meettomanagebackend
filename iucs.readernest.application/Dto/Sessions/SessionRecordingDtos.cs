@@ -46,10 +46,15 @@ namespace iucs.readernest.application.Dto.Sessions
         public DateTime ScheduledStartAtUtc { get; set; }
     }
 
-    /// <summary>One recording made in the caller's own Personal Meeting Room.</summary>
+    /// <summary>One recording made in a member's Personal Meeting Room.</summary>
     public class PersonalRoomRecordingDto
     {
         public Guid Id { get; set; }
+
+        /// <summary>Whose room it was recorded in.</summary>
+        public Guid OwnerId { get; set; }
+
+        public string OwnerName { get; set; } = null!;
 
         public string StorageUrl { get; set; } = null!;
 

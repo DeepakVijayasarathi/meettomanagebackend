@@ -149,10 +149,17 @@ namespace iucs.readernest.application.Services
             Guid ownerUserId,
             CancellationToken cancellationToken = default);
 
-        /// <summary>Removes one of this user's own Personal Meeting Room recordings. Like
+        /// <summary>Admin view: every member's Personal Meeting Room recordings, newest first.</summary>
+        Task<iucs.readernest.application.Dto.Common.PagedResult<PersonalRoomRecordingDto>> ListAllPersonalRoomRecordingsAsync(
+            int page,
+            int pageSize,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>Removes a Personal Meeting Room recording — one of this user's own, or any
+        /// when <paramref name="ownerUserId"/> is null (Admin). Like
         /// <see cref="DeleteRecordingAsync"/>, only the record goes — the file stays in storage.</summary>
         Task DeletePersonalRoomRecordingAsync(
-            Guid ownerUserId,
+            Guid? ownerUserId,
             Guid recordingId,
             CancellationToken cancellationToken = default);
 

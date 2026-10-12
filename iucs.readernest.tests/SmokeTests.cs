@@ -2218,6 +2218,10 @@ namespace iucs.readernest.tests
             var only = Assert.Single(mine);
             Assert.Equal(600, only.DurationSeconds);
 
+            // Admin sees every member's personal recordings, with whose room it was.
+            var all = await service.ListAllPersonalRoomRecordingsAsync(1, 100);
+            Assert.Contains(all.Items, r => r.Id == only.Id && r.OwnerId == owner.Id && !string.IsNullOrWhiteSpace(r.OwnerName));
+
             await service.DeletePersonalRoomRecordingAsync(owner.Id, only.Id);
             Assert.Empty(await service.ListPersonalRoomRecordingsAsync(owner.Id));
         }

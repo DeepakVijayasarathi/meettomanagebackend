@@ -1203,26 +1203,53 @@ namespace iucs.readernest.application.Services
             Guid ownerUserId,
             CancellationToken cancellationToken = default)
         {
-            return await _unitOfWork.Repository<PersonalRoomRecording>().Query()
-                .Where(r => r.OwnerId == ownerUserId)
-                .OrderByDescending(r => r.CreatedAtUtc)
-                .Select(r => new PersonalRoomRecordingDto
-                {
-                    Id = r.Id,
-                    StorageUrl = r.StorageUrl,
-                    DurationSeconds = r.DurationSeconds,
-                    CreatedAtUtc = r.CreatedAtUtc,
-                })
+            return await ToPersonalRoomRecordingDtos(
+                    _unitOfWork.Repository<PersonalRoomRecording>().Query()
+                        .Where(r => r.OwnerId == ownerUserId)
+                        .OrderByDescending(r => r.CreatedAtUtc))
                 .ToListAsync(cancellationToken);
         }
 
+        public async Task<PagedResult<PersonalRoomRecordingDto>> ListAllPersonalRoomRecordingsAsync(
+            int page,
+            int pageSize,
+            CancellationToken cancellationToken = default)
+        {
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 1, 100);
+
+            var query = _unitOfWork.Repository<PersonalRoomRecording>().Query().OrderByDescending(r => r.CreatedAtUtc);
+            var totalCount = await query.CountAsync(cancellationToken);
+            var items = await ToPersonalRoomRecordingDtos(query.Skip((page - 1) * pageSize).Take(pageSize))
+                .ToListAsync(cancellationToken);
+
+            return new PagedResult<PersonalRoomRecordingDto>
+            {
+                Items = items,
+                TotalCount = totalCount,
+                Page = page,
+                PageSize = pageSize,
+            };
+        }
+
+        private static IQueryable<PersonalRoomRecordingDto> ToPersonalRoomRecordingDtos(IQueryable<PersonalRoomRecording> recordings) =>
+            recordings.Select(r => new PersonalRoomRecordingDto
+            {
+                Id = r.Id,
+                OwnerId = r.OwnerId,
+                OwnerName = (r.Owner.FirstName + " " + r.Owner.LastName).Trim(),
+                StorageUrl = r.StorageUrl,
+                DurationSeconds = r.DurationSeconds,
+                CreatedAtUtc = r.CreatedAtUtc,
+            });
+
         public async Task DeletePersonalRoomRecordingAsync(
-            Guid ownerUserId,
+            Guid? ownerUserId,
             Guid recordingId,
             CancellationToken cancellationToken = default)
         {
             var recording = await _unitOfWork.Repository<PersonalRoomRecording>().TrackedQuery()
-                .FirstOrDefaultAsync(r => r.Id == recordingId && r.OwnerId == ownerUserId, cancellationToken)
+                .FirstOrDefaultAsync(r => r.Id == recordingId && (ownerUserId == null || r.OwnerId == ownerUserId), cancellationToken)
                 ?? throw new NotFoundException(nameof(PersonalRoomRecording), recordingId);
 
             _unitOfWork.Repository<PersonalRoomRecording>().Remove(recording);
