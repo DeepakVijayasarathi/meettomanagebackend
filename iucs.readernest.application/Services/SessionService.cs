@@ -1091,11 +1091,11 @@ namespace iucs.readernest.application.Services
                 throw new UnauthorizedException("Invalid or missing recording-finalize token.");
             }
 
-            // Not every room maps to a ClassSession (personal rooms, demo bookings) — Jibri
-            // records those the same as any other room, but there's no session row here to
-            // attach the recording to, so this is a no-op rather than a NotFoundException: the
-            // finalize script has no session id to have gotten wrong, only a room name that's
-            // legitimately outside this feature's scope.
+            // Not every room maps to a ClassSession — Jibri records those the same as any
+            // other room, but there's no session row here to attach the recording to. A
+            // Personal Meeting Room's recording goes to its owner (below); anything else is a
+            // no-op rather than a NotFoundException: the finalize script has no session id to
+            // have gotten wrong, only a room name that's legitimately outside this feature's scope.
             //
             // A personal room's MeetingRoomId is a permanent per-teacher identifier reused
             // across every demo/1-on-1 class that teacher ever runs -- NOT unique per occurrence
@@ -1109,15 +1109,45 @@ namespace iucs.readernest.application.Services
             var candidates = await _unitOfWork.Repository<ClassSession>().Query()
                 .Where(s => s.MeetingRoomId == roomName)
                 .ToListAsync(cancellationToken);
-            if (candidates.Count == 0)
+
+            var now = DateTime.UtcNow;
+            var session = candidates.Count <= 1
+                ? candidates.FirstOrDefault()
+                : candidates.MinBy(s => Math.Abs(((s.ActualEndAtUtc ?? s.ScheduledEndAtUtc) - now).Ticks))!;
+
+            // A personal room is also where its owner's demo classes run, so "closest class"
+            // alone would hang a recording of an ordinary personal meeting on some unrelated
+            // demo -- and show it to that demo's reviewers. Only keep the class when the
+            // recording actually overlaps it; otherwise it's the owner's own meeting.
+            var personalRoomOwnerId = await _unitOfWork.Repository<User>().Query()
+                .Where(u => u.PersonalMeetingRoomId != null && u.PersonalMeetingRoomId == roomName)
+                .Select(u => (Guid?)u.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (personalRoomOwnerId is { } ownerId && (session is null || !RecordingOverlapsSession(session, now, durationSeconds)))
             {
+                // Same retry-safety as the class path below: one row per file.
+                var alreadySaved = await _unitOfWork.Repository<PersonalRoomRecording>()
+                    .ExistsAsync(r => r.OwnerId == ownerId && r.StorageUrl == storageUrl, cancellationToken);
+                if (!alreadySaved)
+                {
+                    var personalRecording = new PersonalRoomRecording
+                    {
+                        OwnerId = ownerId,
+                        StorageUrl = storageUrl,
+                        DurationSeconds = durationSeconds,
+                    };
+                    await _unitOfWork.Repository<PersonalRoomRecording>().AddAsync(personalRecording, cancellationToken);
+                    await _auditLog.StageAsync(AuditAction.Create, nameof(PersonalRoomRecording), personalRecording.Id.ToString(), cancellationToken: cancellationToken);
+                    await _unitOfWork.SaveChangesAsync(cancellationToken);
+                }
+
                 return null;
             }
 
-            var now = DateTime.UtcNow;
-            var session = candidates.Count == 1
-                ? candidates[0]
-                : candidates.MinBy(s => Math.Abs(((s.ActualEndAtUtc ?? s.ScheduledEndAtUtc) - now).Ticks))!;
+            if (session is null)
+            {
+                return null;
+            }
 
             // The finalize-recording.sh script on the video server retries this call once on any
             // failure, including a plain network timeout -- confirmed real in production: a slow
@@ -1149,6 +1179,55 @@ namespace iucs.readernest.application.Services
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return ToRecordingDto(recording);
+        }
+
+        /// <summary>Whether a recording that just finished (finalize fires within minutes of it
+        /// ending) was running during this class. The slack covers Jibri's own upload/finalize
+        /// delay; it is wider when the hook didn't report a duration, since the recording's
+        /// start time is then unknown.</summary>
+        private static bool RecordingOverlapsSession(ClassSession session, DateTime now, int? durationSeconds)
+        {
+            if (session.Status == SessionStatus.InProgress)
+            {
+                return true;
+            }
+
+            var slack = durationSeconds is null ? TimeSpan.FromMinutes(30) : TimeSpan.FromMinutes(10);
+            var recordingStart = now.AddSeconds(-(durationSeconds ?? 0));
+            var sessionStart = session.ActualStartAtUtc ?? session.ScheduledStartAtUtc;
+            var sessionEnd = session.ActualEndAtUtc ?? session.ScheduledEndAtUtc;
+            return recordingStart <= sessionEnd + slack && now >= sessionStart - slack;
+        }
+
+        public async Task<IReadOnlyList<PersonalRoomRecordingDto>> ListPersonalRoomRecordingsAsync(
+            Guid ownerUserId,
+            CancellationToken cancellationToken = default)
+        {
+            return await _unitOfWork.Repository<PersonalRoomRecording>().Query()
+                .Where(r => r.OwnerId == ownerUserId)
+                .OrderByDescending(r => r.CreatedAtUtc)
+                .Select(r => new PersonalRoomRecordingDto
+                {
+                    Id = r.Id,
+                    StorageUrl = r.StorageUrl,
+                    DurationSeconds = r.DurationSeconds,
+                    CreatedAtUtc = r.CreatedAtUtc,
+                })
+                .ToListAsync(cancellationToken);
+        }
+
+        public async Task DeletePersonalRoomRecordingAsync(
+            Guid ownerUserId,
+            Guid recordingId,
+            CancellationToken cancellationToken = default)
+        {
+            var recording = await _unitOfWork.Repository<PersonalRoomRecording>().TrackedQuery()
+                .FirstOrDefaultAsync(r => r.Id == recordingId && r.OwnerId == ownerUserId, cancellationToken)
+                ?? throw new NotFoundException(nameof(PersonalRoomRecording), recordingId);
+
+            _unitOfWork.Repository<PersonalRoomRecording>().Remove(recording);
+            await _auditLog.StageAsync(AuditAction.Delete, nameof(PersonalRoomRecording), recording.Id.ToString(), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
         public async Task<IReadOnlyList<SessionRecordingDto>> ListRecordingsAsync(
@@ -2268,18 +2347,30 @@ namespace iucs.readernest.application.Services
                 .Where(s => s.MeetingRoomId == roomName && s.Status == SessionStatus.InProgress)
                 .ToListAsync(cancellationToken);
 
+            // No live class in the room: if it's someone's Personal Meeting Room, the observer
+            // joins that owner's own room instead -- its ClassroomHub group is keyed by the
+            // owner's account id (see ClassroomHub.JoinSession's isPersonalRoomOwner check).
+            Guid? personalRoomOwnerId = null;
             if (candidates.Count == 0)
             {
-                return null;
+                personalRoomOwnerId = await _unitOfWork.Repository<User>().Query()
+                    .Where(u => u.PersonalMeetingRoomId != null && u.PersonalMeetingRoomId == roomName)
+                    .Select(u => (Guid?)u.Id)
+                    .FirstOrDefaultAsync(cancellationToken);
+                if (personalRoomOwnerId is null)
+                {
+                    return null;
+                }
             }
 
             // Shouldn't happen -- but FinalizeJibriRecordingAsync's own history shows "shouldn't
             // happen" has happened before for this same MeetingRoomId-sharing pattern. Earliest
             // start keeps this deterministic rather than throwing, since Jibri can't react to an
             // error here anyway.
-            var session = candidates.Count == 1
-                ? candidates[0]
-                : candidates.MinBy(s => s.ActualStartAtUtc ?? s.ScheduledStartAtUtc)!;
+            var hubSessionId = personalRoomOwnerId
+                ?? (candidates.Count == 1
+                    ? candidates[0]
+                    : candidates.MinBy(s => s.ActualStartAtUtc ?? s.ScheduledStartAtUtc)!).Id;
 
             var jitsiConfigJson = await _unitOfWork.Repository<Integration>().Query()
                 .Where(i => i.Key == "jitsi")
@@ -2292,11 +2383,12 @@ namespace iucs.readernest.application.Services
             var expiresAtUtc = DateTime.UtcNow.AddHours(4);
 
             var token = _jitsiTokenService.CreateRecordingObserverToken(domain, jitsiConfigJson, roomName, expiresAtUtc);
-            var hubToken = _tokenService.CreateRecordingObserverHubToken(session.Id, expiresAtUtc).AccessToken;
+            var hubToken = _tokenService.CreateRecordingObserverHubToken(hubSessionId, expiresAtUtc).AccessToken;
 
             return new RecordingObserverJoinDto
             {
-                SessionId = session.Id,
+                SessionId = hubSessionId,
+                IsPersonalRoom = personalRoomOwnerId is not null,
                 Room = roomName,
                 Domain = domain,
                 Token = token,
