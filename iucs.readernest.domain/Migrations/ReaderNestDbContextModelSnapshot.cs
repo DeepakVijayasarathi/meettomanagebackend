@@ -582,6 +582,61 @@ namespace iucs.readernest.domain.Migrations
                     b.ToTable("leave_allowances");
                 });
 
+            modelBuilder.Entity("iucs.readernest.domain.Entities.Academics.LeaveCancellationReport", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<DateTime>("GeneratedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("generated_at_utc");
+
+                    b.Property<Guid?>("GeneratedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("generated_by");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<int>("Month")
+                        .HasColumnType("integer")
+                        .HasColumnName("month");
+
+                    b.Property<string>("PayloadJson")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("payload_json");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<int>("Year")
+                        .HasColumnType("integer")
+                        .HasColumnName("year");
+
+                    b.HasKey("Id")
+                        .HasName("pk_leave_cancellation_reports");
+
+                    b.HasIndex("Year", "Month")
+                        .IsUnique()
+                        .HasDatabaseName("ix_leave_cancellation_reports_year_month")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("leave_cancellation_reports");
+                });
+
             modelBuilder.Entity("iucs.readernest.domain.Entities.Academics.LeaveRequest", b =>
                 {
                     b.Property<Guid>("Id")

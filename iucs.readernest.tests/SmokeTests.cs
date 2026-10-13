@@ -6873,6 +6873,77 @@ namespace iucs.readernest.tests
                 s => s.BatchId == batch.Id && s.ScheduledStartAtUtc == inProgressStart && s.Status != SessionStatus.Cancelled));
         }
 
+        private LeaveCancellationReportService CreateLeaveCancellationReportService() => new(_db.UnitOfWork);
+
+        private void AddCancelledSession(Batch batch, DateTime startUtc, string reason)
+        {
+            _db.Context.Add(new ClassSession
+            {
+                BatchId = batch.Id,
+                TeacherProfileId = batch.TeacherProfileId,
+                Status = SessionStatus.Cancelled,
+                CancellationReason = reason,
+                ScheduledStartAtUtc = startUtc,
+                ScheduledEndAtUtc = startUtc.AddMinutes(45),
+            });
+        }
+
+        [Fact]
+        public async Task LeaveCancellationReport_CountsOnlyLeaveCancellations_GroupedByIstDateAndMonth()
+        {
+            var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 5, includeSession: false);
+
+            // Two leave cancellations on 10 Sep IST (one class-wise), one cancelled by a parent
+            // the same day (must not count), and one at 00:30 IST on 1 Oct = 19:00 UTC on 30 Sep
+            // (belongs to October, not September).
+            AddCancelledSession(batch, new DateTime(2026, 9, 10, 10, 0, 0, DateTimeKind.Utc), "Cancelled by Asha (Teacher): teacher's leave 10 Sep 2026 – 10 Sep 2026, approved by Admin — unwell");
+            AddCancelledSession(batch, new DateTime(2026, 9, 10, 12, 0, 0, DateTimeKind.Utc), "Cancelled by Asha (Teacher): teacher's class-wise leave, approved by Admin — unwell");
+            AddCancelledSession(batch, new DateTime(2026, 9, 10, 14, 0, 0, DateTimeKind.Utc), "Cancelled by Priya (Parent): travelling");
+            AddCancelledSession(batch, new DateTime(2026, 9, 11, 10, 0, 0, DateTimeKind.Utc), "Teacher on approved leave (11 Sep 2026 – 11 Sep 2026).");
+            AddCancelledSession(batch, new DateTime(2026, 9, 30, 19, 0, 0, DateTimeKind.Utc), "Cancelled by Asha (Teacher): teacher's leave 1 Oct 2026 – 1 Oct 2026, approved by Admin — unwell");
+            await _db.Context.SaveChangesAsync();
+
+            var sep = await CreateLeaveCancellationReportService().GetAsync(2026, 9);
+            var oct = await CreateLeaveCancellationReportService().GetAsync(2026, 10);
+
+            Assert.False(sep.IsSnapshot);
+            Assert.Equal(3, sep.TotalCancelledClasses); // 2 on 10 Sep + 1 legacy-worded on 11 Sep
+            var teacher = Assert.Single(sep.Teachers);
+            Assert.Equal(3, teacher.TotalCancelledClasses);
+            Assert.Equal(2, teacher.Days.Count);
+            var day = teacher.Days[0];
+            Assert.Equal(new DateOnly(2026, 9, 10), day.Date);
+            Assert.Equal(2, day.CancelledClasses);
+            Assert.All(day.Classes, c => Assert.Equal("Group", c.ClassType));
+            Assert.Equal(1, oct.TotalCancelledClasses);
+        }
+
+        [Fact]
+        public async Task LeaveCancellationReport_MonthEndSnapshot_IsWrittenAt2359IstAndNotRewritten()
+        {
+            var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 5, includeSession: false);
+            AddCancelledSession(batch, new DateTime(2026, 9, 10, 10, 0, 0, DateTimeKind.Utc), "Cancelled by Asha (Teacher): teacher's leave 10 Sep 2026 – 10 Sep 2026, approved by Admin — unwell");
+            await _db.Context.SaveChangesAsync();
+            var service = CreateLeaveCancellationReportService();
+
+            // 23:58 IST on 30 Sep (18:28 UTC): not yet.
+            Assert.Empty(await service.EnsureSnapshotsAsync(new DateTime(2026, 9, 30, 18, 28, 0, DateTimeKind.Utc)));
+
+            // 23:59 IST on 30 Sep (18:29 UTC): the September snapshot is written.
+            var generated = await service.EnsureSnapshotsAsync(new DateTime(2026, 9, 30, 18, 29, 0, DateTimeKind.Utc));
+            Assert.Contains((2026, 9), generated);
+
+            // A class edited afterwards must not change the frozen figures, and a second run is a no-op.
+            AddCancelledSession(batch, new DateTime(2026, 9, 12, 10, 0, 0, DateTimeKind.Utc), "Cancelled by Asha (Teacher): teacher's leave 12 Sep 2026 – 12 Sep 2026, approved by Admin — unwell");
+            await _db.Context.SaveChangesAsync();
+            Assert.DoesNotContain((2026, 9), await service.EnsureSnapshotsAsync(new DateTime(2026, 9, 30, 18, 29, 30, DateTimeKind.Utc)));
+
+            var report = await service.GetAsync(2026, 9);
+            Assert.True(report.IsSnapshot);
+            Assert.Equal(1, report.TotalCancelledClasses);
+            Assert.Single(await service.ListGeneratedAsync());
+        }
+
         [Fact]
         public async Task UpdateFutureSchedule_ThrowsWhenTheBatchHasNoUpcomingSessions()
         {

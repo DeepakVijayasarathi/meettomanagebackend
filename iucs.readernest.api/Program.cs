@@ -133,6 +133,7 @@ builder.Services.AddHostedService<ReportsDigestBackgroundService>();
 builder.Services.AddHostedService<BulkEmailQueueBackgroundService>();
 // Progress reports: seeds an empty monthly draft per active child on the 1st
 builder.Services.AddHostedService<ProgressReportsBackgroundService>();
+builder.Services.AddHostedService<LeaveCancellationReportBackgroundService>();
 
 // Authentication: JWT bearer
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
