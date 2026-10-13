@@ -6824,6 +6824,56 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task UpdateFutureSchedule_NewPatternLandsOnAnInProgressSlot_SkipsItInsteadOfFailing()
+        {
+            // Live: a teacher opened a class room weeks early, which flipped that future session
+            // to InProgress. The edit only cancels Scheduled/CarriedForward sessions, so the
+            // InProgress one stayed, and the new pattern's placement on the same instant hit the
+            // unique (batch, start) index -- surfaced as "conflicts with another change".
+            var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 3, includeSession: false);
+
+            var day7 = DateTime.UtcNow.AddDays(7);
+            var inProgressStart = new DateTime(day7.Year, day7.Month, day7.Day, 11, 30, 0, DateTimeKind.Utc);
+            _db.Context.Add(new ClassSession
+            {
+                BatchId = batch.Id,
+                TeacherProfileId = batch.TeacherProfileId,
+                Status = SessionStatus.InProgress,
+                ScheduledStartAtUtc = inProgressStart,
+                ScheduledEndAtUtc = inProgressStart.AddMinutes(45),
+            });
+            for (var i = 1; i <= 2; i++)
+            {
+                var d = day7.AddDays(7 * i);
+                var start = new DateTime(d.Year, d.Month, d.Day, 11, 30, 0, DateTimeKind.Utc);
+                _db.Context.Add(new ClassSession
+                {
+                    BatchId = batch.Id,
+                    TeacherProfileId = batch.TeacherProfileId,
+                    Status = SessionStatus.Scheduled,
+                    ScheduledStartAtUtc = start,
+                    ScheduledEndAtUtc = start.AddMinutes(45),
+                });
+            }
+            await _db.Context.SaveChangesAsync();
+
+            var otherDay = (DayOfWeek)(((int)day7.DayOfWeek + 1) % 7);
+            var sessions = await CreateSessionService().UpdateFutureScheduleAsync(batch.Id, new UpdateFutureScheduleRequest
+            {
+                Slots =
+                [
+                    new GenerateScheduleSlot { DayOfWeek = day7.DayOfWeek, StartTimeUtc = new TimeOnly(11, 30) },
+                    new GenerateScheduleSlot { DayOfWeek = otherDay, StartTimeUtc = new TimeOnly(11, 30) },
+                ],
+                RemainingSessionCount = 4,
+            });
+
+            Assert.Equal(4, sessions.Count(s => s.Status == SessionStatus.Scheduled));
+            Assert.Equal(1, await _db.Context.ClassSessions.CountAsync(
+                s => s.BatchId == batch.Id && s.ScheduledStartAtUtc == inProgressStart && s.Status != SessionStatus.Cancelled));
+        }
+
+        [Fact]
         public async Task UpdateFutureSchedule_ThrowsWhenTheBatchHasNoUpcomingSessions()
         {
             var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 1, includeSession: false);
@@ -11092,6 +11142,83 @@ namespace iucs.readernest.tests
             Assert.Equal(secondEdit.Id, await service.ResolveCurrentSessionIdAsync(original.Id));
             Assert.Equal(secondEdit.Id, await service.ResolveCurrentSessionIdAsync(firstEdit.Id));
             Assert.Equal(secondEdit.Id, await service.ResolveCurrentSessionIdAsync(secondEdit.Id));
+        }
+
+        // ---- Wrong-day pick (live, 6 Oct 2026): a teacher opened next week's class instead of
+        // the one on right then; each class has its own video room, so teacher and student never
+        // met, and the future class got started + completed a week early ----
+
+        private async Task<ClassSession> AddSiblingSessionAsync(ClassSession of, DateTime startUtc, SessionStatus status = SessionStatus.Scheduled)
+        {
+            var sibling = new ClassSession
+            {
+                BatchId = of.BatchId,
+                TeacherProfileId = of.TeacherProfileId,
+                ScheduledStartAtUtc = startUtc,
+                ScheduledEndAtUtc = startUtc.AddMinutes(45),
+                Status = status,
+            };
+            _db.Context.Add(sibling);
+            await _db.Context.SaveChangesAsync();
+            return sibling;
+        }
+
+        [Fact]
+        public async Task ResolveCurrentSessionId_AFutureClassPickedWhileTheBatchHasOneOnNow_ReturnsTheOneOnNow()
+        {
+            var (_, _, nextWeek) = await SeedBatchWithSessionAsync(totalSessions: 2);
+            var service = CreateSessionService();
+
+            // 01:58 for a 02:00 class -- exactly the live case.
+            var aboutToStart = await AddSiblingSessionAsync(nextWeek, DateTime.UtcNow.AddMinutes(2));
+            Assert.Equal(aboutToStart.Id, await service.ResolveCurrentSessionIdAsync(nextWeek.Id));
+            // The right class still resolves to itself.
+            Assert.Equal(aboutToStart.Id, await service.ResolveCurrentSessionIdAsync(aboutToStart.Id));
+        }
+
+        [Fact]
+        public async Task ResolveCurrentSessionId_AFutureClassPickedWhileOneIsAlreadyRunning_ReturnsTheRunningOne()
+        {
+            var (_, _, nextWeek) = await SeedBatchWithSessionAsync(totalSessions: 2);
+            var running = await AddSiblingSessionAsync(nextWeek, DateTime.UtcNow.AddMinutes(-20), SessionStatus.InProgress);
+
+            Assert.Equal(running.Id, await CreateSessionService().ResolveCurrentSessionIdAsync(nextWeek.Id));
+        }
+
+        [Fact]
+        public async Task ResolveCurrentSessionId_AFutureClass_IsLeftAlone_WhenNothingElseIsOnNow()
+        {
+            var (_, _, tomorrow) = await SeedBatchWithSessionAsync(totalSessions: 4);
+            var service = CreateSessionService();
+
+            // Already over, cancelled, finished, or hours away: none of them is "on right now".
+            await AddSiblingSessionAsync(tomorrow, DateTime.UtcNow.AddHours(-2));
+            await AddSiblingSessionAsync(tomorrow, DateTime.UtcNow.AddMinutes(2), SessionStatus.Cancelled);
+            await AddSiblingSessionAsync(tomorrow, DateTime.UtcNow.AddMinutes(-10), SessionStatus.Completed);
+            await AddSiblingSessionAsync(tomorrow, DateTime.UtcNow.AddHours(3));
+
+            Assert.Equal(tomorrow.Id, await service.ResolveCurrentSessionIdAsync(tomorrow.Id));
+        }
+
+        [Fact]
+        public async Task ResolveCurrentSessionId_ASameDayEarlyStart_IsNotRedirected()
+        {
+            // Teachers do legitimately open a class hours early on the day (seen live: 6-12h).
+            var (_, _, tomorrow) = await SeedBatchWithSessionAsync(totalSessions: 3);
+            var laterToday = await AddSiblingSessionAsync(tomorrow, DateTime.UtcNow.AddHours(6));
+            await AddSiblingSessionAsync(tomorrow, DateTime.UtcNow.AddMinutes(2));
+
+            Assert.Equal(laterToday.Id, await CreateSessionService().ResolveCurrentSessionIdAsync(laterToday.Id));
+        }
+
+        [Fact]
+        public async Task ResolveCurrentSessionId_AnotherBatchsClassOnNow_DoesNotRedirect()
+        {
+            var (_, _, tomorrow) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var (_, _, otherBatch) = await SeedBatchWithSessionAsync(totalSessions: 2);
+            await AddSiblingSessionAsync(otherBatch, DateTime.UtcNow.AddMinutes(2));
+
+            Assert.Equal(tomorrow.Id, await CreateSessionService().ResolveCurrentSessionIdAsync(tomorrow.Id));
         }
 
         /// <summary>
