@@ -50,6 +50,7 @@ namespace iucs.readernest.domain.Data
         public DbSet<EnrollmentForm> EnrollmentForms => Set<EnrollmentForm>();
         public DbSet<Holiday> Holidays => Set<Holiday>();
         public DbSet<LeaveRequest> LeaveRequests => Set<LeaveRequest>();
+        public DbSet<LeaveCancellationReport> LeaveCancellationReports => Set<LeaveCancellationReport>();
         public DbSet<LeaveRequestSession> LeaveRequestSessions => Set<LeaveRequestSession>();
         public DbSet<LeaveAllowance> LeaveAllowances => Set<LeaveAllowance>();
 
