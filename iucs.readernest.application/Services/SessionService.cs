@@ -1467,7 +1467,8 @@ namespace iucs.readernest.application.Services
             DateOnly startDate,
             IReadOnlyDictionary<DayOfWeek, TimeOnly> timeByDay,
             int targetCount,
-            IReadOnlySet<DateOnly> holidays)
+            IReadOnlySet<DateOnly> holidays,
+            IReadOnlySet<DateTime>? occupiedStarts = null)
         {
             var result = new List<DateTime>();
             var date = startDate;
@@ -1476,7 +1477,11 @@ namespace iucs.readernest.application.Services
             {
                 if (timeByDay.TryGetValue(date.DayOfWeek, out var timeForDay) && !holidays.Contains(date))
                 {
-                    result.Add(date.ToDateTime(timeForDay, DateTimeKind.Utc));
+                    var start = date.ToDateTime(timeForDay, DateTimeKind.Utc);
+                    if (occupiedStarts is null || !occupiedStarts.Contains(start))
+                    {
+                        result.Add(start);
+                    }
                 }
 
                 date = date.AddDays(1);
@@ -1594,7 +1599,23 @@ namespace iucs.readernest.application.Services
                         .ToListAsync(cancellationToken))
                     .ToHashSet();
                 var today = DateOnly.FromDateTime(now);
-                var newStarts = PlaceSessionStartTimes(today, timeByDay, targetCount, holidays);
+                // Slots this batch already holds that the edit leaves alone (a class already
+                // InProgress/Completed/NoShow, today's earlier slot, ...). The unique
+                // (batch, start) index covers every non-cancelled session, so placing a fresh
+                // one on the same instant used to fail the whole save with the misleading
+                // "conflicts with another change" message on every retry. Treat them as already
+                // covered and place the new sessions around them.
+                var remainingIds = remainingSessions.Select(s => s.Id).ToList();
+                var todayStartUtc = today.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+                var occupiedStarts = (await _unitOfWork.Repository<ClassSession>().Query()
+                        .Where(s => s.BatchId == batchId
+                            && s.Status != SessionStatus.Cancelled
+                            && s.ScheduledStartAtUtc >= todayStartUtc
+                            && !remainingIds.Contains(s.Id))
+                        .Select(s => s.ScheduledStartAtUtc)
+                        .ToListAsync(cancellationToken))
+                    .ToHashSet();
+                var newStarts = PlaceSessionStartTimes(today, timeByDay, targetCount, holidays, occupiedStarts);
                 if (newStarts.Count < targetCount)
                 {
                     throw new DomainValidationException("Could not place all remaining sessions within two years; check the selected weekdays.");

@@ -6824,6 +6824,56 @@ namespace iucs.readernest.tests
         }
 
         [Fact]
+        public async Task UpdateFutureSchedule_NewPatternLandsOnAnInProgressSlot_SkipsItInsteadOfFailing()
+        {
+            // Live: a teacher opened a class room weeks early, which flipped that future session
+            // to InProgress. The edit only cancels Scheduled/CarriedForward sessions, so the
+            // InProgress one stayed, and the new pattern's placement on the same instant hit the
+            // unique (batch, start) index -- surfaced as "conflicts with another change".
+            var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 3, includeSession: false);
+
+            var day7 = DateTime.UtcNow.AddDays(7);
+            var inProgressStart = new DateTime(day7.Year, day7.Month, day7.Day, 11, 30, 0, DateTimeKind.Utc);
+            _db.Context.Add(new ClassSession
+            {
+                BatchId = batch.Id,
+                TeacherProfileId = batch.TeacherProfileId,
+                Status = SessionStatus.InProgress,
+                ScheduledStartAtUtc = inProgressStart,
+                ScheduledEndAtUtc = inProgressStart.AddMinutes(45),
+            });
+            for (var i = 1; i <= 2; i++)
+            {
+                var d = day7.AddDays(7 * i);
+                var start = new DateTime(d.Year, d.Month, d.Day, 11, 30, 0, DateTimeKind.Utc);
+                _db.Context.Add(new ClassSession
+                {
+                    BatchId = batch.Id,
+                    TeacherProfileId = batch.TeacherProfileId,
+                    Status = SessionStatus.Scheduled,
+                    ScheduledStartAtUtc = start,
+                    ScheduledEndAtUtc = start.AddMinutes(45),
+                });
+            }
+            await _db.Context.SaveChangesAsync();
+
+            var otherDay = (DayOfWeek)(((int)day7.DayOfWeek + 1) % 7);
+            var sessions = await CreateSessionService().UpdateFutureScheduleAsync(batch.Id, new UpdateFutureScheduleRequest
+            {
+                Slots =
+                [
+                    new GenerateScheduleSlot { DayOfWeek = day7.DayOfWeek, StartTimeUtc = new TimeOnly(11, 30) },
+                    new GenerateScheduleSlot { DayOfWeek = otherDay, StartTimeUtc = new TimeOnly(11, 30) },
+                ],
+                RemainingSessionCount = 4,
+            });
+
+            Assert.Equal(4, sessions.Count(s => s.Status == SessionStatus.Scheduled));
+            Assert.Equal(1, await _db.Context.ClassSessions.CountAsync(
+                s => s.BatchId == batch.Id && s.ScheduledStartAtUtc == inProgressStart && s.Status != SessionStatus.Cancelled));
+        }
+
+        [Fact]
         public async Task UpdateFutureSchedule_ThrowsWhenTheBatchHasNoUpcomingSessions()
         {
             var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 1, includeSession: false);
