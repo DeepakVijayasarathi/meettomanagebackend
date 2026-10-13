@@ -11094,6 +11094,83 @@ namespace iucs.readernest.tests
             Assert.Equal(secondEdit.Id, await service.ResolveCurrentSessionIdAsync(secondEdit.Id));
         }
 
+        // ---- Wrong-day pick (live, 6 Oct 2026): a teacher opened next week's class instead of
+        // the one on right then; each class has its own video room, so teacher and student never
+        // met, and the future class got started + completed a week early ----
+
+        private async Task<ClassSession> AddSiblingSessionAsync(ClassSession of, DateTime startUtc, SessionStatus status = SessionStatus.Scheduled)
+        {
+            var sibling = new ClassSession
+            {
+                BatchId = of.BatchId,
+                TeacherProfileId = of.TeacherProfileId,
+                ScheduledStartAtUtc = startUtc,
+                ScheduledEndAtUtc = startUtc.AddMinutes(45),
+                Status = status,
+            };
+            _db.Context.Add(sibling);
+            await _db.Context.SaveChangesAsync();
+            return sibling;
+        }
+
+        [Fact]
+        public async Task ResolveCurrentSessionId_AFutureClassPickedWhileTheBatchHasOneOnNow_ReturnsTheOneOnNow()
+        {
+            var (_, _, nextWeek) = await SeedBatchWithSessionAsync(totalSessions: 2);
+            var service = CreateSessionService();
+
+            // 01:58 for a 02:00 class -- exactly the live case.
+            var aboutToStart = await AddSiblingSessionAsync(nextWeek, DateTime.UtcNow.AddMinutes(2));
+            Assert.Equal(aboutToStart.Id, await service.ResolveCurrentSessionIdAsync(nextWeek.Id));
+            // The right class still resolves to itself.
+            Assert.Equal(aboutToStart.Id, await service.ResolveCurrentSessionIdAsync(aboutToStart.Id));
+        }
+
+        [Fact]
+        public async Task ResolveCurrentSessionId_AFutureClassPickedWhileOneIsAlreadyRunning_ReturnsTheRunningOne()
+        {
+            var (_, _, nextWeek) = await SeedBatchWithSessionAsync(totalSessions: 2);
+            var running = await AddSiblingSessionAsync(nextWeek, DateTime.UtcNow.AddMinutes(-20), SessionStatus.InProgress);
+
+            Assert.Equal(running.Id, await CreateSessionService().ResolveCurrentSessionIdAsync(nextWeek.Id));
+        }
+
+        [Fact]
+        public async Task ResolveCurrentSessionId_AFutureClass_IsLeftAlone_WhenNothingElseIsOnNow()
+        {
+            var (_, _, tomorrow) = await SeedBatchWithSessionAsync(totalSessions: 4);
+            var service = CreateSessionService();
+
+            // Already over, cancelled, finished, or hours away: none of them is "on right now".
+            await AddSiblingSessionAsync(tomorrow, DateTime.UtcNow.AddHours(-2));
+            await AddSiblingSessionAsync(tomorrow, DateTime.UtcNow.AddMinutes(2), SessionStatus.Cancelled);
+            await AddSiblingSessionAsync(tomorrow, DateTime.UtcNow.AddMinutes(-10), SessionStatus.Completed);
+            await AddSiblingSessionAsync(tomorrow, DateTime.UtcNow.AddHours(3));
+
+            Assert.Equal(tomorrow.Id, await service.ResolveCurrentSessionIdAsync(tomorrow.Id));
+        }
+
+        [Fact]
+        public async Task ResolveCurrentSessionId_ASameDayEarlyStart_IsNotRedirected()
+        {
+            // Teachers do legitimately open a class hours early on the day (seen live: 6-12h).
+            var (_, _, tomorrow) = await SeedBatchWithSessionAsync(totalSessions: 3);
+            var laterToday = await AddSiblingSessionAsync(tomorrow, DateTime.UtcNow.AddHours(6));
+            await AddSiblingSessionAsync(tomorrow, DateTime.UtcNow.AddMinutes(2));
+
+            Assert.Equal(laterToday.Id, await CreateSessionService().ResolveCurrentSessionIdAsync(laterToday.Id));
+        }
+
+        [Fact]
+        public async Task ResolveCurrentSessionId_AnotherBatchsClassOnNow_DoesNotRedirect()
+        {
+            var (_, _, tomorrow) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var (_, _, otherBatch) = await SeedBatchWithSessionAsync(totalSessions: 2);
+            await AddSiblingSessionAsync(otherBatch, DateTime.UtcNow.AddMinutes(2));
+
+            Assert.Equal(tomorrow.Id, await CreateSessionService().ResolveCurrentSessionIdAsync(tomorrow.Id));
+        }
+
         /// <summary>
         /// BUG-008. Reported again after BUG-007's DemoBooking-link fix above, this time for the
         /// far more common cause: a parent's (or teacher's) own portal tab was simply already

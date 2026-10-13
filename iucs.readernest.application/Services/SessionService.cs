@@ -1994,7 +1994,7 @@ namespace iucs.readernest.application.Services
                 {
                     // Doesn't exist (let the caller's own not-found handling fire against the
                     // ORIGINAL id) or isn't rescheduled — this is the current, live session.
-                    return currentId;
+                    return await ResolveWrongDayPickAsync(currentId, cancellationToken);
                 }
 
                 var next = await _unitOfWork.Repository<ClassSession>().Query()
@@ -2011,6 +2011,48 @@ namespace iucs.readernest.application.Services
                 currentId = next.Value;
             }
             return currentId;
+        }
+
+        // How far ahead a not-yet-started class has to be before a join to it is treated as a
+        // wrong-day pick, and how early before its start a class counts as "on right now".
+        private static readonly TimeSpan WrongDayPickMinLead = TimeSpan.FromHours(12);
+        private static readonly TimeSpan OpenNowLeadIn = TimeSpan.FromMinutes(30);
+
+        /// <summary>
+        /// Confirmed live (6 Oct 2026, batch "zayd"): Join is open at all times, so at 01:58 the
+        /// teacher opened NEXT week's class (13 Oct 02:00) instead of that day's 02:00 one. Each
+        /// class has its own video room, so teacher and student sat in two different rooms; the
+        /// real class was marked Teacher No-Show, and the 13 Oct class was started + completed a
+        /// week early -- so on 13 Oct the parent had no class to join and it all happened again.
+        /// When the class asked for hasn't started and is more than half a day away, but the same
+        /// batch has a class on right now, that one is what the caller meant. Anything else --
+        /// no batch, nothing on now, a same-day early start -- is returned untouched.
+        /// </summary>
+        private async Task<Guid> ResolveWrongDayPickAsync(Guid sessionId, CancellationToken cancellationToken)
+        {
+            var now = DateTime.UtcNow;
+            var asked = await _unitOfWork.Repository<ClassSession>().Query()
+                .Where(s => s.Id == sessionId)
+                .Select(s => new { s.BatchId, s.Status, s.ScheduledStartAtUtc })
+                .FirstOrDefaultAsync(cancellationToken);
+            if (asked?.BatchId is not Guid batchId
+                || asked.Status is not (SessionStatus.Scheduled or SessionStatus.CarriedForward)
+                || asked.ScheduledStartAtUtc - now < WrongDayPickMinLead)
+            {
+                return sessionId;
+            }
+
+            var opensBy = now + OpenNowLeadIn;
+            var onNow = await _unitOfWork.Repository<ClassSession>().Query()
+                .Where(s => s.BatchId == batchId
+                    && s.Id != sessionId
+                    && (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward || s.Status == SessionStatus.InProgress)
+                    && s.ScheduledStartAtUtc <= opensBy
+                    && s.ScheduledEndAtUtc >= now)
+                .OrderBy(s => s.ScheduledStartAtUtc)
+                .Select(s => (Guid?)s.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+            return onNow ?? sessionId;
         }
 
         public async Task<JitsiJoinDto> GetJitsiJoinAsync(Guid sessionId, Guid userId, CancellationToken cancellationToken = default)
