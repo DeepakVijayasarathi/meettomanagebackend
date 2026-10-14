@@ -4,6 +4,8 @@ namespace iucs.meettomanage.domain.Enums
     {
         Pending,
         Approved,
-        Rejected
+        Rejected,
+        /// <summary>Withdrawn by the teacher themselves while still Pending — nobody reviewed it.</summary>
+        Cancelled
     }
 }

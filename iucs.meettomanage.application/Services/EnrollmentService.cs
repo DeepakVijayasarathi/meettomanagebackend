@@ -57,9 +57,39 @@ namespace iucs.meettomanage.application.Services
 
             var parent = await GetParentAsync(parentUserId, cancellationToken);
 
+            // Details for a child who already exists (created by the admission counselor at
+            // enrollment): the family used to send the preferred schedule etc. over WhatsApp.
+            // One open form per child -- resubmitting edits it in place until staff approve it.
+            if (request.ChildId is { } existingChildId)
+            {
+                var ownsChild = await _unitOfWork.Repository<Child>()
+                    .ExistsAsync(c => c.Id == existingChildId && c.ParentProfileId == parent.Id, cancellationToken);
+                if (!ownsChild)
+                {
+                    throw new NotFoundException(nameof(Child), existingChildId);
+                }
+
+                var childForm = await _unitOfWork.Repository<EnrollmentForm>().FirstOrDefaultAsync(
+                    f => f.ParentProfileId == parent.Id && f.ChildId == existingChildId && f.Status != EnrollmentFormStatus.Approved,
+                    cancellationToken);
+                if (childForm is null)
+                {
+                    childForm = new EnrollmentForm { ParentProfileId = parent.Id, ChildId = existingChildId };
+                    await _unitOfWork.Repository<EnrollmentForm>().AddAsync(childForm, cancellationToken);
+                }
+
+                childForm.FormDataJson = request.FormDataJson;
+                childForm.Status = EnrollmentFormStatus.Submitted;
+                childForm.SubmittedAtUtc = DateTime.UtcNow;
+
+                await _auditLog.StageAsync(AuditAction.Create, nameof(EnrollmentForm), childForm.Id.ToString(), cancellationToken: cancellationToken);
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+                return await GetAsync(childForm.Id, cancellationToken);
+            }
+
             // A rejected form is resubmitted in place; otherwise every submission is a new child enrollment
             var form = await _unitOfWork.Repository<EnrollmentForm>().FirstOrDefaultAsync(
-                f => f.ParentProfileId == parent.Id && f.Status == EnrollmentFormStatus.Rejected,
+                f => f.ParentProfileId == parent.Id && f.ChildId == null && f.Status == EnrollmentFormStatus.Rejected,
                 cancellationToken);
 
             if (form is null)
@@ -196,31 +226,64 @@ namespace iucs.meettomanage.application.Services
                     await ValidateBatchForAssignmentAsync(request.BatchId.Value, cancellationToken);
                 }
 
-                // Not [Required] on the DTO — that would also reject Approve=false requests,
-                // which never touch this field. DateOfBirth stays optional on Child itself
-                // (age display already handles null), but a genuinely missing value at
-                // approval is worth catching explicitly rather than silently creating a
-                // Child nobody can show an age for.
-                if (request.ChildDateOfBirth is null)
-                {
-                    throw new DomainValidationException("Child's date of birth is required to approve this enrollment.");
-                }
                 if (request.ChildDateOfBirth > DateOnly.FromDateTime(DateTime.UtcNow))
                 {
                     throw new DomainValidationException("Child's date of birth cannot be in the future.");
                 }
 
-                var (firstName, lastName) = ResolveChildName(form, request);
-                child = new Child
+                if (form.ChildId is { } existingChildId)
                 {
-                    ParentProfileId = form.ParentProfileId,
-                    FirstName = firstName,
-                    LastName = lastName,
-                    DateOfBirth = request.ChildDateOfBirth,
-                };
-                await _unitOfWork.Repository<Child>().AddAsync(child, cancellationToken);
+                    // Details for a child who already exists (see SubmitAsync): nothing to create,
+                    // just fill in a missing date of birth if the reviewer gave one.
+                    child = await _unitOfWork.Repository<Child>().GetByIdAsync(existingChildId, cancellationToken)
+                        ?? throw new NotFoundException(nameof(Child), existingChildId);
+                    if (child.DateOfBirth is null && request.ChildDateOfBirth is not null)
+                    {
+                        child.DateOfBirth = request.ChildDateOfBirth;
+                        _unitOfWork.Repository<Child>().Update(child);
+                    }
+                }
+                else
+                {
+                    // Not [Required] on the DTO — that would also reject Approve=false requests,
+                    // which never touch this field. DateOfBirth stays optional on Child itself
+                    // (age display already handles null), but a genuinely missing value at
+                    // approval is worth catching explicitly rather than silently creating a
+                    // Child nobody can show an age for.
+                    if (request.ChildDateOfBirth is null)
+                    {
+                        throw new DomainValidationException("Child's date of birth is required to approve this enrollment.");
+                    }
 
-                form.Child = child;
+                    var (firstName, lastName) = ResolveChildName(form, request);
+
+                    // Reported live: one family ended up with the same child three times -- the
+                    // parent submitted the form more than once and approving each created another
+                    // Child. A child of this parent with the same name is the same child: link the
+                    // form to it instead of creating a duplicate.
+                    var first = firstName.Trim().ToLower();
+                    var last = (lastName ?? string.Empty).Trim().ToLower();
+                    var sameNamed = await _unitOfWork.Repository<Child>().TrackedQuery()
+                        .Where(c => c.ParentProfileId == form.ParentProfileId && c.FirstName.ToLower() == first)
+                        .ToListAsync(cancellationToken);
+                    child = sameNamed.FirstOrDefault(c => (c.LastName ?? string.Empty).Trim().ToLower() == last);
+                    if (child is null)
+                    {
+                        child = new Child
+                        {
+                            ParentProfileId = form.ParentProfileId,
+                            FirstName = firstName,
+                            LastName = lastName,
+                            DateOfBirth = request.ChildDateOfBirth,
+                        };
+                        await _unitOfWork.Repository<Child>().AddAsync(child, cancellationToken);
+                    }
+                    else if (child.DateOfBirth is null)
+                    {
+                        child.DateOfBirth = request.ChildDateOfBirth;
+                    }
+                    form.Child = child;
+                }
                 form.Status = EnrollmentFormStatus.Approved;
 
                 if (parentProfile is not null)
@@ -240,6 +303,21 @@ namespace iucs.meettomanage.application.Services
                     {
                         linkedBooking.ConversionStatus = ConversionStatus.Enrolled;
                         _unitOfWork.Repository<DemoBooking>().Update(linkedBooking);
+                    }
+
+                    // Portal admission flow: the course fee was paid before this child existed, so
+                    // its invoice is family-level. Attach it to the child now so their fee status
+                    // and paid classes show against them rather than as an unassigned family invoice.
+                    if (linkedBooking?.InvoiceId is { } paidInvoiceId && child is not null)
+                    {
+                        var paidInvoice = await _unitOfWork.Repository<Invoice>()
+                            .GetByIdAsync(paidInvoiceId, cancellationToken);
+                        if (paidInvoice is not null && paidInvoice.ChildId is null
+                            && paidInvoice.ParentProfileId == form.ParentProfileId)
+                        {
+                            paidInvoice.ChildId = child.Id;
+                            _unitOfWork.Repository<Invoice>().Update(paidInvoice);
+                        }
                     }
                 }
             }
@@ -265,6 +343,7 @@ namespace iucs.meettomanage.application.Services
                         ParentProfileId = form.ParentProfileId,
                         ChildId = child.Id,
                         PackagePlanId = request.PackagePlanId.Value,
+                        PriceOverride = request.PackagePlanPriceOverride,
                         StartDate = DateOnly.FromDateTime(DateTime.UtcNow),
                     },
                     cancellationToken);
@@ -387,19 +466,38 @@ namespace iucs.meettomanage.application.Services
 
             // Resolve each child's current course in one pass (child → batch enrollment → batch → course).
             var childIds = children.Select(c => c.Id).ToList();
+            // Only the course name is needed — project it rather than loading every enrollment
+            // with its full Batch and Course entities.
             var enrollments = await _unitOfWork.Repository<BatchEnrollment>().Query()
                 .Where(e => childIds.Contains(e.ChildId))
-                .Include(e => e.Batch).ThenInclude(b => b.Course)
+                .Select(e => new { e.ChildId, CourseName = e.Batch.Course.Name })
                 .ToListAsync(cancellationToken);
             var courseByChild = enrollments
                 .GroupBy(e => e.ChildId)
-                .ToDictionary(g => g.Key, g => g.First().Batch.Course.Name);
+                .ToDictionary(g => g.Key, g => g.First().CourseName);
+
+            // Paid total per child — surfaced so the delete/withdraw flow can warn admin/
+            // coordinator staff that money was actually collected before they remove the record.
+            // Only Paid invoices count: Pending/PartiallyPaid/Overdue already block deletion
+            // outright in RemoveChildAsync, so by the time this total is shown, only Paid (and
+            // Cancelled, which collected nothing) invoices can exist for a deletable child.
+            var paidTotalByChild = await _unitOfWork.Repository<Invoice>().Query()
+                .Where(i => i.ChildId != null && childIds.Contains(i.ChildId.Value) && i.Status == InvoiceStatus.Paid)
+                .GroupBy(i => i.ChildId!.Value)
+                .Select(g => new { ChildId = g.Key, Total = g.Sum(i => i.AmountPaid) })
+                .ToDictionaryAsync(g => g.ChildId, g => g.Total, cancellationToken);
+
+            var preferences = await _unitOfWork.Repository<ChildSchedulePreference>().Query()
+                .Include(p => p.Course)
+                .Where(p => childIds.Contains(p.ChildId))
+                .ToDictionaryAsync(p => p.ChildId, cancellationToken);
 
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
             return children.Select(c => new StudentDto
             {
                 Id = c.Id,
                 ParentProfileId = c.ParentProfileId,
+                ParentUserId = c.ParentProfile?.UserId ?? Guid.Empty,
                 FullName = $"{c.FirstName} {c.LastName}".Trim(),
                 Age = c.DateOfBirth is { } dob ? Math.Max(0, (today.DayNumber - dob.DayNumber) / 365) : null,
                 AcademicLevel = c.AcademicLevel,
@@ -407,6 +505,10 @@ namespace iucs.meettomanage.application.Services
                 CourseName = courseByChild.TryGetValue(c.Id, out var name) ? name : null,
                 RmNotes = c.RmNotes,
                 IsActive = c.IsActive,
+                PaidInvoiceTotal = paidTotalByChild.GetValueOrDefault(c.Id),
+                SchedulePreference = preferences.TryGetValue(c.Id, out var preference)
+                    ? ChildSchedulePreferenceMapper.ToDto(c, preference)
+                    : null,
             }).ToList();
         }
 
@@ -419,6 +521,57 @@ namespace iucs.meettomanage.application.Services
             child.RmNotes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim();
             await _auditLog.StageAsync(AuditAction.Update, nameof(Child), child.Id.ToString(),
                 changesJson: "{\"rmNotes\":\"updated\"}", cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        public async Task RemoveChildAsync(Guid childId, bool withdrawFromBatches = false, CancellationToken cancellationToken = default)
+        {
+            var child = await _unitOfWork.Repository<Child>().FirstOrDefaultAsync(c => c.Id == childId, cancellationToken)
+                ?? throw new NotFoundException(nameof(Child), childId);
+
+            var activeEnrollmentIds = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                .Where(e => e.ChildId == childId && e.Status == EnrollmentStatus.Active)
+                .Select(e => e.Id)
+                .ToListAsync(cancellationToken);
+            if (activeEnrollmentIds.Count > 0)
+            {
+                if (!withdrawFromBatches)
+                {
+                    throw new DomainValidationException(
+                        "This child has an active batch enrolment. Withdraw them from every batch first.");
+                }
+
+                // Set-based update (no entities attached to the tracker) rather than the usual
+                // load-mutate-save pattern: a tracked BatchEnrollment still pointing (by its
+                // required FK) at a Child the same call is about to Remove() a few lines down
+                // makes EF throw ("association... has been severed") the instant Remove() runs,
+                // even though the FK is Restrict, not cascading — Child has no inverse
+                // BatchEnrollments navigation to .Include() and fix up the graph with. Same
+                // effect as BatchService.RemoveStudentAsync (withdraw one batch at a time), just
+                // done for every active enrolment here instead of requiring the admin to
+                // separately visit each batch's own roster first.
+                await _unitOfWork.Repository<BatchEnrollment>().Query()
+                    .Where(e => e.ChildId == childId && e.Status == EnrollmentStatus.Active)
+                    .ExecuteUpdateAsync(s => s.SetProperty(e => e.Status, EnrollmentStatus.Withdrawn), cancellationToken);
+                foreach (var enrollmentId in activeEnrollmentIds)
+                {
+                    await _auditLog.StageAsync(AuditAction.Update, nameof(BatchEnrollment), enrollmentId.ToString(),
+                        changesJson: "{\"status\":\"Withdrawn\"}", cancellationToken: cancellationToken);
+                }
+            }
+
+            var hasOutstandingInvoice = await _unitOfWork.Repository<Invoice>().ExistsAsync(
+                i => i.ChildId == childId
+                    && (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.PartiallyPaid || i.Status == InvoiceStatus.Overdue),
+                cancellationToken);
+            if (hasOutstandingInvoice)
+            {
+                throw new DomainValidationException(
+                    "This child has an unpaid or overdue invoice. Settle or cancel it first.");
+            }
+
+            _unitOfWork.Repository<Child>().Remove(child);
+            await _auditLog.StageAsync(AuditAction.Delete, nameof(Child), child.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
@@ -458,11 +611,29 @@ namespace iucs.meettomanage.application.Services
                     }
 
                     var nameParts = studentName.Trim().Split(' ', 2);
+                    var firstName = nameParts[0];
+                    var lastName = nameParts.Length > 1 ? nameParts[1] : string.Empty;
+
+                    // Re-running the same file (or an overlapping one) must not silently
+                    // multiply this child under the same parent — that's exactly how the
+                    // wise.live migration and later re-imports produced dozens of duplicate
+                    // profiles indistinguishable in the batch "assign student" picker.
+                    var alreadyExists = await _unitOfWork.Repository<Child>().ExistsAsync(
+                        c => c.ParentProfileId == parentProfile.Id
+                            && c.FirstName.ToLower() == firstName.ToLower()
+                            && c.LastName.ToLower() == lastName.ToLower(),
+                        cancellationToken);
+                    if (alreadyExists)
+                    {
+                        throw new ConflictException(
+                            $"'{studentName}' already exists under parent '{parentEmail}' — skipped to avoid a duplicate profile.");
+                    }
+
                     var child = new Child
                     {
                         ParentProfileId = parentProfile.Id,
-                        FirstName = nameParts[0],
-                        LastName = nameParts.Length > 1 ? nameParts[1] : string.Empty,
+                        FirstName = firstName,
+                        LastName = lastName,
                         DateOfBirth = dateOfBirth,
                         AcademicLevel = row.GetOrNull("AcademicLevel"),
                         IsActive = true,
@@ -567,7 +738,7 @@ namespace iucs.meettomanage.application.Services
             {
                 Id = form.Id,
                 ParentProfileId = form.ParentProfileId,
-                ParentName = $"{parentUser.FirstName} {parentUser.LastName}",
+                ParentName = $"{parentUser.FirstName} {parentUser.LastName}".Trim(),
                 ParentEmail = parentUser.Email,
                 ChildId = form.ChildId,
                 FormDataJson = form.FormDataJson,

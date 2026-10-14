@@ -26,15 +26,27 @@ namespace iucs.meettomanage.application.Mappings
                 DepartmentName = booking.Department?.Name,
                 ConversionStatus = booking.ConversionStatus,
                 FollowUpNotes = booking.FollowUpNotes,
+                NextFollowUpOn = booking.NextFollowUpOn,
                 ScheduledStartAtUtc = booking.ClassSession?.ScheduledStartAtUtc,
                 ScheduledEndAtUtc = booking.ClassSession?.ScheduledEndAtUtc,
                 MeetingRoomId = booking.ClassSession?.MeetingRoomId,
+                SessionStatus = booking.ClassSession?.Status,
                 TeacherProfileId = booking.ClassSession?.TeacherProfileId,
-                TeacherName = teacher?.User is { } u ? $"{u.FirstName} {u.LastName}" : null,
-                PayableAmount = booking.ConversionStatus == ConversionStatus.Enrolled ? ConvertedDemoFee : NormalDemoFee,
+                TeacherName = teacher?.User is { } u ? $"{u.FirstName} {u.LastName}".Trim() : null,
+                // A direct-admission lead (no demo class) earns no demo fee.
+                PayableAmount = booking.ClassSessionId is null ? 0m
+                    : booking.ConversionStatus == ConversionStatus.Enrolled ? ConvertedDemoFee : NormalDemoFee,
                 ParentJoinedAtUtc = booking.ParentJoinedAtUtc,
+                CourseId = booking.CourseId,
+                CourseName = booking.Course?.Name,
+                PaymentLinkUrl = booking.PaymentLinkUrl,
+                InvoiceId = booking.InvoiceId,
+                InvoiceAmount = booking.Invoice?.Amount,
+                InvoiceAmountPaid = booking.Invoice?.AmountPaid,
+                TermsAcceptedAtUtc = booking.TermsAcceptedAtUtc,
+                PaymentVerifiedAtUtc = booking.PaymentVerifiedAtUtc,
                 Participants = booking.Participants
-                    .Select(p => new DemoParticipantDto { Name = p.Name, Email = p.Email, Phone = p.Phone, IsChild = p.IsChild, HasJoined = p.HasJoined })
+                    .Select(p => new DemoParticipantDto { Id = p.Id, Name = p.Name, Email = p.Email, Phone = p.Phone, IsChild = p.IsChild, HasJoined = p.HasJoined })
                     .ToList(),
             };
         }

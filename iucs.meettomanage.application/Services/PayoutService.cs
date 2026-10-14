@@ -1,13 +1,18 @@
 using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.application.Dto.Payouts;
+using iucs.meettomanage.application.Dto.Sessions;
+using iucs.meettomanage.application.Helper;
 using iucs.meettomanage.application.Mappings;
+using iucs.meettomanage.domain.Entities.Academics;
+using iucs.meettomanage.domain.Entities.Admission;
 using iucs.meettomanage.domain.Entities.Payouts;
 using iucs.meettomanage.domain.Entities.Sessions;
 using iucs.meettomanage.domain.Entities.Users;
 using iucs.meettomanage.domain.Enums;
 using iucs.meettomanage.domain.Repository;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace iucs.meettomanage.application.Services
 {
@@ -16,12 +21,18 @@ namespace iucs.meettomanage.application.Services
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
         private readonly INotificationService _notificationService;
+        private readonly IConfiguration _configuration;
 
-        public PayoutService(IUnitOfWork unitOfWork, IAuditLogService auditLog, INotificationService notificationService)
+        public PayoutService(
+            IUnitOfWork unitOfWork,
+            IAuditLogService auditLog,
+            INotificationService notificationService,
+            IConfiguration configuration)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _notificationService = notificationService;
+            _configuration = configuration;
         }
 
         public async Task<IReadOnlyList<PayoutRateDto>> ListRatesAsync(
@@ -112,6 +123,8 @@ namespace iucs.meettomanage.application.Services
             Guid? teacherProfileId,
             CancellationToken cancellationToken = default)
         {
+            await RepriceZeroBatchEarningsAsync(teacherProfileId, cancellationToken);
+
             IQueryable<Payout> query = BaseQuery();
 
             if (year.HasValue)
@@ -146,7 +159,60 @@ namespace iucs.meettomanage.application.Services
             return await ListAsync(null, null, teacher.Id, cancellationToken);
         }
 
-        public async Task AccrueForSessionAsync(
+        public async Task<TeacherEarningsSummaryDto> GetMyEarningsSummaryAsync(
+            Guid userId, int? year, int? month, CancellationToken cancellationToken = default)
+        {
+            var teacher = await _unitOfWork.Repository<TeacherProfile>()
+                .FirstOrDefaultAsync(t => t.UserId == userId, cancellationToken)
+                ?? throw new NotFoundException("No teacher profile is linked to the current account.");
+
+            var now = DateTime.UtcNow;
+            var periodYear = year ?? now.Year;
+            var periodMonth = month ?? now.Month;
+
+            await RepriceZeroBatchEarningsAsync(teacher.Id, cancellationToken);
+
+            var payout = await BaseQuery().FirstOrDefaultAsync(
+                p => p.TeacherProfileId == teacher.Id && p.PeriodYear == periodYear && p.PeriodMonth == periodMonth,
+                cancellationToken);
+
+            if (payout is null)
+            {
+                return new TeacherEarningsSummaryDto { PeriodYear = periodYear, PeriodMonth = periodMonth, TotalAmount = 0m, Batches = [] };
+            }
+
+            var batches = payout.Items
+                .Where(i => i.Type == PayoutItemType.SessionEarning)
+                .GroupBy(i => new
+                {
+                    BatchId = i.ClassSession?.BatchId,
+                    BatchName = i.ClassSession?.Batch?.Name ?? (i.ClassSession?.Type == SessionType.Demo ? "Demo class" : "Class session"),
+                    FlatRate = i.ClassSession?.Batch?.TeacherPayoutPerClass,
+                })
+                .Select(g => new TeacherBatchEarningsDto
+                {
+                    BatchId = g.Key.BatchId,
+                    BatchName = g.Key.BatchName,
+                    ClassesTaken = g.Count(),
+                    TotalEarned = g.Sum(i => i.Amount),
+                    // A per-minute-rate batch has no single fixed rate of its own -- the average
+                    // actually earned per class this month is the closest honest equivalent.
+                    RatePerClass = g.Key.FlatRate ?? (g.Count() > 0 ? Math.Round(g.Sum(i => i.Amount) / g.Count(), 2) : null),
+                })
+                .OrderByDescending(b => b.TotalEarned)
+                .ToList();
+
+            return new TeacherEarningsSummaryDto
+            {
+                PeriodYear = payout.PeriodYear,
+                PeriodMonth = payout.PeriodMonth,
+                Status = payout.Status,
+                TotalAmount = payout.TotalAmount,
+                Batches = batches,
+            };
+        }
+
+        public async Task<PayoutItem> AccrueForSessionAsync(
             ClassSession session,
             PayoutItemType type,
             string? note,
@@ -155,10 +221,22 @@ namespace iucs.meettomanage.application.Services
             var sessionDate = DateOnly.FromDateTime(session.ScheduledStartAtUtc);
             var durationMinutes = (int)Math.Round((session.ScheduledEndAtUtc - session.ScheduledStartAtUtc).TotalMinutes);
 
+            // A batch created with its own flat per-class teacher payout (client requirement:
+            // "enter the teacher payout for that particular batch" at batch-creation time) prices
+            // every completed class in it at that flat amount instead of the per-minute rate
+            // card below — the two pricing models coexist per batch, never mixed for one session.
+            var batchFlatRate = session.BatchId.HasValue
+                ? await _unitOfWork.Repository<Batch>().Query()
+                    .Where(b => b.Id == session.BatchId.Value)
+                    .Select(b => b.TeacherPayoutPerClass)
+                    .FirstOrDefaultAsync(cancellationToken)
+                : null;
+
             // The rate effective on the session date: the teacher's own rate wins; teachers
             // without one are paid from the centre-wide default card (null teacher). Only
-            // when neither exists does a zero item accrue, so the gap is visible on the
-            // statement, never silent.
+            // when neither exists (and the batch has no flat rate either) does a zero item
+            // accrue, so the gap is visible on the statement, never silent. Still looked up even
+            // when a flat batch rate applies -- it's the source of the no-show penalty percentage.
             var rate = await _unitOfWork.Repository<PayoutRate>().Query()
                 .Where(r => r.TeacherProfileId == session.TeacherProfileId
                             && r.IsActive
@@ -173,12 +251,12 @@ namespace iucs.meettomanage.application.Services
                 .OrderByDescending(r => r.EffectiveFrom)
                 .FirstOrDefaultAsync(cancellationToken);
 
-            // Priced off the scheduled duration, not the teacher's actual attendance --
-            // a session's full rate is fixed the moment it's scheduled, so a dropped
-            // connection or early finish doesn't shrink pay on its own (that's what
+            // Priced off the scheduled duration/flat batch rate, not the teacher's actual
+            // attendance -- a session's full rate is fixed the moment it's scheduled, so a
+            // dropped connection or early finish doesn't shrink pay on its own (that's what
             // RequiresReview below is for; it flags the case for a human, never changes
             // the amount itself).
-            var sessionRate = Math.Round((rate?.RatePerMinute ?? 0m) * durationMinutes, 2);
+            var sessionRate = batchFlatRate ?? Math.Round((rate?.RatePerMinute ?? 0m) * durationMinutes, 2);
             var amount = type switch
             {
                 PayoutItemType.SessionEarning => sessionRate,
@@ -191,13 +269,13 @@ namespace iucs.meettomanage.application.Services
                 _ => 0m,
             };
 
-            if (rate is null)
+            if (rate is null && batchFlatRate is null)
             {
                 note = string.IsNullOrEmpty(note)
                     ? "No payout rate configured for this teacher."
                     : $"{note} (no payout rate configured for this teacher)";
             }
-            else if (type == PayoutItemType.TeacherNoShowDeduction && rate.TeacherNoShowPenaltyPercent != 100m)
+            else if (rate is not null && type == PayoutItemType.TeacherNoShowDeduction && rate.TeacherNoShowPenaltyPercent != 100m)
             {
                 note = $"{note} ({rate.TeacherNoShowPenaltyPercent:0.#}% of session rate)";
             }
@@ -209,29 +287,29 @@ namespace iucs.meettomanage.application.Services
             // tell them apart (see PayoutItem.RequiresReview's own doc comment). This only flags
             // for review; it never changes the amount itself.
             var requiresReview = false;
+            int? scheduledMinutes = null;
+            int? deliveredMinutes = null;
             if (type == PayoutItemType.SessionEarning && durationMinutes > 0)
             {
+                scheduledMinutes = durationMinutes;
                 var attendance = await _unitOfWork.Repository<SessionAttendance>().Query()
                     .Where(a => a.ClassSessionId == session.Id && a.TeacherProfileId == session.TeacherProfileId)
                     .FirstOrDefaultAsync(cancellationToken);
 
                 if (attendance?.JoinedAtUtc is { } joinedAtUtc)
                 {
-                    // LeftAtUtc is only set once the teacher's hub connection actually
-                    // disconnects, which for a self-completed class happens AFTER this call
-                    // (Complete → then the page unmounts and drops the connection) -- so at this
-                    // exact moment it is only populated when someone completes the class well
-                    // after the teacher already left (e.g. an admin cleaning up later). Falling
-                    // back to "now" correctly treats a still-connected teacher's own Complete
-                    // click as the real end of their attendance.
-                    var attendedEndUtc = attendance.LeftAtUtc ?? DateTime.UtcNow;
-                    var attendedMinutes = (attendedEndUtc - joinedAtUtc).TotalMinutes;
-                    var minFraction = await PayrollSettings.GetMinAttendanceFractionForReviewAsync(_unitOfWork, cancellationToken);
-                    if (attendedMinutes < durationMinutes * minFraction)
+                    deliveredMinutes = DeliveredMinutes(session, joinedAtUtc, attendance.LeftAtUtc ?? DateTime.UtcNow);
+
+                    // Core rule (client requirement): ANY class that ran for less than its
+                    // scheduled duration is flagged for payout approval — not only ones under
+                    // some percentage threshold, and never silently treated as a normal
+                    // completed class. Whole minutes, so a class that started a few seconds late
+                    // doesn't trip it.
+                    if (deliveredMinutes < durationMinutes)
                     {
                         requiresReview = true;
-                        var attendedNote = $"Teacher attended only {Math.Max(0, attendedMinutes):0} of {durationMinutes} scheduled minutes -- review before finalizing.";
-                        note = string.IsNullOrEmpty(note) ? attendedNote : $"{note} ({attendedNote})";
+                        var shortNote = $"Class ran {deliveredMinutes} of {durationMinutes} scheduled minutes ({durationMinutes - deliveredMinutes} min short) — awaiting payout approval.";
+                        note = string.IsNullOrEmpty(note) ? shortNote : $"{note} ({shortNote})";
                     }
                 }
                 else
@@ -243,7 +321,7 @@ namespace iucs.meettomanage.application.Services
                     // so this is at least as worth a human's attention as attendance that fell
                     // short -- arguably more, since here there is no attendance at all to weigh.
                     requiresReview = true;
-                    const string noAttendanceNote = "No attendance was ever recorded for the teacher on this session -- review before finalizing.";
+                    const string noAttendanceNote = "No attendance was ever recorded for the teacher on this session — review before finalizing.";
                     note = string.IsNullOrEmpty(note) ? noAttendanceNote : $"{note} ({noAttendanceNote})";
                 }
             }
@@ -257,7 +335,7 @@ namespace iucs.meettomanage.application.Services
                 note = string.IsNullOrEmpty(note) ? rolledNote : $"{note} ({rolledNote})";
             }
 
-            payout.Items.Add(new PayoutItem
+            var item = new PayoutItem
             {
                 PayoutId = payout.Id,
                 ClassSessionId = session.Id,
@@ -265,8 +343,335 @@ namespace iucs.meettomanage.application.Services
                 Amount = amount,
                 Note = note,
                 RequiresReview = requiresReview,
-            });
+                ScheduledMinutes = scheduledMinutes,
+                DeliveredMinutes = deliveredMinutes,
+            };
+            payout.Items.Add(item);
             payout.TotalAmount += amount;
+            return item;
+        }
+
+        /// <summary>
+        /// Whole minutes the teacher was in class, counted inside the scheduled window: time
+        /// after the scheduled end never counts, and time before the scheduled start doesn't
+        /// either once the class window has actually begun (a teacher who joins at 2:58 for a
+        /// 3:00–3:30 class and leaves at 3:28 delivered 28 minutes, not 30). The start clip only
+        /// applies when the window began before the teacher left, so a class completed ahead of
+        /// its slot (an ad-hoc/rescheduled run) is still measured by the time actually spent.
+        /// </summary>
+        public static int DeliveredMinutes(ClassSession session, DateTime joinedAtUtc, DateTime leftAtUtc)
+        {
+            var end = leftAtUtc < session.ScheduledEndAtUtc ? leftAtUtc : session.ScheduledEndAtUtc;
+            // A teacher who joined AFTER the scheduled start but kept teaching past the scheduled
+            // end (the class ran over to make up for the late start, e.g. in 7:31 → out 8:02 for a
+            // 7:30–8:00 slot) delivered a full class; clipping at the scheduled end counted that as
+            // 29 min short. The credit is capped at the scheduled duration so it can never exceed it.
+            if (joinedAtUtc > session.ScheduledStartAtUtc && joinedAtUtc < session.ScheduledEndAtUtc
+                && leftAtUtc > session.ScheduledEndAtUtc)
+            {
+                var scheduledSpan = session.ScheduledEndAtUtc - session.ScheduledStartAtUtc;
+                var extendedEnd = joinedAtUtc + scheduledSpan;
+                end = leftAtUtc < extendedEnd ? leftAtUtc : extendedEnd;
+            }
+            var start = joinedAtUtc < session.ScheduledStartAtUtc && session.ScheduledStartAtUtc < leftAtUtc
+                ? session.ScheduledStartAtUtc
+                : joinedAtUtc;
+            var minutes = (end - start).TotalMinutes;
+            // Rounded UP to a whole minute: the join is stamped when the teacher's classroom
+            // connection is established (a few seconds to ~a minute after she clicks Start), so
+            // nearest-minute rounding turned "joined on time" into "1 min short" for any join
+            // 30+ seconds in (and a 29.4-minute class into 29). Only a FULL missing minute now
+            // counts as short -- a class that ran 28:00 of 30:00 is still 28 and still flagged.
+            return minutes <= 0 ? 0 : (int)Math.Ceiling(minutes - 0.0001);
+        }
+
+        public async Task NotifyPayoutReviewAsync(Guid payoutItemId, CancellationToken cancellationToken = default)
+        {
+            var approval = (await ApprovalQueryAsync(i => i.Id == payoutItemId, cancellationToken)).FirstOrDefault();
+            if (approval is null)
+            {
+                return;
+            }
+
+            // Admin plus every Sub Admin who can approve payouts — the Management / Founder
+            // presets carry Payouts:Approve as a required grant (RequiredSystemRolePermissions).
+            var module = PermissionModule.Payouts.ToString();
+            var approvers = _unitOfWork.Repository<SubAdminPermission>().Query();
+            var recipients = await _unitOfWork.Repository<User>().Query()
+                .Include(u => u.RoleDefinition)
+                .Where(u => u.Status == UserStatus.Active
+                            && (u.Role == UserRole.Admin
+                                || (u.Role == UserRole.SubAdmin
+                                    && approvers.Any(p => p.UserId == u.Id && p.Module == module && p.CanApprove))))
+                .ToListAsync(cancellationToken);
+
+            var baseUrl = (_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173").TrimEnd('/');
+            foreach (var recipient in recipients)
+            {
+                var portal = recipient.Role == UserRole.Admin
+                    ? "/admin"
+                    : (recipient.RoleDefinition?.DefaultRoute ?? "/management").TrimEnd('/');
+                var tokens = new Dictionary<string, string>
+                {
+                    ["TeacherName"] = approval.TeacherName,
+                    ["ClassName"] = approval.ClassName,
+                    ["Students"] = string.IsNullOrWhiteSpace(approval.StudentNames) ? "—" : approval.StudentNames,
+                    ["ScheduledTime"] = approval.ScheduledStartAtUtc is { } s && approval.ScheduledEndAtUtc is { } e
+                        ? DateTimeDisplay.ToLocalRange(s, e, recipient.TimeZoneId)
+                        : "—",
+                    ["ScheduledMinutes"] = approval.ScheduledMinutes?.ToString() ?? "—",
+                    ["ActualMinutes"] = approval.DeliveredMinutes?.ToString() ?? "No attendance recorded",
+                    ["ShortfallMinutes"] = approval.ShortfallMinutes?.ToString() ?? "—",
+                    ["ApprovalsUrl"] = $"{baseUrl}{portal}/payout-approvals",
+                };
+                try
+                {
+                    await _notificationService.SendTemplatedEmailAsync(
+                        recipient.Id, recipient.Email, NotificationType.General, "short-class-payout-approval", tokens, cancellationToken);
+                }
+                catch (Exception)
+                {
+                    // Best-effort: the item is already saved and listed under Payout Approvals,
+                    // so one failed alert must not stop the rest or fail the class completion.
+                }
+            }
+        }
+
+        public async Task<IReadOnlyList<PayoutApprovalDto>> ListApprovalsAsync(bool pending, CancellationToken cancellationToken = default)
+        {
+            return pending
+                ? await ApprovalQueryAsync(i => i.RequiresReview, cancellationToken)
+                : await ApprovalQueryAsync(i => i.ReviewDecision != null, cancellationToken);
+        }
+
+        public async Task<IReadOnlyList<SessionRecordingDto>> ListApprovalRecordingsAsync(
+            Guid payoutItemId,
+            CancellationToken cancellationToken = default)
+        {
+            var sessionId = await _unitOfWork.Repository<PayoutItem>().Query()
+                .Where(i => i.Id == payoutItemId)
+                .Select(i => i.ClassSessionId)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (sessionId is null)
+            {
+                // Unknown item, or a bonus/adjustment with no class behind it: nothing to watch.
+                return [];
+            }
+
+            var recordings = await _unitOfWork.Repository<SessionRecording>().Query()
+                .Where(r => r.ClassSessionId == sessionId.Value)
+                .OrderByDescending(r => r.CreatedAtUtc)
+                .ToListAsync(cancellationToken);
+
+            return recordings.Select(r => new SessionRecordingDto
+            {
+                Id = r.Id,
+                ClassSessionId = r.ClassSessionId,
+                StorageUrl = r.StorageUrl,
+                DurationSeconds = r.DurationSeconds,
+                ExpiresAtUtc = r.ExpiresAtUtc,
+                CreatedAtUtc = r.CreatedAtUtc,
+            }).ToList();
+        }
+
+        public async Task<PayoutApprovalDto> DecideApprovalAsync(
+            Guid payoutItemId,
+            Guid reviewerUserId,
+            DecidePayoutApprovalRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var item = await _unitOfWork.Repository<PayoutItem>().TrackedQuery()
+                .Include(i => i.Payout)
+                .FirstOrDefaultAsync(i => i.Id == payoutItemId, cancellationToken)
+                ?? throw new NotFoundException(nameof(PayoutItem), payoutItemId);
+
+            if (!item.RequiresReview)
+            {
+                throw new ConflictException("This class has already been decided.");
+            }
+
+            if (item.Payout.Status != PayoutStatus.Pending)
+            {
+                throw new DomainValidationException(
+                    $"This class's payout is already {item.Payout.Status} and can no longer be changed.");
+            }
+
+            var fullAmount = item.AmountBeforeReview ?? item.Amount;
+            // Same effective delivered figure the approvals list shows (merged recordings count).
+            var effectiveDelivered = item.DeliveredMinutes;
+            if (item.ClassSessionId is { } decidedSessionId && item.ScheduledMinutes is { } decidedSched)
+            {
+                var recordedSeconds = await _unitOfWork.Repository<SessionRecording>().Query()
+                    .Where(r => r.ClassSessionId == decidedSessionId)
+                    .SumAsync(r => r.DurationSeconds ?? 0, cancellationToken);
+                var recordedMinutes = (int)Math.Ceiling(recordedSeconds / 60.0 - 0.0001);
+                if (recordedMinutes > 0)
+                {
+                    effectiveDelivered = Math.Max(effectiveDelivered ?? 0, Math.Min(decidedSched, recordedMinutes));
+                }
+            }
+
+            var newAmount = request.Decision switch
+            {
+                PayoutReviewDecision.ApprovedFull => fullAmount,
+                PayoutReviewDecision.Rejected => 0m,
+                _ => request.Amount ?? ProRate(fullAmount, item.ScheduledMinutes, effectiveDelivered),
+            };
+            // A class priced at 0 (no rate / batch payout configured when it was completed) has no
+            // "full amount" to cap a correction against, so the reviewer can enter what it is worth;
+            // the cap still applies to every class that was actually priced.
+            if (request.Decision == PayoutReviewDecision.ApprovedPartial && (newAmount < 0 || (fullAmount > 0 && newAmount > fullAmount)))
+            {
+                throw new DomainValidationException($"A partial payout must be between 0 and the full amount ({fullAmount:0.00}).");
+            }
+
+            var label = request.Decision switch
+            {
+                PayoutReviewDecision.ApprovedFull => "Approved for full payout",
+                PayoutReviewDecision.ApprovedPartial => $"Approved for partial payout ({newAmount:0.00} of {fullAmount:0.00})",
+                _ => "Not approved for payout",
+            };
+            var decisionNote = string.IsNullOrWhiteSpace(request.Note) ? label : $"{label}: {request.Note.Trim()}";
+            item.Note = string.IsNullOrEmpty(item.Note) ? decisionNote : $"{item.Note} ({decisionNote})";
+            item.AmountBeforeReview = fullAmount;
+            item.Payout.TotalAmount += newAmount - item.Amount;
+            item.Amount = newAmount;
+            item.RequiresReview = false;
+            item.ReviewDecision = request.Decision;
+            item.ReviewedByUserId = reviewerUserId;
+            item.ReviewedAtUtc = DateTime.UtcNow;
+
+            await _auditLog.StageAsync(AuditAction.Update, nameof(PayoutItem), item.Id.ToString(),
+                changesJson: $"{{\"decision\":\"{request.Decision}\",\"amount\":{newAmount}}}", cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            return (await ApprovalQueryAsync(i => i.Id == payoutItemId, cancellationToken)).First();
+        }
+
+        private static decimal ProRate(decimal fullAmount, int? scheduledMinutes, int? deliveredMinutes)
+        {
+            if (scheduledMinutes is not > 0)
+            {
+                return fullAmount;
+            }
+
+            var fraction = Math.Clamp((decimal)(deliveredMinutes ?? 0) / scheduledMinutes.Value, 0m, 1m);
+            return Math.Round(fullAmount * fraction, 2);
+        }
+
+        private async Task<List<PayoutApprovalDto>> ApprovalQueryAsync(
+            System.Linq.Expressions.Expression<Func<PayoutItem, bool>> filter,
+            CancellationToken cancellationToken)
+        {
+            var items = await _unitOfWork.Repository<PayoutItem>().Query()
+                .Where(i => i.Type == PayoutItemType.SessionEarning)
+                .Where(filter)
+                .Include(i => i.Payout).ThenInclude(p => p.TeacherProfile).ThenInclude(t => t.User)
+                .Include(i => i.ClassSession).ThenInclude(s => s!.Batch)
+                .OrderByDescending(i => i.CreatedAtUtc)
+                .Take(500)
+                .ToListAsync(cancellationToken);
+
+            var sessionIds = items.Where(i => i.ClassSessionId != null).Select(i => i.ClassSessionId!.Value).Distinct().ToList();
+            var batchIds = items.Where(i => i.ClassSession?.BatchId != null).Select(i => i.ClassSession!.BatchId!.Value).Distinct().ToList();
+            var students = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                .Where(e => batchIds.Contains(e.BatchId) && e.Status == EnrollmentStatus.Active)
+                .Select(e => new { e.BatchId, Name = e.Child.FirstName + " " + e.Child.LastName })
+                .ToListAsync(cancellationToken);
+            var demoChildren = await _unitOfWork.Repository<DemoBooking>().Query()
+                .Where(b => b.ClassSessionId != null && sessionIds.Contains(b.ClassSessionId.Value))
+                .Select(b => new { SessionId = b.ClassSessionId!.Value, b.ChildName })
+                .ToListAsync(cancellationToken);
+            var reviewerIds = items.Where(i => i.ReviewedByUserId != null).Select(i => i.ReviewedByUserId!.Value).Distinct().ToList();
+            var reviewers = await _unitOfWork.Repository<User>().Query()
+                .Where(u => reviewerIds.Contains(u.Id))
+                .Select(u => new { u.Id, Name = u.FirstName + " " + u.LastName })
+                .ToDictionaryAsync(u => u.Id, u => u.Name.Trim(), cancellationToken);
+
+            // Merged recording view: a disconnect/rejoin makes the platform register a separate
+            // recording each time, so the class's real recorded length is the SUM of its segments.
+            var recordingRows = await _unitOfWork.Repository<SessionRecording>().Query()
+                .Where(r => sessionIds.Contains(r.ClassSessionId))
+                .Select(r => new { r.ClassSessionId, r.DurationSeconds })
+                .ToListAsync(cancellationToken);
+            var recordingsBySession = recordingRows
+                .GroupBy(r => r.ClassSessionId)
+                .ToDictionary(g => g.Key, g => (Count: g.Count(), Seconds: g.Sum(r => r.DurationSeconds ?? 0)));
+            var teacherAttendance = await _unitOfWork.Repository<SessionAttendance>().Query()
+                .Where(a => sessionIds.Contains(a.ClassSessionId) && a.TeacherProfileId != null)
+                .Select(a => new { a.ClassSessionId, a.TeacherProfileId, a.JoinedAtUtc, a.LeftAtUtc })
+                .ToListAsync(cancellationToken);
+
+            return items.Select(i =>
+            {
+                var session = i.ClassSession;
+                var fullAmount = i.AmountBeforeReview ?? i.Amount;
+                var (recordingCount, recordedSeconds) = session is not null && recordingsBySession.TryGetValue(session.Id, out var rec)
+                    ? rec
+                    : (0, 0);
+                var recordedMinutes = (int)Math.Ceiling(recordedSeconds / 60.0 - 0.0001);
+                var attendance = session is null
+                    ? null
+                    : teacherAttendance.FirstOrDefault(a => a.ClassSessionId == session.Id && a.TeacherProfileId == session.TeacherProfileId);
+
+                // The recorded time is independent evidence that the class ran: when the merged
+                // recording covers more than the attendance-based figure, the teacher isn't short
+                // by that much (capped at the scheduled length, so it never over-credits).
+                var delivered = i.DeliveredMinutes;
+                if (i.ScheduledMinutes is { } sched && recordedMinutes > 0)
+                {
+                    delivered = Math.Max(delivered ?? 0, Math.Min(sched, recordedMinutes));
+                }
+
+                var lateJoin = session is not null && attendance?.JoinedAtUtc is { } j && j > session.ScheduledStartAtUtc
+                    ? (int)Math.Floor((j - session.ScheduledStartAtUtc).TotalMinutes) : 0;
+                var earlyEnd = session is not null && attendance?.LeftAtUtc is { } l && l < session.ScheduledEndAtUtc
+                    ? (int)Math.Floor((session.ScheduledEndAtUtc - l).TotalMinutes) : 0;
+                var shortfall = i.ScheduledMinutes is { } sm ? sm - (delivered ?? 0) : (int?)null;
+                string? shortfallReason = shortfall is not > 0 ? null
+                    : attendance?.JoinedAtUtc is null ? "No teacher attendance was captured"
+                    : lateJoin > 0 && earlyEnd > 0 ? "Joined late and left early"
+                    : lateJoin > 0 ? "Joined late"
+                    : earlyEnd > 0 ? "Left early (or disconnected without rejoining)"
+                    : "Short by timing only (no late join or early end recorded)";
+
+                string? studentNames = session?.BatchId is { } batchId
+                    ? string.Join(", ", students.Where(s => s.BatchId == batchId).Select(s => s.Name.Trim()))
+                    : demoChildren.FirstOrDefault(d => d.SessionId == session?.Id)?.ChildName;
+                return new PayoutApprovalDto
+                {
+                    ItemId = i.Id,
+                    PayoutId = i.PayoutId,
+                    PayoutStatus = i.Payout.Status,
+                    ClassSessionId = i.ClassSessionId,
+                    TeacherName = $"{i.Payout.TeacherProfile.User.FirstName} {i.Payout.TeacherProfile.User.LastName}".Trim(),
+                    ClassName = session?.Batch?.Name ?? (session?.Type == SessionType.Demo ? "Demo class" : "Class session"),
+                    StudentNames = string.IsNullOrWhiteSpace(studentNames) ? null : studentNames,
+                    ScheduledStartAtUtc = session?.ScheduledStartAtUtc,
+                    ScheduledEndAtUtc = session?.ScheduledEndAtUtc,
+                    ActualStartAtUtc = session?.ActualStartAtUtc,
+                    ActualEndAtUtc = session?.ActualEndAtUtc,
+                    ScheduledMinutes = i.ScheduledMinutes,
+                    DeliveredMinutes = delivered,
+                    ShortfallMinutes = shortfall,
+                    RecordingCount = recordingCount,
+                    RecordedMinutes = recordedMinutes,
+                    TeacherJoinedAtUtc = attendance?.JoinedAtUtc,
+                    TeacherLeftAtUtc = attendance?.LeftAtUtc,
+                    LateJoinMinutes = lateJoin,
+                    EarlyEndMinutes = earlyEnd,
+                    ShortfallReason = shortfallReason,
+                    FullAmount = fullAmount,
+                    ProRatedAmount = ProRate(fullAmount, i.ScheduledMinutes, delivered),
+                    Amount = i.Amount,
+                    Pending = i.RequiresReview,
+                    Decision = i.ReviewDecision,
+                    ReviewedByName = i.ReviewedByUserId is { } rid && reviewers.TryGetValue(rid, out var rn) ? rn : null,
+                    ReviewedAtUtc = i.ReviewedAtUtc,
+                    Note = i.Note,
+                    CreatedAtUtc = i.CreatedAtUtc,
+                };
+            }).ToList();
         }
 
         public async Task<PayoutDto> AdjustItemAsync(
@@ -279,13 +684,8 @@ namespace iucs.meettomanage.application.Services
             var payout = await _unitOfWork.Repository<Payout>().FirstOrDefaultAsync(p => p.Id == payoutId, cancellationToken)
                 ?? throw new NotFoundException(nameof(Payout), payoutId);
 
-            if (payout.Status != PayoutStatus.Pending)
-            {
-                throw new DomainValidationException(
-                    $"A payout in status '{payout.Status}' can no longer have its items adjusted.");
-            }
-
             var item = await _unitOfWork.Repository<PayoutItem>().TrackedQuery()
+                .Include(i => i.ClassSession).ThenInclude(cs => cs!.Batch)
                 .FirstOrDefaultAsync(i => i.Id == itemId && i.PayoutId == payoutId, cancellationToken)
                 ?? throw new NotFoundException(nameof(PayoutItem), itemId);
 
@@ -296,20 +696,145 @@ namespace iucs.meettomanage.application.Services
             }
 
             var delta = request.NewAmount - item.Amount;
+            var amountBefore = item.Amount;
+            var totalBefore = payout.TotalAmount;
+            // Kept so the statement can always show what the line was first calculated at.
+            item.AmountBeforeReview ??= item.Amount;
             var adjustmentNote = $"Adjusted from {item.Amount:0.00} to {request.NewAmount:0.00}: {reason}";
             item.Note = string.IsNullOrEmpty(item.Note) ? adjustmentNote : $"{item.Note} ({adjustmentNote})";
+            // Adjusting a flagged item from the payout statement is the same decision as
+            // making it on Payout Approvals — record it so it shows there as decided.
+            if (item.RequiresReview)
+            {
+                var fullAmount = item.AmountBeforeReview ?? item.Amount;
+                item.AmountBeforeReview = fullAmount;
+                item.ReviewDecision = request.NewAmount >= fullAmount ? PayoutReviewDecision.ApprovedFull
+                    : request.NewAmount <= 0 ? PayoutReviewDecision.Rejected
+                    : PayoutReviewDecision.ApprovedPartial;
+                item.ReviewedAtUtc = DateTime.UtcNow;
+            }
             item.Amount = request.NewAmount;
             item.RequiresReview = false;
             _unitOfWork.Repository<PayoutItem>().Update(item);
 
-            payout.TotalAmount += delta;
-            _unitOfWork.Repository<Payout>().Update(payout);
+            await ApplyTotalChangeAsync(payout, delta, cancellationToken);
+            await RecordChangeAsync(payout, item.Id, DescribeItem(item), reason, amountBefore, request.NewAmount, totalBefore, cancellationToken);
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(PayoutItem), item.Id.ToString(),
-                changesJson: $"{{\"reason\":\"{reason}\",\"delta\":{delta}}}", cancellationToken: cancellationToken);
+                changesJson: System.Text.Json.JsonSerializer.Serialize(new { reason, delta }), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return (await BaseQuery().FirstAsync(p => p.Id == payoutId, cancellationToken)).ToDto();
+        }
+
+        public async Task<PayoutDto> AddItemAsync(
+            Guid payoutId,
+            AddPayoutItemRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var payout = await _unitOfWork.Repository<Payout>().FirstOrDefaultAsync(p => p.Id == payoutId, cancellationToken)
+                ?? throw new NotFoundException(nameof(Payout), payoutId);
+
+            var reason = request.Reason.Trim();
+            if (reason.Length == 0)
+            {
+                throw new DomainValidationException("A reason is required to add an addition or deduction.");
+            }
+            if (request.Amount == 0m)
+            {
+                throw new DomainValidationException("Enter an amount other than zero.");
+            }
+
+            var totalBefore = payout.TotalAmount;
+            var item = new PayoutItem
+            {
+                PayoutId = payoutId,
+                Type = request.Amount > 0m ? PayoutItemType.Bonus : PayoutItemType.Penalty,
+                Amount = request.Amount,
+                Note = reason,
+            };
+            await _unitOfWork.Repository<PayoutItem>().AddAsync(item, cancellationToken);
+
+            await ApplyTotalChangeAsync(payout, request.Amount, cancellationToken);
+            await RecordChangeAsync(
+                payout, item.Id, request.Amount > 0m ? "Addition added" : "Deduction added",
+                reason, 0m, request.Amount, totalBefore, cancellationToken);
+
+            await _auditLog.StageAsync(AuditAction.Create, nameof(PayoutItem), item.Id.ToString(),
+                changesJson: System.Text.Json.JsonSerializer.Serialize(new { reason, amount = request.Amount }), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            return (await BaseQuery().FirstAsync(p => p.Id == payoutId, cancellationToken)).ToDto();
+        }
+
+        public async Task<IReadOnlyList<PayoutChangeDto>> GetHistoryAsync(Guid payoutId, CancellationToken cancellationToken = default)
+        {
+            var changes = await _unitOfWork.Repository<PayoutChange>().Query()
+                .Where(c => c.PayoutId == payoutId)
+                .OrderByDescending(c => c.CreatedAtUtc)
+                .ToListAsync(cancellationToken);
+            return await PayoutChangeMapper.ToDtosAsync(_unitOfWork, changes, cancellationToken);
+        }
+
+        /// <summary>
+        /// A still-Pending payout's total is a running sum (the same way accrual maintains it).
+        /// A finalized/paid one is re-derived from its lines with FinalizeAsync's zero floor, so a
+        /// correction can never leave it at a figure finalizing would not have produced.
+        /// </summary>
+        private async Task ApplyTotalChangeAsync(Payout payout, decimal delta, CancellationToken cancellationToken)
+        {
+            if (payout.Status == PayoutStatus.Pending)
+            {
+                payout.TotalAmount += delta;
+            }
+            else
+            {
+                // The stored lines don't include the change being saved in this same unit of work.
+                var storedSum = await _unitOfWork.Repository<PayoutItem>().Query()
+                    .Where(i => i.PayoutId == payout.Id)
+                    .SumAsync(i => (decimal?)i.Amount, cancellationToken) ?? 0m;
+                payout.TotalAmount = Math.Max(0m, storedSum + delta);
+            }
+
+            _unitOfWork.Repository<Payout>().Update(payout);
+        }
+
+        private async Task RecordChangeAsync(
+            Payout payout, Guid itemId, string description, string reason,
+            decimal amountBefore, decimal amountAfter, decimal totalBefore, CancellationToken cancellationToken)
+        {
+            await _unitOfWork.Repository<PayoutChange>().AddAsync(new PayoutChange
+            {
+                PayoutId = payout.Id,
+                PayoutItemId = itemId,
+                Description = description,
+                Reason = reason,
+                AmountBefore = amountBefore,
+                AmountAfter = amountAfter,
+                TotalBefore = totalBefore,
+                TotalAfter = payout.TotalAmount,
+            }, cancellationToken);
+        }
+
+        private static string DescribeItem(PayoutItem item)
+        {
+            var kind = item.Type switch
+            {
+                PayoutItemType.SessionEarning => "Session earning",
+                PayoutItemType.StudentNoShowWaiting => "Student no-show waiting amount",
+                PayoutItemType.TeacherNoShowDeduction => "Teacher no-show deduction",
+                PayoutItemType.Penalty => "Deduction",
+                PayoutItemType.Bonus => "Addition",
+                _ => "Adjustment",
+            };
+            if (item.ClassSession is not { } session)
+            {
+                return kind;
+            }
+
+            var when = DateTimeDisplay.ToLocal(session.ScheduledStartAtUtc, null);
+            var description = session.Batch is { } batch ? $"{kind}, {when} ({batch.Name})" : $"{kind}, {when}";
+            return description.Length > 300 ? description[..300] : description;
         }
 
         public async Task<PayoutDto> FinalizeAsync(Guid payoutId, CancellationToken cancellationToken = default)
@@ -324,6 +849,7 @@ namespace iucs.meettomanage.application.Services
             }
 
             var items = await _unitOfWork.Repository<PayoutItem>().Query()
+                .Include(i => i.ClassSession).ThenInclude(cs => cs!.Batch)
                 .Where(i => i.PayoutId == payoutId)
                 .ToListAsync(cancellationToken);
 
@@ -355,9 +881,7 @@ namespace iucs.meettomanage.application.Services
 
             // Monthly statement dispatch — the notification row records delivery state
             var teacherUser = await TeacherUserAsync(payout.TeacherProfileId, cancellationToken);
-            var period = $"{payout.PeriodYear}-{payout.PeriodMonth:D2}";
-            var lines = items
-                .Select(i => $"- {i.Type}: {i.Amount:0.00}{(string.IsNullOrEmpty(i.Note) ? "" : $" ({i.Note})")}");
+            var period = PayoutEmailBuilder.PeriodLabel(payout.PeriodYear, payout.PeriodMonth);
             await _notificationService.SendTemplatedEmailAsync(
                 teacherUser.Id,
                 teacherUser.Email,
@@ -367,8 +891,8 @@ namespace iucs.meettomanage.application.Services
                 {
                     ["TeacherFirstName"] = teacherUser.FirstName,
                     ["Period"] = period,
-                    ["LinesText"] = string.Join("\n", lines),
-                    ["Total"] = payout.TotalAmount.ToString("0.00"),
+                    ["BreakdownHtml"] = PayoutEmailBuilder.BuildBreakdownHtml(items, payout.TotalAmount, teacherUser.TimeZoneId),
+                    ["Total"] = PayoutEmailBuilder.Money(payout.TotalAmount),
                 },
                 cancellationToken);
 
@@ -396,15 +920,11 @@ namespace iucs.meettomanage.application.Services
 
             // Salary slip: emailed automatically the moment the payment is processed.
             var items = await _unitOfWork.Repository<PayoutItem>().Query()
+                .Include(i => i.ClassSession).ThenInclude(cs => cs!.Batch)
                 .Where(i => i.PayoutId == payoutId)
                 .ToListAsync(cancellationToken);
             var teacherUser = await TeacherUserAsync(payout.TeacherProfileId, cancellationToken);
-            var period = $"{payout.PeriodYear}-{payout.PeriodMonth:D2}";
-            var slipLines = items
-                .Select(i => $"  {i.Type,-26} {i.Amount,12:0.00}{(string.IsNullOrEmpty(i.Note) ? "" : $"   {i.Note}")}");
-            var slip =
-                $"Paid on: {DateTime.UtcNow:yyyy-MM-dd}\n\n" +
-                $"Earnings & adjustments\n{string.Join("\n", slipLines)}";
+            var period = PayoutEmailBuilder.PeriodLabel(payout.PeriodYear, payout.PeriodMonth);
             await _notificationService.SendTemplatedEmailAsync(
                 teacherUser.Id,
                 teacherUser.Email,
@@ -414,8 +934,9 @@ namespace iucs.meettomanage.application.Services
                 {
                     ["TeacherFirstName"] = teacherUser.FirstName,
                     ["Period"] = period,
-                    ["SlipBody"] = slip,
-                    ["Total"] = payout.TotalAmount.ToString("0.00"),
+                    ["PaidOn"] = DateTime.UtcNow.ToString("dd MMM yyyy", System.Globalization.CultureInfo.InvariantCulture),
+                    ["BreakdownHtml"] = PayoutEmailBuilder.BuildBreakdownHtml(items, payout.TotalAmount, teacherUser.TimeZoneId),
+                    ["Total"] = PayoutEmailBuilder.Money(payout.TotalAmount),
                 },
                 cancellationToken);
 
@@ -480,6 +1001,84 @@ namespace iucs.meettomanage.application.Services
             var payout = new Payout { TeacherProfileId = teacherProfileId, PeriodYear = year, PeriodMonth = month };
             await _unitOfWork.Repository<Payout>().AddAsync(payout, cancellationToken);
             return payout;
+        }
+
+        /// <summary>
+        /// A class's earning is frozen at the batch's flat rate the moment it completes, so a class
+        /// finished before the batch's per-class payout was entered accrued at 0 and stayed 0 even
+        /// after the rate was set (the teacher's Earnings page then showed "Rate 150, 4 classes,
+        /// earned 0"). Re-prices those items from the batch's current flat rate. Only still-Pending
+        /// payouts and only untouched SessionEarning items at exactly 0 (a reviewer's decision, or a
+        /// finalized/paid payout, is never overridden); idempotent, so safe to run on every read.
+        /// </summary>
+        private async Task RepriceZeroBatchEarningsAsync(Guid? teacherProfileId, CancellationToken cancellationToken)
+        {
+            var items = await _unitOfWork.Repository<PayoutItem>().TrackedQuery()
+                .Include(i => i.Payout)
+                .Include(i => i.ClassSession).ThenInclude(cs => cs!.Batch)
+                .Where(i => i.Type == PayoutItemType.SessionEarning
+                    && i.Amount == 0m
+                    && i.ReviewDecision == null
+                    && i.Payout.Status == PayoutStatus.Pending
+                    && (teacherProfileId == null || i.Payout.TeacherProfileId == teacherProfileId)
+                    && i.ClassSession != null)
+                .ToListAsync(cancellationToken);
+
+            if (items.Count == 0)
+            {
+                return;
+            }
+
+            // Per-minute rate cards, for zero items whose batch has no flat payout: the same
+            // "teacher's own rate wins, else the centre default, effective on the session date"
+            // lookup AccrueForSessionAsync uses.
+            var rates = await _unitOfWork.Repository<PayoutRate>().Query()
+                .Where(r => r.IsActive)
+                .ToListAsync(cancellationToken);
+
+            var changed = false;
+            foreach (var item in items)
+            {
+                var session = item.ClassSession!;
+                var flatRate = session.Batch?.TeacherPayoutPerClass;
+                decimal newAmount;
+                string source;
+                if (flatRate > 0m)
+                {
+                    newAmount = flatRate.Value;
+                    source = "the batch's per-class payout";
+                }
+                else
+                {
+                    var sessionDate = DateOnly.FromDateTime(session.ScheduledStartAtUtc);
+                    var rate = rates
+                        .Where(r => r.TeacherProfileId == item.Payout.TeacherProfileId && r.EffectiveFrom <= sessionDate)
+                        .OrderByDescending(r => r.EffectiveFrom).FirstOrDefault()
+                        ?? rates
+                            .Where(r => r.TeacherProfileId == null && r.EffectiveFrom <= sessionDate)
+                            .OrderByDescending(r => r.EffectiveFrom).FirstOrDefault();
+                    var minutes = (int)Math.Round((session.ScheduledEndAtUtc - session.ScheduledStartAtUtc).TotalMinutes);
+                    newAmount = Math.Round((rate?.RatePerMinute ?? 0m) * minutes, 2);
+                    source = "the per-minute rate card";
+                }
+
+                if (newAmount <= 0m)
+                {
+                    continue;
+                }
+
+                item.Amount = newAmount;
+                item.Note = string.IsNullOrEmpty(item.Note)
+                    ? $"Re-priced at {source}, set after this class was completed."
+                    : $"{item.Note} (re-priced at {source}, set after this class was completed)";
+                item.Payout.TotalAmount += newAmount;
+                changed = true;
+            }
+
+            if (changed)
+            {
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+            }
         }
 
         private IQueryable<Payout> BaseQuery()

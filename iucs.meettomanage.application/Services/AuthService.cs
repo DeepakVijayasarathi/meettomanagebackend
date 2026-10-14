@@ -1,3 +1,4 @@
+using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Auth;
@@ -48,9 +49,7 @@ namespace iucs.meettomanage.application.Services
 
         public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
         {
-            var email = request.Email.Trim().ToLowerInvariant();
-            var user = await _unitOfWork.Repository<User>()
-                .FirstOrDefaultAsync(u => u.Email == email, cancellationToken);
+            var user = await FindLoginUserAsync(request.Email, cancellationToken);
 
             if (user is not null && user.LockoutEndUtc is { } lockoutEnd && lockoutEnd > DateTime.UtcNow)
             {
@@ -70,7 +69,7 @@ namespace iucs.meettomanage.application.Services
                     await _unitOfWork.SaveChangesAsync(cancellationToken);
                 }
 
-                throw new UnauthorizedException("Invalid email or PIN.");
+                throw new UnauthorizedException("Invalid email/mobile number or PIN.");
             }
 
             if (user.Status == UserStatus.Inactive)
@@ -103,8 +102,65 @@ namespace iucs.meettomanage.application.Services
             var permissions = await LoadPermissionClaimsAsync(user, cancellationToken);
             var defaultRoute = await ResolveDefaultRouteAsync(user, cancellationToken);
 
-            // No new token on refresh-of-self; caller keeps using its current one.
-            return BuildResponse(user, permissions, null, defaultRoute);
+            // Re-mints a fresh token carrying these just-recomputed permission claims — the
+            // original login token's claims are frozen at issue time, so without this, a
+            // Relationship Manager whose access an Admin just approved would keep hitting 403s
+            // (and a stale sidebar) on every permission-gated call until they logged out and
+            // back in. The frontend swaps its stored token for this one on every call here
+            // (SessionProvider already polls this endpoint on load and periodically).
+            var token = _tokenService.CreateToken(user, permissions);
+            return BuildResponse(user, permissions, token, defaultRoute);
+        }
+
+        public async Task<LoginResponse> StartViewAsParentAsync(Guid actorUserId, Guid parentUserId, CancellationToken cancellationToken = default)
+        {
+            var parent = await _unitOfWork.Repository<User>().Query()
+                .FirstOrDefaultAsync(u => u.Id == parentUserId, cancellationToken)
+                ?? throw new NotFoundException(nameof(User), parentUserId);
+
+            // Parents only: a staff, teacher or admin account is never viewable this way.
+            if (parent.Role != UserRole.Parent)
+            {
+                throw new DomainValidationException("Only parent accounts can be viewed this way.");
+            }
+            // Same rule as login: a deactivated parent couldn't sign in, so there's nothing to see.
+            if (parent.Status == UserStatus.Inactive)
+            {
+                throw new DomainValidationException("This parent's account is deactivated, so there's no portal to view.");
+            }
+
+            var permissions = await LoadPermissionClaimsAsync(parent, cancellationToken);
+            var expiresAtUtc = DateTime.UtcNow.AddMinutes(ViewAsParent.SessionMinutes);
+            var token = _tokenService.CreateViewAsToken(parent, permissions, actorUserId, expiresAtUtc);
+
+            // Recorded under the staff member's own (normal) login, naming the parent viewed.
+            await _auditLog.StageAsync(AuditAction.Access, nameof(User), parent.Id.ToString(),
+                $"{{\"note\":\"Started read-only 'View as parent' session ({ViewAsParent.SessionMinutes} min)\"}}", cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            return BuildResponse(parent, permissions, token, "/parent");
+        }
+
+        public async Task<LoginResponse> GetViewAsCurrentUserAsync(Guid parentUserId, Guid actorUserId, DateTime expiresAtUtc, CancellationToken cancellationToken = default)
+        {
+            var parent = await _unitOfWork.Repository<User>().Query()
+                .FirstOrDefaultAsync(u => u.Id == parentUserId, cancellationToken)
+                ?? throw new NotFoundException(nameof(User), parentUserId);
+
+            // Unlike GetCurrentUserAsync, never hand back a normal (8-hour, writable) parent token
+            // here: re-mint the same read-only view-as token with its ORIGINAL expiry, so the
+            // portal's periodic refresh can't stretch a 30-minute session.
+            var permissions = await LoadPermissionClaimsAsync(parent, cancellationToken);
+            var token = _tokenService.CreateViewAsToken(parent, permissions, actorUserId, expiresAtUtc);
+            return BuildResponse(parent, permissions, token, "/parent");
+        }
+
+        public async Task EndViewAsParentAsync(Guid parentUserId, CancellationToken cancellationToken = default)
+        {
+            // Called with the view-as token itself, so AuditLogService credits the staff member.
+            await _auditLog.StageAsync(AuditAction.Access, nameof(User), parentUserId.ToString(),
+                "{\"note\":\"Ended 'View as parent' session\"}", cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
         public async Task<CurrentAccessSnapshot?> GetCurrentAccessAsync(Guid userId, CancellationToken cancellationToken = default)
@@ -124,16 +180,79 @@ namespace iucs.meettomanage.application.Services
             };
         }
 
+        /// <summary>
+        /// The login box takes an email OR a parent's mobile number — parents with no email are
+        /// set up to sign in with their phone (ParentLogin). Phone login is for Parent accounts
+        /// only; a number shared by more than one parent account is ambiguous, so it returns
+        /// null (the caller's generic "invalid" error) rather than guessing which account.
+        /// Tracked, because a failed attempt updates the lockout counters on it.
+        /// </summary>
+        private async Task<User?> FindLoginUserAsync(string identifier, CancellationToken cancellationToken)
+        {
+            var value = identifier.Trim();
+            if (!ParentLogin.LooksLikePhone(value))
+            {
+                var email = value.ToLowerInvariant();
+                return await _unitOfWork.Repository<User>().FirstOrDefaultAsync(u => u.Email == email, cancellationToken);
+            }
+
+            var phone = ParentLogin.NormalizePhone(value)!;
+            var lastFour = phone[^4..];
+            var candidates = (await _unitOfWork.Repository<User>().TrackedQuery()
+                    .Where(u => u.Role == UserRole.Parent && u.Phone != null && u.Phone.Contains(lastFour))
+                    .ToListAsync(cancellationToken))
+                .Where(u => ParentLogin.NormalizePhone(u.Phone) == phone)
+                .ToList();
+            return candidates.Count == 1 ? candidates[0] : null;
+        }
+
+        /// <summary>
+        /// Alerts everyone able to reset a PIN (Admins, and Sub Admins with User Management edit)
+        /// in their notification feed — the forgot-PIN path for parents with no email.
+        /// </summary>
+        private async Task NotifyPinResetStaffAsync(User parent, CancellationToken cancellationToken)
+        {
+            var module = PermissionModule.UserManagement.ToString();
+            var editors = _unitOfWork.Repository<SubAdminPermission>().Query()
+                .Where(p => p.Module == module && p.CanEdit)
+                .Select(p => p.UserId);
+            var staff = await _unitOfWork.Repository<User>().Query()
+                .Where(u => u.Status == UserStatus.Active
+                    && (u.Role == UserRole.Admin || (u.Role == UserRole.SubAdmin && editors.Contains(u.Id))))
+                .ToListAsync(cancellationToken);
+
+            var name = $"{parent.FirstName} {parent.LastName}".Trim();
+            var subject = $"PIN reset requested: {name} ({parent.Phone})";
+            var body =
+                $"<p>{System.Net.WebUtility.HtmlEncode(name)} (mobile {System.Net.WebUtility.HtmlEncode(parent.Phone ?? "")}) " +
+                "tapped <b>Forgot PIN</b> but has no email to receive a reset link.</p>" +
+                "<p>Open <b>Users</b>, find this parent, use <b>Reset PIN</b> and send them the new PIN on WhatsApp.</p>";
+            foreach (var member in staff)
+            {
+                await _notificationService.SendEmailAsync(
+                    member.Id, member.Email, NotificationType.General, subject, body, cancellationToken: cancellationToken);
+            }
+        }
+
         public async Task RequestPinResetAsync(ForgotPinRequest request, CancellationToken cancellationToken = default)
         {
-            var email = request.Email.Trim().ToLowerInvariant();
-            var user = await _unitOfWork.Repository<User>()
-                .FirstOrDefaultAsync(u => u.Email == email, cancellationToken);
+            // Same identifier as the login box: email, or a parent's mobile number.
+            var user = await FindLoginUserAsync(request.Email, cancellationToken);
 
-            // Deliberately silent on "no such account" / inactive — an anonymous caller must
-            // never be able to use this endpoint to discover which emails have accounts here.
+            // Product decision: reveal whether the identifier has an account (trades away
+            // anti-enumeration protection for a clearer "did my request even do anything?"
+            // signal, since silent success was being mistaken for a delivery bug).
             if (user is null || user.Status == UserStatus.Inactive)
             {
+                throw new NotFoundException("We couldn't find an account for that email or mobile number.");
+            }
+
+            // A WhatsApp-only parent has no email to receive a reset link (and SMS/WhatsApp
+            // sending may be off), so ask the staff who can reset PINs to do it and send the new
+            // one on WhatsApp. The response is identical either way (no account discovery).
+            if (!ParentLogin.IsDeliverable(user.Email))
+            {
+                await NotifyPinResetStaffAsync(user, cancellationToken);
                 return;
             }
 
@@ -166,6 +285,30 @@ namespace iucs.meettomanage.application.Services
                 cancellationToken);
         }
 
+        public async Task ChangePinAsync(Guid userId, ChangePinRequest request, CancellationToken cancellationToken = default)
+        {
+            // Client: the Admin account had no way at all to change its own PIN (Users -> Reset PIN
+            // deliberately excludes Admins). Any signed-in user can now, from their account settings.
+            var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
+                ?? throw new NotFoundException(nameof(User), userId);
+
+            if (!_passwordHasher.Verify(request.CurrentPin, user.PinHash))
+            {
+                throw new DomainValidationException("Your current PIN is not correct.");
+            }
+            if (request.NewPin == request.CurrentPin)
+            {
+                throw new DomainValidationException("Choose a new PIN that's different from your current one.");
+            }
+
+            user.PinHash = _passwordHasher.Hash(request.NewPin);
+            // A PIN the user chose themselves is never kept in readable form.
+            user.PinEncrypted = null;
+            await _auditLog.StageAsync(AuditAction.Update, nameof(User), user.Id.ToString(),
+                "{\"note\":\"User changed their own PIN\"}", cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
         public async Task ResetPinAsync(ResetPinRequest request, CancellationToken cancellationToken = default)
         {
             var resetToken = await _unitOfWork.Repository<PinResetToken>()
@@ -180,6 +323,8 @@ namespace iucs.meettomanage.application.Services
                 ?? throw new NotFoundException(nameof(User), resetToken.UserId);
 
             user.PinHash = _passwordHasher.Hash(request.NewPin);
+            // A PIN the user chose themselves is never kept in readable form; drop the older system-issued one.
+            user.PinEncrypted = null;
             resetToken.UsedAtUtc = DateTime.UtcNow;
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(User), user.Id.ToString(), cancellationToken: cancellationToken);
@@ -257,7 +402,7 @@ namespace iucs.meettomanage.application.Services
         }
 
         private static List<string> ToClaims(
-            IEnumerable<(PermissionModule Module, bool CanView, bool CanCreate, bool CanEdit, bool CanDelete, bool CanApprove)> grants)
+            IEnumerable<(string Module, bool CanView, bool CanCreate, bool CanEdit, bool CanDelete, bool CanApprove)> grants)
         {
             var claims = new List<string>();
             foreach (var grant in grants)

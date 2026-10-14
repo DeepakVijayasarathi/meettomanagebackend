@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using iucs.meettomanage.api.Auth;
 using iucs.meettomanage.application.Dto.Payouts;
+using iucs.meettomanage.application.Dto.Sessions;
 using iucs.meettomanage.application.Services;
 using iucs.meettomanage.domain.Enums;
 using Microsoft.AspNetCore.Authorization;
@@ -19,9 +20,9 @@ namespace iucs.meettomanage.api.Controllers
             _payoutService = payoutService;
         }
 
-        /// <summary>Visibility rule: admin (or granted sub-admin) sees all payouts.</summary>
+        /// <summary>Visibility rule: admin (or a sub-admin role granted the Payouts module) sees all payouts.</summary>
         [HttpGet]
-        [Authorize(Roles = nameof(UserRole.Admin))] // #6: payout/salary details are Super-Admin (Admin) only
+        [HasPermission(PermissionModule.Payouts, PermissionAction.View)]
         public async Task<ActionResult<IReadOnlyList<PayoutDto>>> List(
             [FromQuery] int? year,
             [FromQuery] int? month,
@@ -40,9 +41,38 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _payoutService.ListForTeacherUserAsync(userId, cancellationToken));
         }
 
-        /// <summary>Admin correction to one accrued line item -- the only way to act on a RequiresReview flag. Only while the payout is still Pending.</summary>
+        /// <summary>"My Earnings": batch-wise breakdown (rate per class, classes taken, total) for one month, defaulting to the current month.</summary>
+        [HttpGet("mine/summary")]
+        [Authorize(Roles = nameof(UserRole.Teacher))]
+        public async Task<ActionResult<TeacherEarningsSummaryDto>> MineSummary(
+            [FromQuery] int? year, [FromQuery] int? month, CancellationToken cancellationToken)
+        {
+            var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            return Ok(await _payoutService.GetMyEarningsSummaryAsync(userId, year, month, cancellationToken));
+        }
+
+        /// <summary>Adds a manual addition (positive) or deduction (negative) line to a payout, in any status.</summary>
+        [HttpPost("{id:guid}/items")]
+        [HasPermission(PermissionModule.Payouts, PermissionAction.Edit)]
+        public async Task<ActionResult<PayoutDto>> AddItem(
+            Guid id,
+            AddPayoutItemRequest request,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await _payoutService.AddItemAsync(id, request, cancellationToken));
+        }
+
+        /// <summary>Every manual correction made to a payout, newest first.</summary>
+        [HttpGet("{id:guid}/history")]
+        [HasPermission(PermissionModule.Payouts, PermissionAction.View)]
+        public async Task<ActionResult<IReadOnlyList<PayoutChangeDto>>> History(Guid id, CancellationToken cancellationToken)
+        {
+            return Ok(await _payoutService.GetHistoryAsync(id, cancellationToken));
+        }
+
+        /// <summary>Admin correction to one accrued line item -- the only way to act on a RequiresReview flag. Allowed after finalizing too; every correction is kept in the payout's history.</summary>
         [HttpPut("{id:guid}/items/{itemId:guid}")]
-        [Authorize(Roles = nameof(UserRole.Admin))] // #6: payout/salary details are Super-Admin (Admin) only
+        [HasPermission(PermissionModule.Payouts, PermissionAction.Edit)]
         public async Task<ActionResult<PayoutDto>> AdjustItem(
             Guid id,
             Guid itemId,
@@ -52,16 +82,51 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _payoutService.AdjustItemAsync(id, itemId, request, cancellationToken));
         }
 
+        /// <summary>
+        /// Payout Approvals (Admin + Management dashboards): classes that ran shorter than
+        /// scheduled, waiting for a decision (pending=true) or already decided (pending=false).
+        /// </summary>
+        [HttpGet("approvals")]
+        [HasPermission(PermissionModule.Payouts, PermissionAction.View)]
+        public async Task<ActionResult<IReadOnlyList<PayoutApprovalDto>>> ListApprovals(
+            [FromQuery] bool pending = true,
+            CancellationToken cancellationToken = default)
+        {
+            return Ok(await _payoutService.ListApprovalsAsync(pending, cancellationToken));
+        }
+
+        /// <summary>The recordings of the class behind an approval row, so the reviewer can watch it before deciding.</summary>
+        [HttpGet("approvals/{itemId:guid}/recordings")]
+        [HasPermission(PermissionModule.Payouts, PermissionAction.View)]
+        public async Task<ActionResult<IReadOnlyList<SessionRecordingDto>>> ListApprovalRecordings(
+            Guid itemId,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await _payoutService.ListApprovalRecordingsAsync(itemId, cancellationToken));
+        }
+
+        /// <summary>Approve a short class for full payout, partial payout, or reject it.</summary>
+        [HttpPost("approvals/{itemId:guid}/decide")]
+        [HasPermission(PermissionModule.Payouts, PermissionAction.Approve)]
+        public async Task<ActionResult<PayoutApprovalDto>> DecideApproval(
+            Guid itemId,
+            DecidePayoutApprovalRequest request,
+            CancellationToken cancellationToken)
+        {
+            var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            return Ok(await _payoutService.DecideApprovalAsync(itemId, userId, request, cancellationToken));
+        }
+
         /// <summary>Locks the month's total and emails the statement to the teacher.</summary>
         [HttpPost("{id:guid}/finalize")]
-        [Authorize(Roles = nameof(UserRole.Admin))] // #6: payout/salary details are Super-Admin (Admin) only
+        [HasPermission(PermissionModule.Payouts, PermissionAction.Approve)]
         public async Task<ActionResult<PayoutDto>> Finalize(Guid id, CancellationToken cancellationToken)
         {
             return Ok(await _payoutService.FinalizeAsync(id, cancellationToken));
         }
 
         [HttpPost("{id:guid}/mark-paid")]
-        [Authorize(Roles = nameof(UserRole.Admin))] // #6: payout/salary details are Super-Admin (Admin) only
+        [HasPermission(PermissionModule.Payouts, PermissionAction.Edit)]
         public async Task<ActionResult<PayoutDto>> MarkPaid(Guid id, CancellationToken cancellationToken)
         {
             return Ok(await _payoutService.MarkPaidAsync(id, cancellationToken));
@@ -80,7 +145,7 @@ namespace iucs.meettomanage.api.Controllers
         }
 
         [HttpGet]
-        [Authorize(Roles = nameof(UserRole.Admin))] // #6: payout/salary details are Super-Admin (Admin) only
+        [HasPermission(PermissionModule.Payouts, PermissionAction.View)]
         public async Task<ActionResult<IReadOnlyList<PayoutRateDto>>> List(
             [FromQuery] Guid? teacherProfileId,
             CancellationToken cancellationToken)
@@ -90,7 +155,7 @@ namespace iucs.meettomanage.api.Controllers
 
         /// <summary>Configurable per-session rate by teacher and class duration.</summary>
         [HttpPost]
-        [Authorize(Roles = nameof(UserRole.Admin))] // #6: payout/salary details are Super-Admin (Admin) only
+        [HasPermission(PermissionModule.Payouts, PermissionAction.Edit)]
         public async Task<ActionResult<PayoutRateDto>> SetRate(
             SavePayoutRateRequest request,
             CancellationToken cancellationToken)

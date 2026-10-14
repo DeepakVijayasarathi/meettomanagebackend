@@ -1,8 +1,10 @@
+using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.application.Dto.Billing;
 using iucs.meettomanage.application.Dto.Portal;
 using iucs.meettomanage.application.Dto.Resources;
 using iucs.meettomanage.application.Dto.Sessions;
+using iucs.meettomanage.application.Helper;
 using iucs.meettomanage.application.Mappings;
 using iucs.meettomanage.domain.Entities.Academics;
 using iucs.meettomanage.domain.Entities.Admission;
@@ -29,16 +31,29 @@ namespace iucs.meettomanage.application.Services
         {
             var parent = await GetParentAsync(parentUserId, cancellationToken);
 
-            var suspension = await _unitOfWork.Repository<FeeSuspension>().FirstOrDefaultAsync(
-                s => s.ParentProfileId == parent.Id && s.Status == SuspensionStatus.Active, cancellationToken);
+            // Loaded once for the whole sibling group and matched per child in memory below --
+            // same reasoning as the batch/session/attendance queries further down. A suspension
+            // with ChildId null applies to every child; one with ChildId set only to that child.
+            // Bypassed entirely while fee-default suspension is disabled (BillingSettings) --
+            // the centre isn't tracking fees through the portal yet, so no child/account should
+            // ever read as suspended even if FeeSuspension rows exist from before this was off.
+            var activeSuspensions = await BillingSettings.IsSuspensionEnabledAsync(_unitOfWork, cancellationToken)
+                ? await _unitOfWork.Repository<FeeSuspension>().Query()
+                    .Where(s => s.ParentProfileId == parent.Id && s.Status == SuspensionStatus.Active)
+                    .ToListAsync(cancellationToken)
+                : new List<FeeSuspension>();
+            var accountWideSuspension = activeSuspensions.FirstOrDefault(s => s.ChildId is null);
 
-            var hasOverdue = await _unitOfWork.Repository<Invoice>().ExistsAsync(
-                i => i.ParentProfileId == parent.Id && i.Status == InvoiceStatus.Overdue, cancellationToken);
-            var hasDue = await _unitOfWork.Repository<Invoice>().ExistsAsync(
-                i => i.ParentProfileId == parent.Id
-                     && (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.PartiallyPaid),
-                cancellationToken);
-            var accountFeeStatus = suspension is not null ? "suspended" : hasOverdue ? "overdue" : hasDue ? "due" : "paid";
+            // Same reasoning: per-child invoice status (a sibling's overdue invoice must never
+            // read as *this* child's own status), plus family-level (ChildId null) invoices,
+            // which affect every child the same way an account-wide suspension does.
+            var invoiceStatusByChild = await _unitOfWork.Repository<Invoice>().Query()
+                .Where(i => i.ParentProfileId == parent.Id)
+                .Select(i => new { i.ChildId, i.Status })
+                .ToListAsync(cancellationToken);
+            var familyLevelHasOverdue = invoiceStatusByChild.Any(i => i.ChildId is null && i.Status == InvoiceStatus.Overdue);
+            var familyLevelHasDue = invoiceStatusByChild.Any(i => i.ChildId is null
+                && (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.PartiallyPaid));
 
             var children = await _unitOfWork.Repository<Child>().Query()
                 .Where(c => c.ParentProfileId == parent.Id)
@@ -122,9 +137,19 @@ namespace iucs.meettomanage.application.Services
                 }
 
                 attendanceByChild.TryGetValue(child.Id, out var attendance);
-                var attendancePercent = attendance is null || attendance.Total == 0
-                    ? 100
+                // Null (not a vacuous 100%) when there's no attendance data yet -- a child
+                // with zero completed sessions hasn't earned a perfect score, they just
+                // haven't been measured. Same fix already applied to teacher utilization
+                // (ReportsService's TeacherPerformanceDto) -- see that DTO's own doc comment.
+                double? attendancePercent = attendance is null || attendance.Total == 0
+                    ? null
                     : Math.Round(100.0 * attendance.Present / attendance.Total, 1);
+
+                var childSuspension = accountWideSuspension ?? activeSuspensions.FirstOrDefault(s => s.ChildId == child.Id);
+                var childHasOverdue = familyLevelHasOverdue || invoiceStatusByChild.Any(i => i.ChildId == child.Id && i.Status == InvoiceStatus.Overdue);
+                var childHasDue = familyLevelHasDue || invoiceStatusByChild.Any(i => i.ChildId == child.Id
+                    && (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.PartiallyPaid));
+                var childFeeStatus = childSuspension is not null ? "suspended" : childHasOverdue ? "overdue" : childHasDue ? "due" : "paid";
 
                 summaries.Add(new ParentChildSummaryDto
                 {
@@ -134,16 +159,27 @@ namespace iucs.meettomanage.application.Services
                     ClassesCompleted = completed,
                     ClassesRemaining = upcoming,
                     AttendancePercent = attendancePercent,
-                    FeeStatus = accountFeeStatus,
+                    FeeStatus = childFeeStatus,
+                    IsSuspended = childSuspension is not null,
+                    SuspendedInvoiceId = childSuspension?.InvoiceId,
                 });
             }
 
+            var allSuspended = children.Count > 0 && summaries.All(c => c.IsSuspended);
             return new ParentDashboardDto
             {
                 ParentProfileId = parent.Id,
-                EnrollmentFormCompleted = parent.EnrollmentFormCompleted,
-                IsSuspended = suspension is not null,
-                SuspendedInvoiceId = suspension?.InvoiceId,
+                // The stored flag is only ever set by an approved enrollment form. A family whose
+                // child was bulk-imported (the wise.live migration) or otherwise added by staff
+                // has an active child but never went through that form, so the flag alone sent
+                // an already-onboarded parent back to the enrollment gate (fill the form, wait
+                // for RM review) on their first dashboard visit -- while every per-child page
+                // (Schedule/Recordings/Resources) already treated that same child as enrolled.
+                // An active child IS the evidence the parent was onboarded.
+                EnrollmentFormCompleted = parent.EnrollmentFormCompleted || children.Any(c => c.IsActive),
+                IsSuspended = summaries.Any(c => c.IsSuspended),
+                AllChildrenSuspended = allSuspended,
+                SuspendedInvoiceId = allSuspended ? accountWideSuspension?.InvoiceId : null,
                 Children = summaries,
             };
         }
@@ -175,32 +211,82 @@ namespace iucs.meettomanage.application.Services
             // Demo bookings track the lead by email (the parent may not have had an
             // enrolled child/batch yet when the demo was scheduled), so their session
             // is not reachable via BatchEnrollment and must be unioned in separately.
-            var demoSessionIds = parentEmail is null
-                ? new List<Guid>()
+            // DemoBooking has no Child FK -- only this free-text name -- so it's carried
+            // through to the DTO too, letting the portal at least label whose demo this is
+            // when a family has more than one child (ChildIds itself always stays empty for
+            // these, same as before).
+            var demoChildNameBySession = parentEmail is null
+                ? new Dictionary<Guid, string>()
                 : await _unitOfWork.Repository<DemoBooking>().Query()
                     .Where(d => d.ClassSessionId != null && d.ParentEmail == parentEmail)
-                    .Select(d => d.ClassSessionId!.Value)
-                    .ToListAsync(cancellationToken);
+                    .Select(d => new { SessionId = d.ClassSessionId!.Value, d.ChildName })
+                    .ToDictionaryAsync(d => d.SessionId, d => d.ChildName, cancellationToken);
+            var demoSessionIds = demoChildNameBySession.Keys.ToList();
 
             var sessions = await _unitOfWork.Repository<ClassSession>().Query()
                 .Include(s => s.Batch)
                 .Include(s => s.TeacherProfile).ThenInclude(t => t.User)
                 .Where(s => (s.BatchId != null && batchIds.Contains(s.BatchId.Value) || demoSessionIds.Contains(s.Id))
                             && s.ScheduledStartAtUtc < toUtc && s.ScheduledEndAtUtc > fromUtc)
+                .Where(SessionVisibility.IsShownInSchedule)
                 .OrderBy(s => s.ScheduledStartAtUtc)
                 .ToListAsync(cancellationToken);
+
+            var activeRecordings = await SessionRecordingLookup.ActiveRecordingsBySessionAsync(
+                _unitOfWork, sessions.Select(s => s.Id), cancellationToken);
 
             return sessions
                 .Select(s =>
                 {
-                    var dto = s.ToDto();
+                    var dto = s.ToDto(
+                        activeRecordings.GetValueOrDefault(s.Id),
+                        activeRecordings.ContainsKey(s.Id),
+                        demoChildNameBySession.GetValueOrDefault(s.Id));
                     if (s.BatchId is { } batchId && childIdsByBatch.TryGetValue(batchId, out var childIds))
                     {
                         dto.ChildIds = childIds;
                     }
+                    dto.CancellationReason = CancelledBy.ForParent(dto.CancellationReason);
                     return dto;
                 })
                 .ToList();
+        }
+
+        /// <summary>Every folder shared with this parent, including all subfolders beneath them.</summary>
+        private async Task<HashSet<Guid>> GetSharedFolderIdsAsync(Guid parentProfileId, CancellationToken cancellationToken)
+        {
+            var roots = await _unitOfWork.Repository<ResourceFolderAccess>().Query()
+                .Where(a => a.ParentProfileId == parentProfileId)
+                .Select(a => a.FolderId)
+                .ToListAsync(cancellationToken);
+
+            // Folders shared with a batch reach every parent with an actively enrolled child in it,
+            // evaluated now (a parent who enrols later gets them with no extra step). A child under an
+            // active fee suspension doesn't unlock its batch's folders, same as batch-visible files.
+            var suspendedChildIds = (await _unitOfWork.Repository<FeeSuspension>().Query()
+                    .Where(s => s.ParentProfileId == parentProfileId && s.Status == SuspensionStatus.Active && s.ChildId != null)
+                    .Select(s => s.ChildId!.Value)
+                    .ToListAsync(cancellationToken))
+                .ToHashSet();
+            var enrolledBatchIds = _unitOfWork.Repository<BatchEnrollment>().Query()
+                .Where(e => e.Status == EnrollmentStatus.Active
+                    && e.Child.ParentProfileId == parentProfileId
+                    && !suspendedChildIds.Contains(e.ChildId))
+                .Select(e => e.BatchId);
+            roots.AddRange(await _unitOfWork.Repository<ResourceFolderBatchAccess>().Query()
+                .Where(a => enrolledBatchIds.Contains(a.BatchId))
+                .Select(a => a.FolderId)
+                .ToListAsync(cancellationToken));
+
+            if (roots.Count == 0)
+            {
+                return new HashSet<Guid>();
+            }
+
+            var tree = await _unitOfWork.Repository<ResourceFolder>().Query()
+                .Select(f => new { f.Id, f.ParentFolderId })
+                .ToListAsync(cancellationToken);
+            return ResourceFolderTree.WithDescendants(tree.Select(f => (f.Id, f.ParentFolderId)).ToList(), roots);
         }
 
         public async Task<IReadOnlyList<ResourceDto>> GetResourcesAsync(
@@ -209,10 +295,11 @@ namespace iucs.meettomanage.application.Services
         {
             var parent = await GetParentAsync(parentUserId, cancellationToken);
 
-            // Fee suspension blocks content access until payment or admin restoration
-            var suspended = await _unitOfWork.Repository<FeeSuspension>().ExistsAsync(
-                s => s.ParentProfileId == parent.Id && s.Status == SuspensionStatus.Active, cancellationToken);
-            if (suspended)
+            // Account-wide suspension (family-level invoice overdue) blocks every child's
+            // content outright. A per-child suspension only blocks resources reachable through
+            // THAT child's own batches -- filtered below rather than thrown here, since a
+            // sibling's fees being current must still see their own resources.
+            if (await SuspensionCheck.IsAccountBlockedAsync(_unitOfWork, parent.Id, cancellationToken))
             {
                 throw new DomainValidationException("Content access is suspended until the pending fee is settled.");
             }
@@ -223,17 +310,36 @@ namespace iucs.meettomanage.application.Services
                 .Select(a => a.Resource)
                 .ToListAsync(cancellationToken);
 
-            // Multi-batch visibility: resources the teacher made visible to a batch reach
-            // every parent with an actively enrolled child in that batch (no grant needed).
+            // Multi-batch visibility: resources the teacher made visible to a batch reach every
+            // parent with an actively enrolled, non-suspended child in that batch (no grant
+            // needed). ResourceAccess (granted, above) has no ChildId to filter by, so a direct
+            // grant stays visible regardless of which child triggered a per-child suspension --
+            // a known, narrow gap versus the batch-derived list below, which resolves cleanly.
+            var suspendedChildIds = (await _unitOfWork.Repository<FeeSuspension>().Query()
+                    .Where(s => s.ParentProfileId == parent.Id && s.Status == SuspensionStatus.Active && s.ChildId != null)
+                    .Select(s => s.ChildId!.Value)
+                    .ToListAsync(cancellationToken))
+                .ToHashSet();
             var enrolledBatchIds = _unitOfWork.Repository<BatchEnrollment>().Query()
-                .Where(e => e.Status == EnrollmentStatus.Active && e.Child.ParentProfileId == parent.Id)
+                .Where(e => e.Status == EnrollmentStatus.Active
+                    && e.Child.ParentProfileId == parent.Id
+                    && !suspendedChildIds.Contains(e.ChildId))
                 .Select(e => e.BatchId);
             var batchVisible = await _unitOfWork.Repository<ResourceBatchVisibility>().Query()
                 .Where(v => enrolledBatchIds.Contains(v.BatchId))
                 .Select(v => v.Resource)
                 .ToListAsync(cancellationToken);
 
-            return granted.Concat(batchVisible)
+            // Folder sharing: everything in a folder shared with this parent (and its subfolders),
+            // however many other parents the same folder is shared with.
+            var sharedFolderIds = await GetSharedFolderIdsAsync(parent.Id, cancellationToken);
+            var folderShared = sharedFolderIds.Count == 0
+                ? new List<Resource>()
+                : await _unitOfWork.Repository<Resource>().Query()
+                    .Where(r => r.FolderId != null && sharedFolderIds.Contains(r.FolderId.Value))
+                    .ToListAsync(cancellationToken);
+
+            return granted.Concat(batchVisible).Concat(folderShared)
                 .GroupBy(r => r.Id)
                 .Select(g => g.First().ToDto())
                 .ToList();
@@ -247,6 +353,9 @@ namespace iucs.meettomanage.application.Services
             var invoices = await _unitOfWork.Repository<Invoice>().Query()
                 .Where(i => i.ParentProfileId == parent.Id)
                 .Include(i => i.Child)
+                // Admission / course-fee invoices are tied to the course directly (no subscription):
+                // without this the parent saw them with no course name.
+                .Include(i => i.Course)
                 .Include(i => i.Subscription).ThenInclude(s => s!.PackagePlan).ThenInclude(p => p.Course)
                 .OrderByDescending(i => i.IssuedAtUtc)
                 .ToListAsync(cancellationToken);
@@ -258,11 +367,34 @@ namespace iucs.meettomanage.application.Services
             Guid resourceId,
             CancellationToken cancellationToken = default)
         {
+            var resource = await ResolveSharedResourceAsync(parentUserId, resourceId, cancellationToken);
+
+            if (!resource.IsDownloadable)
+            {
+                throw new DomainValidationException("This resource is view-only and cannot be downloaded.");
+            }
+
+            return resource.ToDto();
+        }
+
+        /// <summary>Same grant and suspension checks as a download, but for watching/reading in the
+        /// portal, so it does not require the resource to be downloadable (recordings never are).</summary>
+        public async Task<ResourceDto> GetResourceForViewAsync(
+            Guid parentUserId,
+            Guid resourceId,
+            CancellationToken cancellationToken = default)
+        {
+            return (await ResolveSharedResourceAsync(parentUserId, resourceId, cancellationToken)).ToDto();
+        }
+
+        private async Task<Resource> ResolveSharedResourceAsync(
+            Guid parentUserId,
+            Guid resourceId,
+            CancellationToken cancellationToken)
+        {
             var parent = await GetParentAsync(parentUserId, cancellationToken);
 
-            var suspended = await _unitOfWork.Repository<FeeSuspension>().ExistsAsync(
-                s => s.ParentProfileId == parent.Id && s.Status == SuspensionStatus.Active, cancellationToken);
-            if (suspended)
+            if (await SuspensionCheck.IsAccountBlockedAsync(_unitOfWork, parent.Id, cancellationToken))
             {
                 throw new DomainValidationException("Content access is suspended until the pending fee is settled.");
             }
@@ -279,13 +411,37 @@ namespace iucs.meettomanage.application.Services
             var resource = direct?.Resource;
             if (resource is null)
             {
-                var enrolledBatchIds = _unitOfWork.Repository<BatchEnrollment>().Query()
+                var folderShared = await _unitOfWork.Repository<Resource>().Query()
+                    .FirstOrDefaultAsync(r => r.Id == resourceId && r.FolderId != null, cancellationToken);
+                if (folderShared is not null
+                    && (await GetSharedFolderIdsAsync(parent.Id, cancellationToken)).Contains(folderShared.FolderId!.Value))
+                {
+                    resource = folderShared;
+                }
+            }
+            if (resource is null)
+            {
+                // A direct grant (ResourceAccess) has no ChildId to check per-child, so only
+                // this batch-visibility path can resolve which child grants access -- and
+                // therefore whether it's blocked by THAT child's own suspension specifically.
+                var enrolledBatches = await _unitOfWork.Repository<BatchEnrollment>().Query()
                     .Where(e => e.Status == EnrollmentStatus.Active && e.Child.ParentProfileId == parent.Id)
-                    .Select(e => e.BatchId);
-                resource = await _unitOfWork.Repository<ResourceBatchVisibility>().Query()
+                    .Select(e => new { e.BatchId, e.ChildId })
+                    .ToListAsync(cancellationToken);
+                var enrolledBatchIds = enrolledBatches.Select(e => e.BatchId).ToList();
+                var candidate = await _unitOfWork.Repository<ResourceBatchVisibility>().Query()
+                    .Include(v => v.Resource)
                     .Where(v => v.ResourceId == resourceId && enrolledBatchIds.Contains(v.BatchId))
-                    .Select(v => v.Resource)
                     .FirstOrDefaultAsync(cancellationToken);
+                if (candidate is not null)
+                {
+                    var grantingChildId = enrolledBatches.First(e => e.BatchId == candidate.BatchId).ChildId;
+                    if (await SuspensionCheck.IsChildBlockedAsync(_unitOfWork, parent.Id, grantingChildId, cancellationToken))
+                    {
+                        throw new DomainValidationException("Content access is suspended until the pending fee is settled.");
+                    }
+                }
+                resource = candidate?.Resource;
             }
 
             if (resource is null)
@@ -293,12 +449,7 @@ namespace iucs.meettomanage.application.Services
                 throw new NotFoundException("This resource has not been shared with your account.");
             }
 
-            if (!resource.IsDownloadable)
-            {
-                throw new DomainValidationException("This resource is view-only and cannot be downloaded.");
-            }
-
-            return resource.ToDto();
+            return resource;
         }
 
         public async Task<IReadOnlyList<SessionRecordingDto>> GetRecordingsAsync(
@@ -309,18 +460,32 @@ namespace iucs.meettomanage.application.Services
             var session = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(sessionId, cancellationToken)
                 ?? throw new NotFoundException(nameof(ClassSession), sessionId);
 
-            var hasChildInBatch = session.BatchId.HasValue && await _unitOfWork.Repository<BatchEnrollment>().Query()
-                .AnyAsync(e => e.BatchId == session.BatchId.Value
-                    && e.Status == EnrollmentStatus.Active
-                    && e.Child.ParentProfileId == parent.Id, cancellationToken);
-            if (!hasChildInBatch)
+            var childIdsInBatch = session.BatchId.HasValue
+                ? await _unitOfWork.Repository<BatchEnrollment>().Query()
+                    .Where(e => e.BatchId == session.BatchId.Value
+                        && e.Status == EnrollmentStatus.Active
+                        && e.Child.ParentProfileId == parent.Id)
+                    .Select(e => e.ChildId)
+                    .ToListAsync(cancellationToken)
+                : [];
+            if (childIdsInBatch.Count == 0)
             {
                 throw new NotFoundException("This session's recordings have not been shared with your account.");
             }
 
-            var suspended = await _unitOfWork.Repository<FeeSuspension>().ExistsAsync(
-                s => s.ParentProfileId == parent.Id && s.Status == SuspensionStatus.Active, cancellationToken);
-            if (suspended)
+            // A batch can hold more than one of this parent's children (siblings sharing a
+            // batch) -- blocked only if EVERY one of them is currently suspended; one sibling's
+            // fees being current is enough to keep this recording reachable.
+            var anyChildAllowed = false;
+            foreach (var childId in childIdsInBatch)
+            {
+                if (!await SuspensionCheck.IsChildBlockedAsync(_unitOfWork, parent.Id, childId, cancellationToken))
+                {
+                    anyChildAllowed = true;
+                    break;
+                }
+            }
+            if (!anyChildAllowed)
             {
                 throw new DomainValidationException("Content access is suspended until the pending fee is settled.");
             }
@@ -340,6 +505,90 @@ namespace iucs.meettomanage.application.Services
                 ExpiresAtUtc = r.ExpiresAtUtc,
                 CreatedAtUtc = r.CreatedAtUtc,
             }).ToList();
+        }
+
+        /// <summary>See ParentRecordingDto's own doc comment for the N+1 pattern this replaces
+        /// (one enrollment/suspension check plus one query per completed session) with a single
+        /// bulk query, the same fix already applied to the admin and teacher Recordings pages.</summary>
+        public async Task<IReadOnlyList<ParentRecordingDto>> GetMyRecordingsAsync(
+            Guid parentUserId, CancellationToken cancellationToken = default)
+        {
+            var parent = await GetParentAsync(parentUserId, cancellationToken);
+
+            var enrollments = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                .Where(e => e.Child.ParentProfileId == parent.Id && e.Status == EnrollmentStatus.Active)
+                .Select(e => new { e.BatchId, e.ChildId })
+                .ToListAsync(cancellationToken);
+            if (enrollments.Count == 0)
+            {
+                return [];
+            }
+
+            var batchIds = enrollments.Select(e => e.BatchId).Distinct().ToList();
+            var childIdsByBatch = enrollments
+                .GroupBy(e => e.BatchId)
+                .ToDictionary(g => g.Key, g => (IReadOnlyList<Guid>)g.Select(e => e.ChildId).ToList());
+
+            // Same rule as SuspensionCheck.IsChildBlockedAsync (a batch stays reachable as long
+            // as at least one of this parent's children in it isn't blocked), computed once for
+            // every child up front instead of once per session's recording lookup.
+            var suspensionsEnabled = await BillingSettings.IsSuspensionEnabledAsync(_unitOfWork, cancellationToken);
+            var activeSuspendedChildIds = suspensionsEnabled
+                ? await _unitOfWork.Repository<FeeSuspension>().Query()
+                    .Where(s => s.ParentProfileId == parent.Id && s.Status == SuspensionStatus.Active)
+                    .Select(s => s.ChildId)
+                    .ToListAsync(cancellationToken)
+                : [];
+            var accountWideBlocked = suspensionsEnabled && activeSuspendedChildIds.Contains(null);
+            var blockedChildIds = activeSuspendedChildIds.Where(id => id.HasValue).Select(id => id!.Value).ToHashSet();
+
+            bool BatchAllowed(Guid batchId) =>
+                !accountWideBlocked
+                && childIdsByBatch.TryGetValue(batchId, out var kids)
+                && kids.Any(id => !blockedChildIds.Contains(id));
+
+            var now = DateTime.UtcNow;
+            var recordings = await _unitOfWork.Repository<SessionRecording>().Query()
+                .Include(r => r.ClassSession).ThenInclude(s => s.Batch)
+                .Where(r => r.ClassSession.BatchId != null && batchIds.Contains(r.ClassSession.BatchId.Value)
+                    && (r.ExpiresAtUtc == null || r.ExpiresAtUtc > now))
+                .OrderByDescending(r => r.CreatedAtUtc)
+                .ToListAsync(cancellationToken);
+
+            return recordings
+                .Where(r => BatchAllowed(r.ClassSession.BatchId!.Value))
+                .Select(r => new ParentRecordingDto
+                {
+                    Id = r.Id,
+                    ClassSessionId = r.ClassSessionId,
+                    StorageUrl = r.StorageUrl,
+                    DurationSeconds = r.DurationSeconds,
+                    ExpiresAtUtc = r.ExpiresAtUtc,
+                    CreatedAtUtc = r.CreatedAtUtc,
+                    BatchName = r.ClassSession.Batch?.Name,
+                    ScheduledStartAtUtc = r.ClassSession.ScheduledStartAtUtc,
+                    ChildIds = childIdsByBatch.GetValueOrDefault(r.ClassSession.BatchId!.Value, []),
+                })
+                .ToList();
+        }
+
+        public async Task<bool> IsTermsAcceptanceRequiredAsync(Guid parentUserId, CancellationToken cancellationToken = default)
+        {
+            var parent = await GetParentAsync(parentUserId, cancellationToken);
+            return await TermsRule.IsAcceptanceRequiredAsync(_unitOfWork, parent, cancellationToken);
+        }
+
+        public async Task AcceptTermsAsync(Guid parentUserId, CancellationToken cancellationToken = default)
+        {
+            var parent = await GetParentAsync(parentUserId, cancellationToken);
+            if (parent.TermsAcceptedAtUtc is not null)
+            {
+                return;
+            }
+
+            parent.TermsAcceptedAtUtc = DateTime.UtcNow;
+            _unitOfWork.Repository<ParentProfile>().Update(parent);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
         private async Task<ParentProfile> GetParentAsync(Guid parentUserId, CancellationToken cancellationToken)

@@ -58,11 +58,147 @@ namespace iucs.meettomanage.application.Dto.Payouts
 
         public DateTime CreatedAtUtc { get; set; }
 
-        /// <summary>Teacher's captured attendance fell well short of the scheduled duration — needs a human look before this payout is finalized.</summary>
+        /// <summary>The class ran shorter than scheduled (or no attendance was recorded) — awaiting an Admin / Management decision in Payout Approvals before this payout can be finalized.</summary>
         public bool RequiresReview { get; set; }
+
+        public int? ScheduledMinutes { get; set; }
+
+        public int? DeliveredMinutes { get; set; }
+
+        public PayoutReviewDecision? ReviewDecision { get; set; }
+
+        /// <summary>The amount as first calculated, when an approval decision or a correction
+        /// has since changed it; null when the line still stands as calculated.</summary>
+        public decimal? OriginalAmount { get; set; }
+    }
+
+    /// <summary>One short / unattended class awaiting (or given) a payout decision — a row on the Payout Approvals screen.</summary>
+    public class PayoutApprovalDto
+    {
+        public Guid ItemId { get; set; }
+
+        public Guid PayoutId { get; set; }
+
+        public PayoutStatus PayoutStatus { get; set; }
+
+        public Guid? ClassSessionId { get; set; }
+
+        public string TeacherName { get; set; } = null!;
+
+        /// <summary>Batch name, "Demo class", or "Class session".</summary>
+        public string ClassName { get; set; } = null!;
+
+        /// <summary>Enrolled students (batch) or the demo child's name.</summary>
+        public string? StudentNames { get; set; }
+
+        public DateTime? ScheduledStartAtUtc { get; set; }
+
+        public DateTime? ScheduledEndAtUtc { get; set; }
+
+        public DateTime? ActualStartAtUtc { get; set; }
+
+        public DateTime? ActualEndAtUtc { get; set; }
+
+        public int? ScheduledMinutes { get; set; }
+
+        /// <summary>Null when no teacher attendance was recorded at all.</summary>
+        public int? DeliveredMinutes { get; set; }
+
+        public int? ShortfallMinutes { get; set; }
+
+        /// <summary>Number of recording segments for the class (a disconnect/rejoin creates a new one).</summary>
+        public int RecordingCount { get; set; }
+
+        /// <summary>All recording segments of the class added together, in whole minutes (merged view).</summary>
+        public int RecordedMinutes { get; set; }
+
+        /// <summary>Teacher's first join / latest leave as captured by the platform (not the recording clock).</summary>
+        public DateTime? TeacherJoinedAtUtc { get; set; }
+
+        public DateTime? TeacherLeftAtUtc { get; set; }
+
+        /// <summary>Minutes the teacher joined after the scheduled start (0 when on time).</summary>
+        public int LateJoinMinutes { get; set; }
+
+        /// <summary>Minutes the teacher left before the scheduled end (0 when not early).</summary>
+        public int EarlyEndMinutes { get; set; }
+
+        /// <summary>Plain-language cause of the shortfall: late join, early end, recording gap, or none.</summary>
+        public string? ShortfallReason { get; set; }
+
+        /// <summary>Full scheduled-duration amount as accrued.</summary>
+        public decimal FullAmount { get; set; }
+
+        /// <summary>Full amount pro-rated to the delivered minutes — the suggested partial payout.</summary>
+        public decimal ProRatedAmount { get; set; }
+
+        /// <summary>Current amount on the payout (after any decision).</summary>
+        public decimal Amount { get; set; }
+
+        public bool Pending { get; set; }
+
+        public PayoutReviewDecision? Decision { get; set; }
+
+        public string? ReviewedByName { get; set; }
+
+        public DateTime? ReviewedAtUtc { get; set; }
+
+        public string? Note { get; set; }
+
+        public DateTime CreatedAtUtc { get; set; }
+    }
+
+    public class DecidePayoutApprovalRequest
+    {
+        [Required]
+        public PayoutReviewDecision Decision { get; set; }
+
+        /// <summary>Partial approvals only: the amount to pay. Omitted = pro-rated to the delivered minutes.</summary>
+        [Range(0, 99_999_999)]
+        public decimal? Amount { get; set; }
+
+        [MaxLength(300)]
+        public string? Note { get; set; }
     }
 
     /// <summary>Admin correction to one line item — only while its payout is still Pending.</summary>
+    /// <summary>A manual addition (positive) or deduction (negative) line on a teacher's payout.</summary>
+    public class AddPayoutItemRequest
+    {
+        [Required]
+        [Range(-99_999_999, 99_999_999)]
+        public decimal Amount { get; set; }
+
+        [Required]
+        [MaxLength(500)]
+        public string Reason { get; set; } = null!;
+    }
+
+    /// <summary>One entry of a payout's correction history (see PayoutChange).</summary>
+    public class PayoutChangeDto
+    {
+        public Guid Id { get; set; }
+
+        /// <summary>The teacher payout line that was changed; null for a staff payout.</summary>
+        public Guid? PayoutItemId { get; set; }
+
+        public string Description { get; set; } = null!;
+
+        public string Reason { get; set; } = null!;
+
+        public decimal AmountBefore { get; set; }
+
+        public decimal AmountAfter { get; set; }
+
+        public decimal TotalBefore { get; set; }
+
+        public decimal TotalAfter { get; set; }
+
+        public string? ChangedByName { get; set; }
+
+        public DateTime ChangedAtUtc { get; set; }
+    }
+
     public class AdjustPayoutItemRequest
     {
         [Required]
@@ -94,5 +230,36 @@ namespace iucs.meettomanage.application.Dto.Payouts
         public DateTime? EmailSentAtUtc { get; set; }
 
         public IReadOnlyList<PayoutItemDto> Items { get; set; } = [];
+    }
+
+    /// <summary>One batch's row on the teacher's "My Earnings" breakdown for a month.</summary>
+    public class TeacherBatchEarningsDto
+    {
+        /// <summary>Null for a demo/ad-hoc session with no batch behind it.</summary>
+        public Guid? BatchId { get; set; }
+
+        public string BatchName { get; set; } = null!;
+
+        /// <summary>The batch's flat per-class rate if it has one; otherwise the effective average (total earned / classes taken) for a per-minute-rate batch.</summary>
+        public decimal? RatePerClass { get; set; }
+
+        public int ClassesTaken { get; set; }
+
+        public decimal TotalEarned { get; set; }
+    }
+
+    /// <summary>"My Earnings" (client requirement): a teacher's classes-taken and earnings per batch for one month.</summary>
+    public class TeacherEarningsSummaryDto
+    {
+        public int PeriodYear { get; set; }
+
+        public int PeriodMonth { get; set; }
+
+        /// <summary>Null when nothing has accrued for this teacher in this month yet.</summary>
+        public PayoutStatus? Status { get; set; }
+
+        public decimal TotalAmount { get; set; }
+
+        public IReadOnlyList<TeacherBatchEarningsDto> Batches { get; set; } = [];
     }
 }

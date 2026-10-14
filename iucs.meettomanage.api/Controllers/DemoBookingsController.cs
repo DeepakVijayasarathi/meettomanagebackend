@@ -1,10 +1,12 @@
 using System.Security.Claims;
 using iucs.meettomanage.api.Auth;
 using iucs.meettomanage.application.Dto.Admission;
+using iucs.meettomanage.application.Dto.Sessions;
 using iucs.meettomanage.application.Services;
 using iucs.meettomanage.domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace iucs.meettomanage.api.Controllers
 {
@@ -52,6 +54,20 @@ namespace iucs.meettomanage.api.Controllers
             CancellationToken cancellationToken)
         {
             var booking = await _demoBookingService.CreateAsync(request, cancellationToken);
+            return CreatedAtAction(nameof(Get), new { id = booking.Id }, booking);
+        }
+
+        /// <summary>
+        /// A lead with no demo class, ready for a payment link: a family enrolling without a demo,
+        /// or a second child from a sibling's demo (pass SiblingOfBookingId to copy the parent).
+        /// </summary>
+        [HttpPost("direct-admission")]
+        [HasPermission(PermissionModule.Admission, PermissionAction.Create)]
+        public async Task<ActionResult<DemoBookingDto>> CreateDirectAdmission(
+            CreateDirectAdmissionLeadRequest request,
+            CancellationToken cancellationToken)
+        {
+            var booking = await _demoBookingService.CreateDirectAdmissionLeadAsync(request, cancellationToken);
             return CreatedAtAction(nameof(Get), new { id = booking.Id }, booking);
         }
 
@@ -114,6 +130,160 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _demoBookingService.ReassignTeacherAsync(id, request, cancellationToken));
         }
 
+        /// <summary>Move a still-scheduled demo to a new date/time. Notifies the parent, invitees
+        /// and teacher with the new time, same as resend-link.</summary>
+        /// <summary>Edit a booking's parent/child details and extra invitees (e.g. fix a wrong email).</summary>
+        [HttpPut("{id:guid}")]
+        [HasPermission(PermissionModule.Admission, PermissionAction.Edit)]
+        public async Task<ActionResult<DemoBookingDto>> Update(
+            Guid id,
+            UpdateDemoBookingRequest request,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await _demoBookingService.UpdateAsync(id, request, cancellationToken));
+        }
+
+        /// <summary>
+        /// "Admit manually" — counselor completes admission for a parent who shares nothing by
+        /// email: creates their login (mobile number + PIN when no email), the child, the first
+        /// invoice and a payment link, and returns a WhatsApp-ready message with all of it.
+        /// </summary>
+        [HttpGet("manual-admission/options")]
+        [HasPermission(PermissionModule.Admission, PermissionAction.Edit)]
+        public async Task<ActionResult<ManualAdmissionOptionsDto>> ManualAdmissionOptions(
+            [FromServices] IManualAdmissionService manualAdmissionService,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await manualAdmissionService.GetOptionsAsync(cancellationToken));
+        }
+
+        [HttpPost("{id:guid}/manual-admission")]
+        [HasPermission(PermissionModule.Admission, PermissionAction.Edit)]
+        public async Task<ActionResult<ManualAdmissionResultDto>> ManualAdmission(
+            Guid id,
+            ManualAdmissionRequest request,
+            [FromServices] IManualAdmissionService manualAdmissionService,
+            CancellationToken cancellationToken)
+        {
+            var result = await manualAdmissionService.AdmitAsync(id, request, cancellationToken);
+            Response.Headers.CacheControl = "no-store"; // may carry a new parent's PIN
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// Portal admission flow: the counsellor issues the parent's payment link for a course at
+        /// the agreed (possibly discounted) amount. The parent pays on a page that first asks them
+        /// to accept the Terms and Conditions.
+        /// </summary>
+        [HttpPost("{id:guid}/payment-link")]
+        [HasPermission(PermissionModule.Admission, PermissionAction.Edit)]
+        public async Task<ActionResult<AdmissionPaymentLinkDto>> SendPaymentLink(
+            Guid id,
+            SendAdmissionPaymentLinkRequest request,
+            [FromServices] IAdmissionPaymentService admissionPaymentService,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await admissionPaymentService.SendPaymentLinkAsync(id, request, cancellationToken));
+        }
+
+        /// <summary>
+        /// The counsellor has verified the parent's payment and clicks Enroll: the parent's login
+        /// is emailed automatically and the lead moves on to ReadyForEnrollment.
+        /// </summary>
+        [HttpPost("{id:guid}/enroll")]
+        [HasPermission(PermissionModule.Admission, PermissionAction.Edit)]
+        public async Task<ActionResult<DemoBookingDto>> Enroll(
+            Guid id,
+            [FromServices] IAdmissionPaymentService admissionPaymentService,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await admissionPaymentService.VerifyAndEnrollAsync(id, cancellationToken));
+        }
+
+        [HttpPut("{id:guid}/reschedule")]
+        [HasPermission(PermissionModule.Admission, PermissionAction.Edit)]
+        public async Task<ActionResult<DemoBookingDto>> Reschedule(
+            Guid id,
+            RescheduleSessionRequest request,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await _demoBookingService.RescheduleAsync(id, request, cancellationToken));
+        }
+
+        /// <summary>Manually re-send the demo's join link to the parent, invitees and teacher.</summary>
+        [HttpPost("{id:guid}/resend-link")]
+        [HasPermission(PermissionModule.Admission, PermissionAction.Edit)]
+        public async Task<ActionResult<DemoBookingDto>> ResendLink(Guid id, CancellationToken cancellationToken)
+        {
+            return Ok(await _demoBookingService.ResendLinkAsync(id, cancellationToken));
+        }
+
+        /// <summary>
+        /// The parent's join link for this demo -- a stable URL (no JWT dangling off the end
+        /// that reads as broken/suspicious pasted into WhatsApp or email) staff can copy and
+        /// share manually. Points at this controller's own public <see cref="Join"/> redirect,
+        /// which re-resolves the room/domain/token fresh on every click and never expires --
+        /// unlike the old short-link wrapper this replaced, copying it now versus a parent
+        /// opening it next month behave identically instead of the latter silently 404-ing.
+        /// Also returns a genuinely short /m/{slug} form of that same stable URL (staff asked
+        /// for one directly, e.g. for WhatsApp/SMS where every character counts) -- it wraps
+        /// <see cref="Join"/> itself, not a baked token, so it inherits the same never-stale
+        /// behavior; only the shortener's own row (effectively permanent -- 10 years out) ever
+        /// needs renewing, which in practice it won't.
+        /// </summary>
+        [HttpGet("{id:guid}/join-link")]
+        [HasPermission(PermissionModule.Admission, PermissionAction.View)]
+        public async Task<ActionResult<object>> GetJoinLink(
+            Guid id,
+            [FromServices] IShortLinkService shortLinks,
+            CancellationToken cancellationToken)
+        {
+            var joinUrl = await _demoBookingService.GetJoinLinkAsync(id, cancellationToken);
+            var userId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+            var slug = await shortLinks.CreateAsync(joinUrl, DateTime.UtcNow.AddYears(10), userId, cancellationToken);
+            var apiBaseUrl = $"{Request.Scheme}://{Request.Host}";
+            return Ok(new { joinUrl, shortUrl = $"{apiBaseUrl}/m/{slug}" });
+        }
+
+        /// <summary>
+        /// The link a parent/invitee actually clicks -- from the confirmation email, a resend, or
+        /// staff's "Copy Link". Deliberately public and unauthenticated (a demo lead has no
+        /// account to sign in with) and deliberately NOT a static URL: it resolves the current
+        /// Jitsi domain and mints a fresh signed token on every single hit, so it can never go
+        /// stale the way a URL with those baked in at send time could -- reported live as a
+        /// parent's join link 404-ing while the teacher, who always re-resolves fresh through
+        /// the authenticated app, kept joining fine. Never expires -- see
+        /// ResolveLiveJoinUrlAsync's own remarks. <paramref name="p"/> selects one of the
+        /// booking's extra invitees; omitted, this is the primary parent's own link.
+        /// </summary>
+        [HttpGet("{id:guid}/join")]
+        [EnableRateLimiting("demo-join")]
+        public async Task<IActionResult> Join(Guid id, [FromQuery] Guid? p, CancellationToken cancellationToken)
+        {
+            // A share channel's own link-preview bot, or an intermediary proxy, has no business
+            // caching this redirect -- see the matching comment on GET /m/{slug} in Program.cs.
+            Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+            Response.Headers.Pragma = "no-cache";
+
+            var url = await _demoBookingService.ResolveLiveJoinUrlAsync(id, p, cancellationToken);
+            return url is null
+                ? NotFound("This demo booking (or that invitee) no longer exists.")
+                : Redirect(url);
+        }
+
+        /// <summary>
+        /// Permanently removes a demo booking -- a test entry, a mistaken double-booking -- and
+        /// frees the teacher's slot. Refused once the lead is already invoiced or Enrolled; use
+        /// its conversion status for that instead (see <see cref="UpdateConversionStatus"/>).
+        /// </summary>
+        [HttpDelete("{id:guid}")]
+        [HasPermission(PermissionModule.Admission, PermissionAction.Delete)]
+        public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
+        {
+            await _demoBookingService.DeleteAsync(id, cancellationToken);
+            return NoContent();
+        }
+
         /// <summary>Every active teacher's load around this booking's slot, for the reassignment page.</summary>
         [HttpGet("{id:guid}/teacher-workload")]
         [HasPermission(PermissionModule.Admission, PermissionAction.View)]
@@ -128,6 +298,14 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<ActionResult<IReadOnlyList<DemoReassignmentHistoryDto>>> ReassignmentHistory(Guid id, CancellationToken cancellationToken)
         {
             return Ok(await _demoBookingService.GetReassignmentHistoryAsync(id, cancellationToken));
+        }
+
+        /// <summary>Every follow-up note ever logged on this booking, newest first.</summary>
+        [HttpGet("{id:guid}/follow-up-notes")]
+        [HasPermission(PermissionModule.Admission, PermissionAction.View)]
+        public async Task<ActionResult<IReadOnlyList<DemoBookingFollowUpDto>>> FollowUpNotes(Guid id, CancellationToken cancellationToken)
+        {
+            return Ok(await _demoBookingService.GetFollowUpNotesAsync(id, cancellationToken));
         }
     }
 }

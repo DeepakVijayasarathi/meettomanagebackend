@@ -30,6 +30,13 @@ namespace iucs.meettomanage.application.Dto.Enrollment
         /// <summary>Answers keyed by field id; the schema is client-configurable so no fixed columns.</summary>
         [Required]
         public string FormDataJson { get; set; } = null!;
+
+        /// <summary>
+        /// Set when the parent is filling in details (preferred schedule, school, start date, ...)
+        /// for a child who already exists -- e.g. one an admission counselor created at
+        /// enrollment. Approving such a form never creates a second child. Null = a new child.
+        /// </summary>
+        public Guid? ChildId { get; set; }
     }
 
     public class ReviewEnrollmentFormRequest
@@ -53,6 +60,10 @@ namespace iucs.meettomanage.application.Dto.Enrollment
         /// without billing (a plan can still be assigned later from Packages).
         /// </summary>
         public Guid? PackagePlanId { get; set; }
+
+        /// <summary>Agreed per-cycle amount replacing the plan's listed price; null = plan price.</summary>
+        [Range(0, 10000000)]
+        public decimal? PackagePlanPriceOverride { get; set; }
 
         /// <summary>
         /// Batch to place the child in the moment the approval lands, so the new student
@@ -88,6 +99,12 @@ namespace iucs.meettomanage.application.Dto.Enrollment
         /// <summary>The owning parent profile — needed to start a subscription for this child.</summary>
         public Guid ParentProfileId { get; set; }
 
+        /// <summary>The parent's own account id (User.Id) — distinct from ParentProfileId above.
+        /// The admin Users screen's parents list is keyed by this (it comes from the Users API,
+        /// not ParentProfile), so matching a child to its parent row there needs this, not
+        /// ParentProfileId.</summary>
+        public Guid ParentUserId { get; set; }
+
         public string FullName { get; set; } = null!;
 
         public int? Age { get; set; }
@@ -102,6 +119,16 @@ namespace iucs.meettomanage.application.Dto.Enrollment
         public string? RmNotes { get; set; }
 
         public bool IsActive { get; set; }
+
+        /// <summary>Sum of AmountPaid across this child's Paid invoices. Zero means nothing was
+        /// ever collected for them — deleting them needs no refund conversation. A positive
+        /// value is surfaced as a warning before delete/withdraw, since removing the record
+        /// does not itself refund anything; that stays a manual step in Billing &amp; Finance.</summary>
+        public decimal PaidInvoiceTotal { get; set; }
+
+        /// <summary>What the parent filled in from the portal (preferred days/times, start date, school…);
+        /// null until they have, so staff can see who still owes the centre their schedule.</summary>
+        public ChildSchedulePreferenceDto? SchedulePreference { get; set; }
     }
 
     public class UpdateChildNotesRequest

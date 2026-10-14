@@ -22,11 +22,20 @@ namespace iucs.meettomanage.application.Services
 
         Task<IReadOnlyList<InvoiceDto>> GetInvoicesAsync(Guid parentUserId, CancellationToken cancellationToken = default);
 
+        /// <summary>Whether this parent still has to accept the Terms and Conditions (only their first payment asks).</summary>
+        Task<bool> IsTermsAcceptanceRequiredAsync(Guid parentUserId, CancellationToken cancellationToken = default);
+
+        /// <summary>Records the parent's Terms and Conditions acceptance (idempotent: the first time wins).</summary>
+        Task AcceptTermsAsync(Guid parentUserId, CancellationToken cancellationToken = default);
+
         /// <summary>
         /// Validates the grant, downloadability flag and suspension state before
         /// handing back the resource for a parent download.
         /// </summary>
         Task<ResourceDto> GetResourceForDownloadAsync(Guid parentUserId, Guid resourceId, CancellationToken cancellationToken = default);
+
+        /// <summary>Same access checks as a download, for viewing in the portal (no downloadable flag needed).</summary>
+        Task<ResourceDto> GetResourceForViewAsync(Guid parentUserId, Guid resourceId, CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Non-expired recordings for a session, once the caller's own child is confirmed
@@ -36,5 +45,11 @@ namespace iucs.meettomanage.application.Services
         /// </summary>
         Task<IReadOnlyList<SessionRecordingDto>> GetRecordingsAsync(
             Guid parentUserId, Guid sessionId, CancellationToken cancellationToken = default);
+
+        /// <summary>Every non-expired recording across every one of the caller's children's
+        /// batches, in one query -- see ParentRecordingDto's own doc comment for the N+1
+        /// pattern this replaces.</summary>
+        Task<IReadOnlyList<ParentRecordingDto>> GetMyRecordingsAsync(
+            Guid parentUserId, CancellationToken cancellationToken = default);
     }
 }

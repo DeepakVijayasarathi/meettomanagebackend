@@ -1,5 +1,6 @@
 using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Exceptions;
+using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Academics;
 using iucs.meettomanage.application.Helper;
 using iucs.meettomanage.domain.Common;
@@ -15,26 +16,36 @@ namespace iucs.meettomanage.application.Services
 {
     public class AcademicOpsService : IAcademicOpsService
     {
-        private static readonly TimeSpan LeaveCutoff = TimeSpan.FromHours(6);
+        /// <summary>How long before its scheduled start a teacher's join counts as the class starting.</summary>
+        private const int EarlyStartWindowMinutes = 60;
 
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
         private readonly INotificationService _notificationService;
         private readonly ICurrentUserService _currentUser;
         private readonly ISessionService _sessionService;
+        private readonly IClassSessionEventLogService _eventLog;
+        private readonly IEmailTemplateService _emailTemplates;
+        private readonly IEmailSender _emailSender;
 
         public AcademicOpsService(
             IUnitOfWork unitOfWork,
             IAuditLogService auditLog,
             INotificationService notificationService,
             ICurrentUserService currentUser,
-            ISessionService sessionService)
+            ISessionService sessionService,
+            IClassSessionEventLogService eventLog,
+            IEmailTemplateService emailTemplates,
+            IEmailSender emailSender)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _notificationService = notificationService;
             _currentUser = currentUser;
             _sessionService = sessionService;
+            _eventLog = eventLog;
+            _emailTemplates = emailTemplates;
+            _emailSender = emailSender;
         }
 
         /// <summary>
@@ -104,9 +115,11 @@ namespace iucs.meettomanage.application.Services
                         // path at all — the teacher is back, they haven't "left" this session yet.
                         var existingTeacherRow = await _unitOfWork.Repository<SessionAttendance>().TrackedQuery()
                             .FirstOrDefaultAsync(a => a.ClassSessionId == sessionId && a.TeacherProfileId == session.TeacherProfileId, cancellationToken);
-                        if (existingTeacherRow is not null)
+                        var isReconnect = existingTeacherRow is not null;
+
+                        if (isReconnect)
                         {
-                            existingTeacherRow.Status = AttendanceStatus.Present;
+                            existingTeacherRow!.Status = AttendanceStatus.Present;
                             existingTeacherRow.LeftAtUtc = null;
                             await _unitOfWork.SaveChangesAsync(cancellationToken);
                         }
@@ -118,27 +131,73 @@ namespace iucs.meettomanage.application.Services
                                 Status = AttendanceStatus.Present,
                                 JoinedAtUtc = DateTime.UtcNow,
                             });
+
+                            // The real "class started" moment — nothing else in this app ever
+                            // flips a session to InProgress or stamps ActualStartAtUtc from the
+                            // teacher's own actual arrival; CompleteAsync's own ??= fallback only
+                            // covers a session that never got here at all. `session` is the same
+                            // tracked entity for this request, so this rides whichever
+                            // SaveChangesAsync call happens to run next (the event-log write below
+                            // included).
+                            //
+                            // Only when the class is actually due: a teacher opening the room days
+                            // or weeks early (seen live: a 5 Nov class flipped to InProgress on
+                            // 11 Oct) must not change the session's status. InProgress sessions
+                            // aren't treated as "upcoming", so such a session was skipped by the
+                            // batch schedule edit and then blocked the slot the new pattern
+                            // placed on the same date.
+                            if (session.ScheduledStartAtUtc <= DateTime.UtcNow.AddMinutes(EarlyStartWindowMinutes))
+                            {
+                                if (session.Status is SessionStatus.Scheduled or SessionStatus.CarriedForward)
+                                {
+                                    session.Status = SessionStatus.InProgress;
+                                }
+                                session.ActualStartAtUtc ??= DateTime.UtcNow;
+                            }
                         }
+
+                        await _eventLog.LogTeacherJoinAsync(
+                            session, session.TeacherProfileId, userId,
+                            $"{user.FirstName} {user.LastName}".Trim(), isReconnect, cancellationToken);
                     }
                 }
                 else if (user.Role == UserRole.Parent)
                 {
                     if (session.BatchId is Guid batchId)
                     {
-                        var childIds = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                        var children = await _unitOfWork.Repository<BatchEnrollment>().Query()
                             .Where(e => e.BatchId == batchId && e.Status == EnrollmentStatus.Active)
                             .Join(_unitOfWork.Repository<Child>().Query(), e => e.ChildId, c => c.Id, (e, c) => c)
-                            .Join(_unitOfWork.Repository<ParentProfile>().Query(), c => c.ParentProfileId, p => p.Id, (c, p) => new { c.Id, p.UserId })
+                            .Join(_unitOfWork.Repository<ParentProfile>().Query(), c => c.ParentProfileId, p => p.Id, (c, p) => new { c.Id, c.FirstName, c.LastName, p.UserId })
                             .Where(x => x.UserId == userId)
-                            .Select(x => x.Id)
                             .ToListAsync(cancellationToken);
 
-                        entries.AddRange(childIds.Select(childId => new AttendanceEntryDto
+                        entries.AddRange(children.Select(c => new AttendanceEntryDto
                         {
-                            ChildId = childId,
+                            ChildId = c.Id,
                             Status = AttendanceStatus.Present,
                             JoinedAtUtc = DateTime.UtcNow,
                         }));
+
+                        if (children.Count > 0)
+                        {
+                            // One rejoin check covering every enrolled child on this join, rather
+                            // than a query per child — usually one row (siblings sharing a batch
+                            // are the exception), bounded either way by class size.
+                            var childIds = children.Select(c => c.Id).ToList();
+                            var previouslyJoinedChildIds = (await _unitOfWork.Repository<SessionAttendance>().Query()
+                                    .Where(a => a.ClassSessionId == sessionId && a.ChildId != null && childIds.Contains(a.ChildId!.Value))
+                                    .Select(a => a.ChildId!.Value)
+                                    .ToListAsync(cancellationToken))
+                                .ToHashSet();
+
+                            foreach (var child in children)
+                            {
+                                await _eventLog.LogStudentJoinAsync(
+                                    session, child.Id, userId, $"{child.FirstName} {child.LastName}".Trim(),
+                                    isReconnect: previouslyJoinedChildIds.Contains(child.Id), cancellationToken);
+                            }
+                        }
                     }
                     else if (!string.IsNullOrWhiteSpace(user.Email))
                     {
@@ -216,6 +275,61 @@ namespace iucs.meettomanage.application.Services
         }
 
         /// <summary>
+        /// Guest-link counterpart of <see cref="CaptureJoinAttendanceAsync"/>: marks one
+        /// specific child present when they join via a student-bound Guest Link (see
+        /// SessionService.GetGuestJoinAsync) — there is no authenticated userId behind a guest
+        /// join, so this takes the child directly rather than deriving it from whoever is
+        /// signed in. Same best-effort, never-throw contract: a capture hiccup must never stop
+        /// the caretaker's join. Silently skips if the child isn't (still) an active enrollment
+        /// of the session's batch — the same defensive re-check SessionService.GetGuestJoinAsync
+        /// already does before minting the join token, kept here too so this method is correct
+        /// standing on its own.
+        /// </summary>
+        public async Task CaptureGuestJoinAttendanceAsync(Guid sessionId, Guid childId, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                var session = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(sessionId, cancellationToken);
+                if (session?.BatchId is not Guid batchId)
+                {
+                    return;
+                }
+
+                var isActiveEnrollment = await _unitOfWork.Repository<BatchEnrollment>()
+                    .ExistsAsync(e => e.BatchId == batchId && e.ChildId == childId && e.Status == EnrollmentStatus.Active, cancellationToken);
+                if (!isActiveEnrollment)
+                {
+                    return;
+                }
+
+                var child = await _unitOfWork.Repository<Child>().GetByIdAsync(childId, cancellationToken);
+                if (child is null)
+                {
+                    return;
+                }
+
+                var wasAlreadyJoined = await _unitOfWork.Repository<SessionAttendance>()
+                    .ExistsAsync(a => a.ClassSessionId == sessionId && a.ChildId == childId, cancellationToken);
+
+                await CaptureAttendanceCoreAsync(
+                    sessionId,
+                    new CaptureAttendanceRequest
+                    {
+                        Entries = [new AttendanceEntryDto { ChildId = childId, Status = AttendanceStatus.Present, JoinedAtUtc = DateTime.UtcNow }],
+                    },
+                    cancellationToken);
+
+                await _eventLog.LogStudentJoinAsync(
+                    session, childId, userId: null, $"{child.FirstName} {child.LastName}".Trim(),
+                    isReconnect: wasAlreadyJoined, cancellationToken);
+            }
+            catch
+            {
+                // Best-effort: a capture hiccup must never fail the guest's join.
+            }
+        }
+
+        /// <summary>
         /// Demo-session counterpart of the SessionAttendance path above: matches the joining
         /// account's email (case-insensitive) against the booking's primary contact
         /// (<see cref="DemoBooking.ParentEmail"/>) or an additional invitee
@@ -235,15 +349,25 @@ namespace iucs.meettomanage.application.Services
             }
 
             var matched = false;
+            var joinedNames = new List<string>();
             if (string.Equals(booking.ParentEmail, email, StringComparison.OrdinalIgnoreCase))
             {
+                var wasAlreadyJoined = booking.ParentJoinedAtUtc.HasValue;
                 booking.ParentJoinedAtUtc ??= DateTime.UtcNow;
                 matched = true;
+                if (!wasAlreadyJoined)
+                {
+                    joinedNames.Add(booking.ParentName);
+                }
             }
 
             foreach (var participant in booking.Participants.Where(
                 p => p.Email != null && string.Equals(p.Email, email, StringComparison.OrdinalIgnoreCase)))
             {
+                if (!participant.HasJoined)
+                {
+                    joinedNames.Add(participant.Name);
+                }
                 participant.HasJoined = true;
                 matched = true;
             }
@@ -251,6 +375,15 @@ namespace iucs.meettomanage.application.Services
             if (matched)
             {
                 await _unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+
+            // Logged after every real match, including a rejoin of an already-marked-joined
+            // participant (joinedNames stays empty then, which is fine — a rejoin isn't
+            // itself a notable event for a demo lead the way it is for the teacher/student
+            // attendance flows above).
+            foreach (var name in joinedNames)
+            {
+                await _eventLog.LogDemoParticipantJoinAsync(sessionId, name, cancellationToken);
             }
         }
 
@@ -276,70 +409,123 @@ namespace iucs.meettomanage.application.Services
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             // Business rule: a class never runs on a holiday. Any session already scheduled
-            // on this date is automatically carried forward to the next available same-weekday
-            // slot (skipping further holidays), keeping the traceability link.
-            //
-            // request.Date is a local (DefaultTimeZoneId, Asia/Kolkata) calendar date, but
-            // treating its midnight as UTC midnight offset the whole matching window by +5:30 —
-            // a session genuinely on the holiday (e.g. 02:00 IST) fell just before the window
-            // and was never detected, running as normal, while a session the FOLLOWING day in
-            // that same 00:00-05:29 IST slot fell just inside it and was wrongly auto-cancelled
-            // and carried forward a week as if it were on the holiday. Mirrors
-            // StoreService.ListAvailableDemoSlotsAsync's own correct local-to-UTC conversion.
-            var zone = TimeZoneInfo.FindSystemTimeZoneById(DateTimeDisplay.DefaultTimeZoneId);
-            var dayStartLocal = request.Date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified);
-            var dayStart = TimeZoneInfo.ConvertTimeToUtc(dayStartLocal, zone);
-            var dayEnd = TimeZoneInfo.ConvertTimeToUtc(dayStartLocal.AddDays(1), zone);
-            var clashingSessions = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
-                .Where(s => (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward)
-                            && s.ScheduledStartAtUtc >= dayStart
-                            && s.ScheduledStartAtUtc < dayEnd)
+            // on this date is cancelled — never shifted; the recurring schedule is untouched.
+            await CancelHolidaySessionsAsync(new[] { holiday }, fromUtc: null, cancellationToken);
+
+            return ToDto(holiday);
+        }
+
+        public async Task<(int Cancelled, int RemovedShifted)> ReconcileHolidaysAsync(CancellationToken cancellationToken = default)
+        {
+            // 1) Undo any earlier "carry forward to the next day/week" copies — a holiday only
+            //    cancels that day's classes; the recurring schedule must stay untouched.
+            var removed = await RemoveHolidayCarryForwardCopiesAsync(cancellationToken);
+
+            // 2) Cancel anything still sitting on a holiday date (bulk imports, older holidays).
+            //    Only upcoming sessions — a past session still marked Scheduled is a different
+            //    problem (stale status), not something to touch here.
+            var from = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+            var holidays = await _unitOfWork.Repository<Holiday>().Query()
+                .Where(h => h.Date >= from)
                 .ToListAsync(cancellationToken);
+            var cancelled = await CancelHolidaySessionsAsync(holidays, DateTime.UtcNow, cancellationToken);
+            return (cancelled, removed);
+        }
 
-            // The next free same-weekday slot depends only on the holiday calendar, not on
-            // any individual session, so it is computed once here rather than re-derived
-            // inside the loop below — that probe was issuing a fresh ExistsAsync per session
-            // per candidate week while always arriving at the same answer.
-            var futureHolidayDates = (await _unitOfWork.Repository<Holiday>().Query()
-                    .Where(h => h.Date > request.Date)
-                    .Select(h => h.Date)
-                    .ToListAsync(cancellationToken))
-                .ToHashSet();
-
-            var offsetDays = 7;
-            while (futureHolidayDates.Contains(request.Date.AddDays(offsetDays)))
+        /// <summary>
+        /// Cancels (never moves) every Scheduled/CarriedForward class on the given holiday
+        /// dates. The batch's recurring schedule is left exactly as it was: no replacement
+        /// session is created. Demo sessions are left for a human — they are one-off bookings
+        /// a parent is waiting on, and scheduling onto a holiday is already blocked.
+        /// </summary>
+        private async Task<int> CancelHolidaySessionsAsync(
+            IReadOnlyCollection<Holiday> holidays, DateTime? fromUtc, CancellationToken cancellationToken)
+        {
+            if (holidays.Count == 0)
             {
-                offsetDays += 7;
+                return 0;
             }
 
-            foreach (var session in clashingSessions)
-            {
-                await _unitOfWork.Repository<ClassSession>().AddAsync(
-                    new ClassSession
-                    {
-                        BatchId = session.BatchId,
-                        TeacherProfileId = session.TeacherProfileId,
-                        Type = session.Type,
-                        Status = SessionStatus.CarriedForward,
-                        ScheduledStartAtUtc = session.ScheduledStartAtUtc.AddDays(offsetDays),
-                        ScheduledEndAtUtc = session.ScheduledEndAtUtc.AddDays(offsetDays),
-                        MeetingRoomId = session.MeetingRoomId,
-                        CarriedForwardFromSessionId = session.Id,
-                    },
-                    cancellationToken);
+            // Holiday.Date is a local (DefaultTimeZoneId, Asia/Kolkata) calendar date — its
+            // midnight must be converted local->UTC, not read as UTC midnight, or the matching
+            // window is offset by +5:30 and catches the wrong day's early-morning sessions.
+            var zone = TimeZoneInfo.FindSystemTimeZoneById(DateTimeDisplay.DefaultTimeZoneId);
+            var approver = await CancelledBy.DescribeAsync(_unitOfWork, _currentUser.UserId, cancellationToken);
+            var count = 0;
 
-                session.Status = SessionStatus.Cancelled;
-                session.CancellationReason = $"Holiday — {holiday.Name}; carried forward to {request.Date.AddDays(offsetDays):yyyy-MM-dd}";
+            foreach (var holiday in holidays)
+            {
+                var dayStartLocal = holiday.Date.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified);
+                var dayStart = TimeZoneInfo.ConvertTimeToUtc(dayStartLocal, zone);
+                var dayEnd = TimeZoneInfo.ConvertTimeToUtc(dayStartLocal.AddDays(1), zone);
+                var lowerBound = fromUtc.HasValue && fromUtc.Value > dayStart ? fromUtc.Value : dayStart;
+                var onDay = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
+                    .Where(s => (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward)
+                                && s.Type != SessionType.Demo
+                                && s.ScheduledStartAtUtc >= lowerBound
+                                && s.ScheduledStartAtUtc < dayEnd)
+                    .ToListAsync(cancellationToken);
+
+                foreach (var session in onDay)
+                {
+                    session.Status = SessionStatus.Cancelled;
+                    session.CancellationReason = CancelledBy.Reason(approver, $"holiday — {holiday.Name}");
+                }
+
+                count += onDay.Count;
             }
 
-            if (clashingSessions.Count > 0)
+            if (count > 0)
             {
                 await _auditLog.StageAsync(AuditAction.Update, nameof(ClassSession), null,
-                    changesJson: $"{{\"holidayCarryForward\":{clashingSessions.Count}}}", cancellationToken: cancellationToken);
+                    changesJson: $"{{\"holidayCancelled\":{count}}}", cancellationToken: cancellationToken);
                 await _unitOfWork.SaveChangesAsync(cancellationToken);
             }
 
-            return ToDto(holiday);
+            return count;
+        }
+
+        /// <summary>
+        /// Removes the replacement sessions an earlier version of the holiday rule created
+        /// (original cancelled with "holiday — …; carried forward to …"), so the recurring
+        /// schedule is back to what it was. Only replacements that have not started are
+        /// removed; the original keeps its Cancelled status with a plain "holiday" reason.
+        /// </summary>
+        private async Task<int> RemoveHolidayCarryForwardCopiesAsync(CancellationToken cancellationToken)
+        {
+            var originals = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
+                .Where(s => s.Status == SessionStatus.Cancelled
+                            && s.CancellationReason != null
+                            && s.CancellationReason.Contains("holiday — ")
+                            && s.CancellationReason.Contains("; carried forward to "))
+                .ToListAsync(cancellationToken);
+            if (originals.Count == 0)
+            {
+                return 0;
+            }
+
+            var originalIds = originals.Select(o => o.Id).ToList();
+            var copies = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
+                .Where(s => s.CarriedForwardFromSessionId != null
+                            && originalIds.Contains(s.CarriedForwardFromSessionId.Value)
+                            && s.Status == SessionStatus.CarriedForward)
+                .ToListAsync(cancellationToken);
+
+            foreach (var copy in copies)
+            {
+                _unitOfWork.Repository<ClassSession>().Remove(copy);
+            }
+
+            foreach (var original in originals)
+            {
+                original.CancellationReason = System.Text.RegularExpressions.Regex.Replace(
+                    original.CancellationReason!, @"; carried forward to \S+", string.Empty);
+            }
+
+            await _auditLog.StageAsync(AuditAction.Update, nameof(ClassSession), null,
+                changesJson: $"{{\"holidayCarryForwardsUndone\":{copies.Count}}}", cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return copies.Count;
         }
 
         public async Task DeleteHolidayAsync(Guid id, CancellationToken cancellationToken = default)
@@ -357,7 +543,40 @@ namespace iucs.meettomanage.application.Services
             SubmitLeaveRequest request,
             CancellationToken cancellationToken = default)
         {
-            if (request.EndAtUtc <= request.StartAtUtc)
+            var hasWindow = request.StartAtUtc.HasValue || request.EndAtUtc.HasValue;
+            var hasSessions = request.SessionIds is { Count: > 0 };
+
+            // Exactly one shape per request — a window XOR a specific session list. Silently
+            // preferring one over the other if a caller somehow sent both would hide which
+            // leave the teacher actually meant to apply for.
+            if (hasWindow && hasSessions)
+            {
+                throw new DomainValidationException("Choose either specific classes or a date/time range, not both.");
+            }
+
+            if (hasSessions)
+            {
+                return await SubmitClassWiseLeaveAsync(teacherUserId, request.SessionIds!, request.Reason, cancellationToken);
+            }
+
+            if (!request.StartAtUtc.HasValue || !request.EndAtUtc.HasValue)
+            {
+                throw new DomainValidationException("Provide either specific classes to cancel or a start and end time.");
+            }
+
+            return await SubmitWindowLeaveAsync(teacherUserId, request.StartAtUtc.Value, request.EndAtUtc.Value, request.Reason, cancellationToken);
+        }
+
+        /// <summary>Whole day/date-range leave — the original behaviour, unchanged. Every
+        /// Scheduled session inside [startAtUtc, endAtUtc) is affected.</summary>
+        private async Task<LeaveRequestDto> SubmitWindowLeaveAsync(
+            Guid teacherUserId,
+            DateTime startAtUtc,
+            DateTime endAtUtc,
+            string reason,
+            CancellationToken cancellationToken)
+        {
+            if (endAtUtc <= startAtUtc)
             {
                 throw new DomainValidationException("Leave end time must be after the start time.");
             }
@@ -367,30 +586,36 @@ namespace iucs.meettomanage.application.Services
                 .FirstOrDefaultAsync(t => t.UserId == teacherUserId, cancellationToken)
                 ?? throw new NotFoundException("No teacher profile is linked to the current account.");
 
-            var affectedSessions = await CountAffectedSessionsAsync(teacher.Id, request.StartAtUtc, request.EndAtUtc, cancellationToken);
-
-            // 6-hour rule: leave covering a session that starts within the cutoff is auto-blocked
-            var cutoffLimit = DateTime.UtcNow.Add(LeaveCutoff);
-            var blockingSession = await _unitOfWork.Repository<ClassSession>().Query()
-                .Where(s => s.TeacherProfileId == teacher.Id
-                            && s.Status == SessionStatus.Scheduled
-                            && s.ScheduledStartAtUtc < cutoffLimit
-                            && s.ScheduledStartAtUtc < request.EndAtUtc
-                            && s.ScheduledEndAtUtc > request.StartAtUtc)
-                .OrderBy(s => s.ScheduledStartAtUtc)
+            // Nothing stopped a teacher from submitting the same window (or overlapping ones)
+            // more than once — each one independently counts as "affected sessions" for the
+            // admin notification and, worse, an admin approving two overlapping ones would
+            // cancel the same session(s) twice over with no indication anything was already
+            // handled. Pending and Approved both still "hold" the window; Rejected/Cancelled
+            // don't (the teacher is free to re-request the same time).
+            var duplicate = await _unitOfWork.Repository<LeaveRequest>().Query()
+                .Where(l => l.TeacherProfileId == teacher.Id
+                            && (l.Status == LeaveStatus.Pending || l.Status == LeaveStatus.Approved)
+                            && l.StartAtUtc < endAtUtc && l.EndAtUtc > startAtUtc)
+                .OrderBy(l => l.StartAtUtc)
                 .FirstOrDefaultAsync(cancellationToken);
-            if (blockingSession is not null)
+            if (duplicate is not null)
             {
-                throw new DomainValidationException(
-                    $"Leave cannot cover the session at {DateTimeDisplay.ToLocal(blockingSession.ScheduledStartAtUtc)}: applications must be made at least 6 hours before a scheduled class.");
+                throw new ConflictException(
+                    $"You already have a {duplicate.Status.ToString().ToLowerInvariant()} leave request covering this time " +
+                    $"({DateTimeDisplay.ToLocalRange(duplicate.StartAtUtc, duplicate.EndAtUtc)}).");
             }
+
+            // No minimum notice (the old 6-hour rule was removed at the client's request): leave
+            // can be applied for whenever it's needed, including for a class starting shortly --
+            // the admin review / monthly allowance still decides what happens to those classes.
+            var affectedSessions = await CountAffectedSessionsAsync(teacher.Id, startAtUtc, endAtUtc, cancellationToken);
 
             var leave = new LeaveRequest
             {
                 TeacherProfileId = teacher.Id,
-                StartAtUtc = request.StartAtUtc,
-                EndAtUtc = request.EndAtUtc,
-                Reason = request.Reason.Trim(),
+                StartAtUtc = startAtUtc,
+                EndAtUtc = endAtUtc,
+                Reason = reason.Trim(),
             };
             await _unitOfWork.Repository<LeaveRequest>().AddAsync(leave, cancellationToken);
             await _auditLog.StageAsync(AuditAction.Create, nameof(LeaveRequest), leave.Id.ToString(), cancellationToken: cancellationToken);
@@ -402,11 +627,11 @@ namespace iucs.meettomanage.application.Services
                 await NotifyAdminsAsync(
                     new Dictionary<string, string>
                     {
-                        ["TeacherName"] = $"{teacher.User.FirstName} {teacher.User.LastName}",
-                        ["StartAtLocal"] = DateTimeDisplay.ToLocal(request.StartAtUtc),
-                        ["EndAtLocal"] = DateTimeDisplay.ToLocal(request.EndAtUtc),
+                        ["TeacherName"] = $"{teacher.User.FirstName} {teacher.User.LastName}".Trim(),
+                        ["StartAtLocal"] = DateTimeDisplay.ToLocal(startAtUtc),
+                        ["EndAtLocal"] = DateTimeDisplay.ToLocal(endAtUtc),
                         ["AffectedSessions"] = affectedSessions.ToString(),
-                        ["Reason"] = request.Reason,
+                        ["Reason"] = reason,
                     },
                     cancellationToken);
             }
@@ -415,12 +640,479 @@ namespace iucs.meettomanage.application.Services
             return await ToDtoAsync(leave, cancellationToken);
         }
 
+        /// <summary>
+        /// Class-wise leave (WBS Round 2 feedback #23): the teacher picks exactly which of
+        /// her own scheduled sessions to cancel instead of taking leave for a whole day. When
+        /// the pick fits inside her remaining monthly cancellation allowance (admin-configured,
+        /// see LeaveAllowance) it's approved immediately — no admin review needed, since the
+        /// allowance itself already represents institute-approved policy. Once the request
+        /// would exceed what's left this month, it falls back to the existing Pending/admin-
+        /// review workflow, same as a whole-day request, rather than silently blocking it.
+        /// </summary>
+        private async Task<LeaveRequestDto> SubmitClassWiseLeaveAsync(
+            Guid teacherUserId,
+            List<Guid> sessionIds,
+            string reason,
+            CancellationToken cancellationToken)
+        {
+            var distinctIds = sessionIds.Distinct().ToList();
+
+            var teacher = await _unitOfWork.Repository<TeacherProfile>().Query()
+                .Include(t => t.User)
+                .FirstOrDefaultAsync(t => t.UserId == teacherUserId, cancellationToken)
+                ?? throw new NotFoundException("No teacher profile is linked to the current account.");
+
+            // TRACKED (not Query()/AsNoTracking): the auto-approve path below mutates these
+            // sessions' Status directly and relies on SaveChangesAsync to persist it, same
+            // pattern as ReviewLeaveAsync's own affectedSessions load.
+            var sessions = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
+                .Include(s => s.Batch)
+                .Where(s => distinctIds.Contains(s.Id))
+                .ToListAsync(cancellationToken);
+
+            if (sessions.Count != distinctIds.Count)
+            {
+                throw new NotFoundException("One or more selected classes could not be found.");
+            }
+
+            // Every session must be this teacher's own, still Scheduled — otherwise a teacher
+            // could apply "leave" against a class that isn't hers, or one already resolved.
+            var notOwnedOrNotScheduled = sessions.FirstOrDefault(
+                s => s.TeacherProfileId != teacher.Id || s.Status is not (SessionStatus.Scheduled or SessionStatus.CarriedForward));
+            if (notOwnedOrNotScheduled is not null)
+            {
+                throw new DomainValidationException(
+                    $"The session at {DateTimeDisplay.ToLocal(notOwnedOrNotScheduled.ScheduledStartAtUtc)} isn't one of your own currently-scheduled classes.");
+            }
+
+            // Same "already applied for" guard as the whole-window path, extended to also catch
+            // a session individually linked to an earlier class-wise request — a plain window
+            // overlap check alone wouldn't see that link.
+            var alreadyRequestedId = await _unitOfWork.Repository<LeaveRequestSession>().Query()
+                .Where(ls => distinctIds.Contains(ls.ClassSessionId)
+                             && (ls.LeaveRequest.Status == LeaveStatus.Pending || ls.LeaveRequest.Status == LeaveStatus.Approved))
+                .Select(ls => (Guid?)ls.ClassSessionId)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (alreadyRequestedId is not null)
+            {
+                throw new ConflictException("One of the selected classes already has a pending or approved leave request against it.");
+            }
+            var windowOverlap = await _unitOfWork.Repository<LeaveRequest>().Query()
+                .Where(l => l.TeacherProfileId == teacher.Id
+                            && !l.IsClassWise
+                            && (l.Status == LeaveStatus.Pending || l.Status == LeaveStatus.Approved)
+                            && sessions.Select(s => s.ScheduledStartAtUtc).Min() < l.EndAtUtc
+                            && sessions.Select(s => s.ScheduledEndAtUtc).Max() > l.StartAtUtc)
+                .AnyAsync(cancellationToken);
+            if (windowOverlap)
+            {
+                throw new ConflictException("One of the selected classes already falls inside an existing pending or approved leave request.");
+            }
+
+            // The monthly allowance is keyed to the month each class was actually scheduled in
+            // (not the month the teacher happens to be applying in) — a request picking classes
+            // that span two calendar months must fit within whatever's left in EACH of those
+            // months, checked independently.
+            foreach (var monthGroup in sessions.GroupBy(s => (s.ScheduledStartAtUtc.Year, s.ScheduledStartAtUtc.Month)))
+            {
+                var remaining = await GetRemainingAllowanceAsync(teacher.Id, monthGroup.Key.Year, monthGroup.Key.Month, cancellationToken);
+                if (monthGroup.Count() > remaining)
+                {
+                    // Not an error — falls back to the reviewed workflow below, same as a
+                    // whole-day request always has.
+                    return await CreatePendingClassWiseLeaveAsync(teacher, sessions, reason, cancellationToken);
+                }
+            }
+
+            return await CreateAutoApprovedClassWiseLeaveAsync(teacher, sessions, reason, cancellationToken);
+        }
+
+        private async Task<LeaveRequestDto> CreateAutoApprovedClassWiseLeaveAsync(
+            TeacherProfile teacher,
+            List<ClassSession> sessions,
+            string reason,
+            CancellationToken cancellationToken)
+        {
+            var leave = new LeaveRequest
+            {
+                TeacherProfileId = teacher.Id,
+                StartAtUtc = sessions.Min(s => s.ScheduledStartAtUtc),
+                EndAtUtc = sessions.Max(s => s.ScheduledEndAtUtc),
+                Reason = reason.Trim(),
+                IsClassWise = true,
+                Status = LeaveStatus.Approved,
+                ReviewedAtUtc = DateTime.UtcNow,
+                ReviewNote = "Auto-approved: within your monthly class-cancellation allowance.",
+            };
+            foreach (var session in sessions)
+            {
+                leave.Sessions.Add(new LeaveRequestSession { ClassSessionId = session.Id, ClassSession = session });
+                session.Status = SessionStatus.Cancelled;
+                session.CancellationReason = CancelledBy.Reason(
+                    CancelledBy.Describe(teacher.User),
+                    $"teacher's class-wise leave, auto-approved within monthly allowance — {reason.Trim()}");
+            }
+
+            await _unitOfWork.Repository<LeaveRequest>().AddAsync(leave, cancellationToken);
+            await _auditLog.StageAsync(AuditAction.Create, nameof(LeaveRequest), leave.Id.ToString(),
+                changesJson: $"{{\"autoApproved\":true,\"sessionsCancelled\":{sessions.Count}}}", cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            await NotifyClassWiseApprovalAsync(teacher, sessions, cancellationToken);
+
+            leave.TeacherProfile = teacher;
+            var dto = await ToDtoAsync(leave, cancellationToken);
+            dto.AffectedSessionCount = sessions.Count;
+            return dto;
+        }
+
+        private async Task<LeaveRequestDto> CreatePendingClassWiseLeaveAsync(
+            TeacherProfile teacher,
+            List<ClassSession> sessions,
+            string reason,
+            CancellationToken cancellationToken)
+        {
+            var leave = new LeaveRequest
+            {
+                TeacherProfileId = teacher.Id,
+                StartAtUtc = sessions.Min(s => s.ScheduledStartAtUtc),
+                EndAtUtc = sessions.Max(s => s.ScheduledEndAtUtc),
+                Reason = reason.Trim(),
+                IsClassWise = true,
+            };
+            foreach (var session in sessions)
+            {
+                leave.Sessions.Add(new LeaveRequestSession { ClassSessionId = session.Id, ClassSession = session });
+            }
+
+            await _unitOfWork.Repository<LeaveRequest>().AddAsync(leave, cancellationToken);
+            await _auditLog.StageAsync(AuditAction.Create, nameof(LeaveRequest), leave.Id.ToString(), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            if (await NotificationToggles.IsEnabledAsync(_unitOfWork, NotificationToggles.LeaveRequests, cancellationToken))
+            {
+                await NotifyAdminsAsync(
+                    new Dictionary<string, string>
+                    {
+                        ["TeacherName"] = $"{teacher.User.FirstName} {teacher.User.LastName}".Trim(),
+                        ["StartAtLocal"] = DateTimeDisplay.ToLocal(leave.StartAtUtc),
+                        ["EndAtLocal"] = DateTimeDisplay.ToLocal(leave.EndAtUtc),
+                        ["AffectedSessions"] = sessions.Count.ToString(),
+                        ["Reason"] = $"{reason} (exceeds this month's remaining cancellation allowance — needs review)",
+                    },
+                    cancellationToken);
+            }
+
+            leave.TeacherProfile = teacher;
+            var dto = await ToDtoAsync(leave, cancellationToken);
+            dto.AffectedSessionCount = sessions.Count;
+            return dto;
+        }
+
+        /// <summary>Teacher confirmation + the same core-team/parent fan-out an admin-approved
+        /// leave sends (ReviewLeaveAsync), for the auto-approved class-wise path — an
+        /// auto-approval is still a real approval, so it must tell the same people.</summary>
+        private async Task NotifyClassWiseApprovalAsync(TeacherProfile teacher, List<ClassSession> cancelled, CancellationToken cancellationToken)
+        {
+            var cancelledCount = cancelled.Count;
+            var teacherUser = teacher.User;
+            await _notificationService.SendTemplatedEmailAsync(
+                teacherUser.Id, teacherUser.Email, NotificationType.LeaveStatusUpdate, "leave-status-teacher",
+                new Dictionary<string, string>
+                {
+                    ["TeacherFirstName"] = teacherUser.FirstName,
+                    ["StartAtLocal"] = $"{cancelledCount} class(es)",
+                    ["EndAtLocal"] = "",
+                    ["Status"] = "Approved",
+                    ["ReviewNote"] = "Note: Auto-approved — within your monthly class-cancellation allowance.",
+                },
+                cancellationToken);
+
+            var teacherName = $"{teacherUser.FirstName} {teacherUser.LastName}".Trim();
+            var coreTeam = await _unitOfWork.Repository<User>().Query()
+                .Where(u => (u.Role == UserRole.Admin || u.Role == UserRole.SubAdmin) && u.Status == UserStatus.Active)
+                .ToListAsync(cancellationToken);
+            foreach (var member in coreTeam)
+            {
+                await _notificationService.SendTemplatedEmailAsync(
+                    member.Id, member.Email, NotificationType.LeaveStatusUpdate, "leave-notify-core-team",
+                    new Dictionary<string, string> { ["TeacherName"] = teacherName, ["Window"] = $"{cancelledCount} individual class(es), self-cancelled within allowance" },
+                    cancellationToken);
+            }
+
+            await NotifyAffectedFamiliesAsync(teacherName, $"{cancelledCount} individual class(es)", cancelled, cancellationToken);
+        }
+
+        /// <summary>
+        /// Tells exactly the families whose classes this leave cancelled — previously every
+        /// parent in every batch this teacher teaches got a "teacher on leave" email, even for a
+        /// single cancelled class in someone else's batch. Client-reported confusion: a parent
+        /// who'd already received the 1-hour SessionReminderBackgroundService reminder for a
+        /// class that the teacher's leave then cancelled got only a vague "on leave {window}...
+        /// will be rescheduled" email with no mention of which class or that nothing shows up
+        /// automatically — this now names each family's own cancelled class(es) by name/time and
+        /// says CANCELLED, not a rescheduling that (for a teacher-leave cancellation, unlike a
+        /// parent's own cancellation) never actually happens on its own. A cancelled demo has no
+        /// enrolled family in this system — the lead is emailed directly here (previously only
+        /// admission staff were told, and had to remember to pass it on themselves), and
+        /// admission staff still get their own alert to actually reassign/reschedule it.
+        /// </summary>
+        private async Task NotifyAffectedFamiliesAsync(
+            string teacherName,
+            string window,
+            IReadOnlyCollection<ClassSession> cancelled,
+            CancellationToken cancellationToken)
+        {
+            var batchSessions = cancelled.Where(s => s.BatchId.HasValue).ToList();
+            if (batchSessions.Count > 0)
+            {
+                var batchIds = batchSessions.Select(s => s.BatchId!.Value).Distinct().ToList();
+                var enrollments = await _unitOfWork.Repository<BatchEnrollment>().Query()
+                    .Where(e => e.Status == EnrollmentStatus.Active && batchIds.Contains(e.BatchId))
+                    .Select(e => new { e.BatchId, ParentUser = e.Child.ParentProfile.User })
+                    .ToListAsync(cancellationToken);
+
+                // Each parent sees only their OWN child's cancelled class(es), by name and time —
+                // not the leave's whole date range, which might span classes in other batches
+                // (and so other families) entirely.
+                var byParent = enrollments
+                    .GroupBy(e => e.ParentUser.Id)
+                    .Select(g => (Parent: g.First().ParentUser, Sessions: batchSessions.Where(s => g.Any(e => e.BatchId == s.BatchId!.Value)).ToList()));
+
+                foreach (var (parent, sessions) in byParent)
+                {
+                    var itemsHtml = string.Join("", sessions
+                        .OrderBy(s => s.ScheduledStartAtUtc)
+                        .Select(s => $"<li>{System.Net.WebUtility.HtmlEncode(s.Batch?.Name ?? "Class")} — " +
+                            $"{DateTimeDisplay.ToLocalRange(s.ScheduledStartAtUtc, s.ScheduledEndAtUtc, parent.TimeZoneId)}</li>"));
+                    await _notificationService.SendTemplatedEmailAsync(
+                        parent.Id, parent.Email, NotificationType.LeaveStatusUpdate, "leave-notify-parent",
+                        new Dictionary<string, string>
+                        {
+                            ["TeacherName"] = teacherName,
+                            ["SessionsList"] = itemsHtml,
+                            ["Count"] = sessions.Count == 1 ? "This class has" : $"These {sessions.Count} classes have",
+                        },
+                        cancellationToken);
+                }
+            }
+
+            var demoSessionIds = cancelled.Where(s => s.Type == SessionType.Demo).Select(s => s.Id).ToList();
+            if (demoSessionIds.Count == 0)
+            {
+                return;
+            }
+
+            var demos = await _unitOfWork.Repository<DemoBooking>().Query()
+                .Where(b => b.ClassSessionId != null && demoSessionIds.Contains(b.ClassSessionId.Value))
+                .Select(b => new { b.ChildName, b.ParentName, b.ParentEmail, b.ParentPhone, Start = b.ClassSession!.ScheduledStartAtUtc })
+                .ToListAsync(cancellationToken);
+            if (demos.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var demo in demos)
+            {
+                if (!string.IsNullOrWhiteSpace(demo.ParentEmail))
+                {
+                    try
+                    {
+                        var (subject, htmlBody) = await _emailTemplates.RenderAsync(
+                            "demo-cancelled-teacher-leave",
+                            new Dictionary<string, string>
+                            {
+                                ["ParentName"] = demo.ParentName,
+                                ["ChildName"] = demo.ChildName,
+                                ["TeacherName"] = teacherName,
+                                ["StartLocal"] = DateTimeDisplay.ToLocal(demo.Start),
+                            },
+                            cancellationToken);
+                        await _emailSender.SendAsync(demo.ParentEmail, subject, htmlBody, cancellationToken);
+                    }
+                    catch (Exception)
+                    {
+                        // Best-effort, same as every other reminder/alert fan-out in this method —
+                        // one failed lead email must not stop the rest or the staff alert below.
+                    }
+                }
+            }
+
+            var rows = string.Join("", demos.Select(d =>
+                $"<li>{System.Net.WebUtility.HtmlEncode(d.ChildName)} (parent {System.Net.WebUtility.HtmlEncode(d.ParentName)}" +
+                $"{(string.IsNullOrWhiteSpace(d.ParentPhone) ? "" : ", " + System.Net.WebUtility.HtmlEncode(d.ParentPhone))}) — {DateTimeDisplay.ToLocal(d.Start)}</li>"));
+            var body =
+                $"<p>{System.Net.WebUtility.HtmlEncode(teacherName)} is on leave, so these demo classes were cancelled (the parent/lead has already been emailed directly):</p><ul>{rows}</ul>" +
+                "<p>Please reassign each demo to another teacher (or reschedule it).</p>";
+            var admissionStaff = await _unitOfWork.Repository<User>().Query()
+                .Where(u => (u.Role == UserRole.Admin || u.Role == UserRole.AdmissionTeam) && u.Status == UserStatus.Active)
+                .ToListAsync(cancellationToken);
+            foreach (var member in admissionStaff)
+            {
+                await _notificationService.SendEmailAsync(
+                    member.Id, member.Email, NotificationType.LeaveStatusUpdate,
+                    $"Demo(s) cancelled — {teacherName} on leave", body, cancellationToken: cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// Teacher withdraws their own leave request — the only way to get out of a mistaken or
+        /// no-longer-needed application before this, was to email an admin and have them Reject
+        /// it, which recorded it as rejected rather than what actually happened. Only the
+        /// request's own teacher can cancel it, and only while it's still Pending — once an
+        /// admin has acted (Approved/Rejected), that decision stands.
+        /// </summary>
+        public async Task CancelLeaveAsync(Guid teacherUserId, Guid leaveId, CancellationToken cancellationToken = default)
+        {
+            var teacher = await _unitOfWork.Repository<TeacherProfile>()
+                .FirstOrDefaultAsync(t => t.UserId == teacherUserId, cancellationToken)
+                ?? throw new NotFoundException("No teacher profile is linked to the current account.");
+
+            var leave = await _unitOfWork.Repository<LeaveRequest>()
+                .FirstOrDefaultAsync(l => l.Id == leaveId, cancellationToken)
+                ?? throw new NotFoundException(nameof(LeaveRequest), leaveId);
+
+            // Not this teacher's own request: NotFound rather than Forbidden, so this endpoint
+            // never confirms/denies that some other teacher's leave request even exists.
+            if (leave.TeacherProfileId != teacher.Id)
+            {
+                throw new NotFoundException(nameof(LeaveRequest), leaveId);
+            }
+
+            if (leave.Status != LeaveStatus.Pending)
+            {
+                throw new DomainValidationException($"This leave application is already {leave.Status} and can no longer be cancelled.");
+            }
+
+            leave.Status = LeaveStatus.Cancelled;
+            await _auditLog.StageAsync(AuditAction.Update, nameof(LeaveRequest), leave.Id.ToString(), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        public async Task<IReadOnlyList<LeaveAllowanceDto>> ListLeaveAllowancesAsync(CancellationToken cancellationToken = default)
+        {
+            var allowances = await _unitOfWork.Repository<LeaveAllowance>().Query()
+                .Include(a => a.TeacherProfile).ThenInclude(t => t!.User)
+                .OrderBy(a => a.TeacherProfileId == null ? 0 : 1)
+                .ThenBy(a => a.TeacherProfile != null ? a.TeacherProfile.User.FirstName : null)
+                .ToListAsync(cancellationToken);
+            return allowances.Select(ToDto).ToList();
+        }
+
+        public async Task<LeaveAllowanceDto> SetLeaveAllowanceAsync(
+            SaveLeaveAllowanceRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            // Not trusted from the DTO's own [Range] alone (same reasoning as PayoutService.
+            // SetRateAsync) — a negative allowance would let CountClassWiseCancellationsThisMonthAsync's
+            // "remaining = allowance - used" go negative and, worse, a request with a negative
+            // remaining calculated below still isn't what blocks anything (0 already blocks the
+            // auto-approve fast path), so this exists purely to reject an obviously-wrong value
+            // outright rather than silently store one nothing can ever satisfy.
+            if (request.MonthlyAllowance < 0)
+            {
+                throw new DomainValidationException("Monthly allowance cannot be negative.");
+            }
+
+            if (request.TeacherProfileId is { } teacherProfileId)
+            {
+                var teacherExists = await _unitOfWork.Repository<TeacherProfile>()
+                    .ExistsAsync(t => t.Id == teacherProfileId, cancellationToken);
+                if (!teacherExists)
+                {
+                    throw new NotFoundException(nameof(TeacherProfile), teacherProfileId);
+                }
+            }
+
+            var allowance = await _unitOfWork.Repository<LeaveAllowance>()
+                .FirstOrDefaultAsync(a => a.TeacherProfileId == request.TeacherProfileId, cancellationToken);
+            if (allowance is null)
+            {
+                allowance = new LeaveAllowance { TeacherProfileId = request.TeacherProfileId };
+                await _unitOfWork.Repository<LeaveAllowance>().AddAsync(allowance, cancellationToken);
+            }
+
+            allowance.MonthlyAllowance = request.MonthlyAllowance;
+
+            await _auditLog.StageAsync(AuditAction.Update, nameof(LeaveAllowance), allowance.Id.ToString(), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            var saved = await _unitOfWork.Repository<LeaveAllowance>().Query()
+                .Include(a => a.TeacherProfile).ThenInclude(t => t!.User)
+                .FirstAsync(a => a.Id == allowance.Id, cancellationToken);
+            return ToDto(saved);
+        }
+
+        public async Task<LeaveAllowanceStatusDto> GetMyLeaveAllowanceStatusAsync(
+            Guid teacherUserId,
+            CancellationToken cancellationToken = default)
+        {
+            var teacher = await _unitOfWork.Repository<TeacherProfile>()
+                .FirstOrDefaultAsync(t => t.UserId == teacherUserId, cancellationToken)
+                ?? throw new NotFoundException("No teacher profile is linked to the current account.");
+
+            var now = DateTime.UtcNow;
+            var allowance = await GetEffectiveAllowanceAsync(teacher.Id, cancellationToken);
+            var used = await CountClassWiseCancellationsInMonthAsync(teacher.Id, now.Year, now.Month, cancellationToken);
+            return new LeaveAllowanceStatusDto
+            {
+                MonthlyAllowance = allowance,
+                UsedThisMonth = used,
+                Remaining = Math.Max(0, allowance - used),
+            };
+        }
+
+        /// <summary>Resolves how many more sessions this teacher may class-wise-cancel in the
+        /// given calendar month right now — allowance minus what's already been approved for
+        /// that month.</summary>
+        private async Task<int> GetRemainingAllowanceAsync(
+            Guid teacherProfileId, int year, int month, CancellationToken cancellationToken)
+        {
+            var allowance = await GetEffectiveAllowanceAsync(teacherProfileId, cancellationToken);
+            var used = await CountClassWiseCancellationsInMonthAsync(teacherProfileId, year, month, cancellationToken);
+            return Math.Max(0, allowance - used);
+        }
+
+        /// <summary>The teacher's own configured allowance if she has one, else the centre-wide
+        /// default (null TeacherProfileId), else 0 — mirrors PayoutRate's own default-card
+        /// fallback rule.</summary>
+        private async Task<int> GetEffectiveAllowanceAsync(Guid teacherProfileId, CancellationToken cancellationToken)
+        {
+            var ownAllowance = await _unitOfWork.Repository<LeaveAllowance>()
+                .FirstOrDefaultAsync(a => a.TeacherProfileId == teacherProfileId, cancellationToken);
+            if (ownAllowance is not null)
+            {
+                return ownAllowance.MonthlyAllowance;
+            }
+
+            var defaultAllowance = await _unitOfWork.Repository<LeaveAllowance>()
+                .FirstOrDefaultAsync(a => a.TeacherProfileId == null, cancellationToken);
+            return defaultAllowance?.MonthlyAllowance ?? 0;
+        }
+
+        /// <summary>How many sessions this teacher has already had class-wise-cancelled
+        /// (Approved, whether auto- or admin-approved) for the given calendar month —
+        /// counted from the linked sessions' own scheduled month, not the leave request's
+        /// submission date, matching how the allowance itself is keyed.</summary>
+        private async Task<int> CountClassWiseCancellationsInMonthAsync(
+            Guid teacherProfileId, int year, int month, CancellationToken cancellationToken)
+        {
+            return await _unitOfWork.Repository<LeaveRequestSession>().Query()
+                .Where(ls => ls.LeaveRequest.TeacherProfileId == teacherProfileId
+                             && ls.LeaveRequest.IsClassWise
+                             && ls.LeaveRequest.Status == LeaveStatus.Approved
+                             && ls.ClassSession.ScheduledStartAtUtc.Year == year
+                             && ls.ClassSession.ScheduledStartAtUtc.Month == month)
+                .CountAsync(cancellationToken);
+        }
+
         public async Task<IReadOnlyList<LeaveRequestDto>> ListLeaveAsync(
             LeaveStatus? status,
             CancellationToken cancellationToken = default)
         {
             IQueryable<LeaveRequest> query = _unitOfWork.Repository<LeaveRequest>().Query()
-                .Include(l => l.TeacherProfile).ThenInclude(t => t.User);
+                .Include(l => l.TeacherProfile).ThenInclude(t => t.User)
+                .Include(l => l.Sessions).ThenInclude(s => s.ClassSession).ThenInclude(cs => cs.Batch);
             if (status.HasValue)
             {
                 query = query.Where(l => l.Status == status.Value);
@@ -446,6 +1138,7 @@ namespace iucs.meettomanage.application.Services
 
             var leaves = await _unitOfWork.Repository<LeaveRequest>().Query()
                 .Include(l => l.TeacherProfile).ThenInclude(t => t.User)
+                .Include(l => l.Sessions).ThenInclude(s => s.ClassSession).ThenInclude(cs => cs.Batch)
                 .Where(l => l.TeacherProfileId == teacher.Id)
                 .OrderByDescending(l => l.CreatedAtUtc)
                 .ToListAsync(cancellationToken);
@@ -464,8 +1157,12 @@ namespace iucs.meettomanage.application.Services
             ReviewLeaveRequest request,
             CancellationToken cancellationToken = default)
         {
-            // Load tracked (Query() is AsNoTracking; mutating that never persists).
-            var leave = await _unitOfWork.Repository<LeaveRequest>().FirstOrDefaultAsync(l => l.Id == id, cancellationToken)
+            // Load tracked (Query() is AsNoTracking; mutating that never persists) — .Include
+            // for Sessions since a class-wise request's cancellation targets exactly those,
+            // not a time-window scan.
+            var leave = await _unitOfWork.Repository<LeaveRequest>().TrackedQuery()
+                .Include(l => l.Sessions).ThenInclude(s => s.ClassSession).ThenInclude(cs => cs.Batch)
+                .FirstOrDefaultAsync(l => l.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(LeaveRequest), id);
 
             if (leave.Status != LeaveStatus.Pending)
@@ -485,21 +1182,48 @@ namespace iucs.meettomanage.application.Services
             // flow) — picking a new date/capacity for a makeup is an admin call, not one to
             // make silently here.
             var affectedCount = 0;
+            List<ClassSession> affectedSessions = [];
             if (leave.Status == LeaveStatus.Approved)
             {
-                var affectedSessions = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
-                    .Where(s => s.TeacherProfileId == leave.TeacherProfileId
-                        && s.Status == SessionStatus.Scheduled
-                        && s.ScheduledStartAtUtc < leave.EndAtUtc
-                        && s.ScheduledEndAtUtc > leave.StartAtUtc)
-                    .ToListAsync(cancellationToken);
+                if (leave.IsClassWise)
+                {
+                    // Exactly the sessions the teacher picked — never a time-window scan,
+                    // which could sweep up other classes that happen to fall in the same
+                    // span (see LeaveRequestSession's own doc comment).
+                    var sessionIds = leave.Sessions.Select(s => s.ClassSessionId).ToList();
+                    affectedSessions = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
+                        .Include(s => s.Batch)
+                        .Where(s => sessionIds.Contains(s.Id) && (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward))
+                        .ToListAsync(cancellationToken);
+                }
+                else
+                {
+                    // Batch included — NotifyAffectedFamiliesAsync needs each cancelled
+                    // session's own batch name/time to tell each family exactly which of their
+                    // classes was cancelled, not just the leave's overall date range.
+                    affectedSessions = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
+                        .Include(s => s.Batch)
+                        .Where(s => s.TeacherProfileId == leave.TeacherProfileId
+                            && (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward)
+                            && s.ScheduledStartAtUtc < leave.EndAtUtc
+                            && s.ScheduledEndAtUtc > leave.StartAtUtc)
+                        .ToListAsync(cancellationToken);
+                }
                 affectedCount = affectedSessions.Count;
 
+                // Who: the teacher on leave, and who approved it.
+                var teacherOnLeave = await _unitOfWork.Repository<User>().Query()
+                    .Include(u => u.RoleDefinition)
+                    .FirstAsync(u => u.TeacherProfile != null && u.TeacherProfile.Id == leave.TeacherProfileId, cancellationToken);
+                var approver = await CancelledBy.DescribeAsync(_unitOfWork, _currentUser.UserId, cancellationToken);
                 foreach (var session in affectedSessions)
                 {
                     session.Status = SessionStatus.Cancelled;
-                    session.CancellationReason =
-                        $"Teacher on approved leave ({DateTimeDisplay.ToLocalDate(leave.StartAtUtc, "dd MMM yyyy")} – {DateTimeDisplay.ToLocalDate(leave.EndAtUtc, "dd MMM yyyy")}).";
+                    session.CancellationReason = CancelledBy.Reason(
+                        CancelledBy.Describe(teacherOnLeave),
+                        leave.IsClassWise
+                            ? $"teacher's class-wise leave, approved by {approver} — {leave.Reason}"
+                            : $"teacher's leave {DateTimeDisplay.ToLocalDate(leave.StartAtUtc, "dd MMM yyyy")} – {DateTimeDisplay.ToLocalDate(leave.EndAtUtc, "dd MMM yyyy")}, approved by {approver} — {leave.Reason}");
                 }
             }
 
@@ -536,7 +1260,7 @@ namespace iucs.meettomanage.application.Services
             // is in one of this teacher's batches gets notified (client requirement).
             if (leave.Status == LeaveStatus.Approved)
             {
-                var teacherName = $"{teacherUser.FirstName} {teacherUser.LastName}";
+                var teacherName = $"{teacherUser.FirstName} {teacherUser.LastName}".Trim();
                 var window = DateTimeDisplay.ToLocalRange(leave.StartAtUtc, leave.EndAtUtc);
 
                 var coreTeam = await _unitOfWork.Repository<User>().Query()
@@ -551,20 +1275,7 @@ namespace iucs.meettomanage.application.Services
                         cancellationToken);
                 }
 
-                var affectedParents = await _unitOfWork.Repository<BatchEnrollment>().Query()
-                    .Where(e => e.Status == EnrollmentStatus.Active
-                                && e.Batch.TeacherProfileId == leave.TeacherProfileId)
-                    .Select(e => e.Child.ParentProfile.User)
-                    .Distinct()
-                    .ToListAsync(cancellationToken);
-                foreach (var parent in affectedParents)
-                {
-                    await _notificationService.SendTemplatedEmailAsync(
-                        parent.Id, parent.Email, NotificationType.LeaveStatusUpdate,
-                        "leave-notify-parent",
-                        new Dictionary<string, string> { ["TeacherName"] = teacherName, ["Window"] = window },
-                        cancellationToken);
-                }
+                await NotifyAffectedFamiliesAsync(teacherName, window, affectedSessions, cancellationToken);
             }
 
             // Attach the nav for DTO mapping only, after the last SaveChanges (avoids re-tracking).
@@ -714,7 +1425,7 @@ namespace iucs.meettomanage.application.Services
                 ClassSessionId = a.ClassSessionId,
                 ParticipantType = a.ParticipantType,
                 ChildId = a.ChildId,
-                ChildName = a.Child is null ? null : $"{a.Child.FirstName} {a.Child.LastName}",
+                ChildName = a.Child is null ? null : $"{a.Child.FirstName} {a.Child.LastName}".Trim(),
                 TeacherProfileId = a.TeacherProfileId,
                 Status = a.Status,
                 JoinedAtUtc = a.JoinedAtUtc,
@@ -731,7 +1442,7 @@ namespace iucs.meettomanage.application.Services
             return await _unitOfWork.Repository<ClassSession>().Query()
                 .CountAsync(
                     s => s.TeacherProfileId == teacherProfileId
-                         && s.Status == SessionStatus.Scheduled
+                         && (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward)
                          && s.ScheduledStartAtUtc < endUtc
                          && s.ScheduledEndAtUtc > startUtc,
                     cancellationToken);
@@ -751,20 +1462,45 @@ namespace iucs.meettomanage.application.Services
 
         private async Task<LeaveRequestDto> ToDtoAsync(LeaveRequest leave, CancellationToken cancellationToken)
         {
-            return new LeaveRequestDto
+            var dto = new LeaveRequestDto
             {
                 Id = leave.Id,
                 TeacherProfileId = leave.TeacherProfileId,
-                TeacherName = $"{leave.TeacherProfile.User.FirstName} {leave.TeacherProfile.User.LastName}",
+                TeacherName = $"{leave.TeacherProfile.User.FirstName} {leave.TeacherProfile.User.LastName}".Trim(),
                 StartAtUtc = leave.StartAtUtc,
                 EndAtUtc = leave.EndAtUtc,
                 Reason = leave.Reason,
                 Status = leave.Status,
                 ReviewNote = leave.ReviewNote,
                 CreatedAtUtc = leave.CreatedAtUtc,
-                AffectedSessionCount = await CountAffectedSessionsAsync(
-                    leave.TeacherProfileId, leave.StartAtUtc, leave.EndAtUtc, cancellationToken),
+                IsClassWise = leave.IsClassWise,
             };
+
+            if (leave.IsClassWise)
+            {
+                // A fixed count of exactly what this request covers — never a live window
+                // scan, which would read back 0 the moment approval cancels those sessions
+                // (the same trap the non-class-wise branch below works around via the
+                // caller's own affectedCount override after ReviewLeaveAsync's cancellation).
+                dto.Sessions = leave.Sessions
+                    .OrderBy(s => s.ClassSession.ScheduledStartAtUtc)
+                    .Select(s => new LeaveSessionSummaryDto
+                    {
+                        SessionId = s.ClassSessionId,
+                        ScheduledStartAtUtc = s.ClassSession.ScheduledStartAtUtc,
+                        ScheduledEndAtUtc = s.ClassSession.ScheduledEndAtUtc,
+                        BatchName = s.ClassSession.Batch?.Name,
+                    })
+                    .ToList();
+                dto.AffectedSessionCount = leave.Sessions.Count;
+            }
+            else
+            {
+                dto.AffectedSessionCount = await CountAffectedSessionsAsync(
+                    leave.TeacherProfileId, leave.StartAtUtc, leave.EndAtUtc, cancellationToken);
+            }
+
+            return dto;
         }
 
         private static HolidayDto ToDto(Holiday holiday)
@@ -775,6 +1511,19 @@ namespace iucs.meettomanage.application.Services
                 Date = holiday.Date,
                 Name = holiday.Name,
                 Description = holiday.Description,
+            };
+        }
+
+        private static LeaveAllowanceDto ToDto(LeaveAllowance allowance)
+        {
+            return new LeaveAllowanceDto
+            {
+                Id = allowance.Id,
+                TeacherProfileId = allowance.TeacherProfileId,
+                TeacherName = allowance.TeacherProfile is null
+                    ? "All teachers (default)"
+                    : $"{allowance.TeacherProfile.User.FirstName} {allowance.TeacherProfile.User.LastName}".Trim(),
+                MonthlyAllowance = allowance.MonthlyAllowance,
             };
         }
     }

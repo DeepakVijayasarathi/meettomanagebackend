@@ -9,6 +9,7 @@ using iucs.meettomanage.domain.Entities.Integrations;
 using iucs.meettomanage.domain.Entities.Navigation;
 using iucs.meettomanage.domain.Entities.Notes;
 using iucs.meettomanage.domain.Entities.Payouts;
+using iucs.meettomanage.domain.Entities.Activities;
 using iucs.meettomanage.domain.Entities.Quizzes;
 using iucs.meettomanage.domain.Entities.Resources;
 using iucs.meettomanage.domain.Entities.Settings;
@@ -32,9 +33,11 @@ namespace iucs.meettomanage.domain.Data
         public DbSet<ParentProfile> ParentProfiles => Set<ParentProfile>();
         public DbSet<TeacherProfile> TeacherProfiles => Set<TeacherProfile>();
         public DbSet<Child> Children => Set<Child>();
+        public DbSet<ChildSchedulePreference> ChildSchedulePreferences => Set<ChildSchedulePreference>();
         public DbSet<SubAdminPermission> SubAdminPermissions => Set<SubAdminPermission>();
         public DbSet<RoleDefinition> RoleDefinitions => Set<RoleDefinition>();
         public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
+        public DbSet<PermissionModuleDefinition> PermissionModuleDefinitions => Set<PermissionModuleDefinition>();
         public DbSet<PinResetToken> PinResetTokens => Set<PinResetToken>();
         public DbSet<AccessRequest> AccessRequests => Set<AccessRequest>();
 
@@ -47,22 +50,35 @@ namespace iucs.meettomanage.domain.Data
         public DbSet<EnrollmentForm> EnrollmentForms => Set<EnrollmentForm>();
         public DbSet<Holiday> Holidays => Set<Holiday>();
         public DbSet<LeaveRequest> LeaveRequests => Set<LeaveRequest>();
+        public DbSet<LeaveCancellationReport> LeaveCancellationReports => Set<LeaveCancellationReport>();
+        public DbSet<LeaveRequestSession> LeaveRequestSessions => Set<LeaveRequestSession>();
+        public DbSet<LeaveAllowance> LeaveAllowances => Set<LeaveAllowance>();
 
         // Sessions
         public DbSet<ClassSession> ClassSessions => Set<ClassSession>();
         public DbSet<SessionAttendance> SessionAttendances => Set<SessionAttendance>();
         public DbSet<SessionRecording> SessionRecordings => Set<SessionRecording>();
+
+        public DbSet<PersonalRoomRecording> PersonalRoomRecordings => Set<PersonalRoomRecording>();
+
+        public DbSet<SessionPresentation> SessionPresentations => Set<SessionPresentation>();
         public DbSet<EngagementEvent> EngagementEvents => Set<EngagementEvent>();
         public DbSet<StudentAward> StudentAwards => Set<StudentAward>();
+        public DbSet<ClassSessionEventLog> ClassSessionEventLogs => Set<ClassSessionEventLog>();
 
         // Quizzes
         public DbSet<QuizQuestion> QuizQuestions => Set<QuizQuestion>();
         public DbSet<QuizQuestionOption> QuizQuestionOptions => Set<QuizQuestionOption>();
 
+        // Whiteboard Activities
+        public DbSet<WhiteboardActivityTemplate> WhiteboardActivityTemplates => Set<WhiteboardActivityTemplate>();
+        public DbSet<WhiteboardActivityItem> WhiteboardActivityItems => Set<WhiteboardActivityItem>();
+
         // Admission
         public DbSet<DemoBooking> DemoBookings => Set<DemoBooking>();
         public DbSet<DemoParticipant> DemoParticipants => Set<DemoParticipant>();
         public DbSet<DemoFeedback> DemoFeedbacks => Set<DemoFeedback>();
+        public DbSet<ParentFeedback> ParentFeedbacks => Set<ParentFeedback>();
         public DbSet<StoreInquiry> StoreInquiries => Set<StoreInquiry>();
 
         // Billing
@@ -78,17 +94,31 @@ namespace iucs.meettomanage.domain.Data
         public DbSet<PayoutRate> PayoutRates => Set<PayoutRate>();
         public DbSet<Payout> Payouts => Set<Payout>();
         public DbSet<PayoutItem> PayoutItems => Set<PayoutItem>();
+        public DbSet<StaffCompensationSetting> StaffCompensationSettings => Set<StaffCompensationSetting>();
+        public DbSet<StaffPayout> StaffPayouts => Set<StaffPayout>();
+
+        public DbSet<PayoutChange> PayoutChanges => Set<PayoutChange>();
 
         // Resources
         public DbSet<Resource> Resources => Set<Resource>();
         public DbSet<ResourceAccess> ResourceAccesses => Set<ResourceAccess>();
         public DbSet<ResourceBatchVisibility> ResourceBatchVisibilities => Set<ResourceBatchVisibility>();
+        public DbSet<ResourceFolder> ResourceFolders => Set<ResourceFolder>();
+        public DbSet<ResourceFolderAccess> ResourceFolderAccesses => Set<ResourceFolderAccess>();
+        public DbSet<ResourceFolderBatchAccess> ResourceFolderBatchAccesses => Set<ResourceFolderBatchAccess>();
 
         // Communication & auditing
         public DbSet<Notification> Notifications => Set<Notification>();
+        public DbSet<BulkEmailBlast> BulkEmailBlasts => Set<BulkEmailBlast>();
+        public DbSet<BulkEmailRecipient> BulkEmailRecipients => Set<BulkEmailRecipient>();
+        public DbSet<BulkEmailReply> BulkEmailReplies => Set<BulkEmailReply>();
+        public DbSet<SupportTicket> SupportTickets => Set<SupportTicket>();
+        public DbSet<SupportTicketMessage> SupportTicketMessages => Set<SupportTicketMessage>();
+        public DbSet<StaffLeaveRequest> StaffLeaveRequests => Set<StaffLeaveRequest>();
         public DbSet<EmailTemplate> EmailTemplates => Set<EmailTemplate>();
         public DbSet<ProgressReport> ProgressReports => Set<ProgressReport>();
         public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+        public DbSet<DataDeletionLog> DataDeletionLogs => Set<DataDeletionLog>();
 
         // "Ask a Doubt" chatbot
         public DbSet<ChatFaq> ChatFaqs => Set<ChatFaq>();
@@ -102,6 +132,7 @@ namespace iucs.meettomanage.domain.Data
         public DbSet<AppSetting> AppSettings => Set<AppSetting>();
         public DbSet<MenuItem> MenuItems => Set<MenuItem>();
         public DbSet<Integration> Integrations => Set<Integration>();
+        public DbSet<ShortLink> ShortLinks => Set<ShortLink>();
 
         protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
         {

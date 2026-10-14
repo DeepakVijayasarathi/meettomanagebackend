@@ -26,6 +26,7 @@ namespace iucs.meettomanage.api.Services
             Invoice invoice,
             PaymentAccount account,
             string? preferredMethodKey = null,
+            decimal? amount = null,
             CancellationToken cancellationToken = default)
         {
             var reference = $"SIM-{Guid.NewGuid():N}";

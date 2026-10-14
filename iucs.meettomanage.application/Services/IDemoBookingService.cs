@@ -1,4 +1,5 @@
 using iucs.meettomanage.application.Dto.Admission;
+using iucs.meettomanage.application.Dto.Sessions;
 using iucs.meettomanage.domain.Enums;
 
 namespace iucs.meettomanage.application.Services
@@ -10,6 +11,10 @@ namespace iucs.meettomanage.application.Services
         Task<DemoBookingDto> GetAsync(Guid id, CancellationToken cancellationToken = default);
 
         Task<DemoBookingDto> CreateAsync(CreateDemoBookingRequest request, CancellationToken cancellationToken = default);
+
+        /// <summary>A lead with no demo class (direct enrollment, or a sibling from another lead's demo),
+        /// ready for the counsellor to issue a payment link.</summary>
+        Task<DemoBookingDto> CreateDirectAdmissionLeadAsync(CreateDirectAdmissionLeadRequest request, CancellationToken cancellationToken = default);
 
         /// <summary>Per-parent demo record: every demo each parent has taken, grouped by email, with fee totals.</summary>
         Task<IReadOnlyList<ParentDemoHistoryDto>> ListParentHistoryAsync(string? search, CancellationToken cancellationToken = default);
@@ -49,6 +54,66 @@ namespace iucs.meettomanage.application.Services
             CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Corrects a booking's parent/child details and extra invitees in place — the fix for a
+        /// mistyped parent email, instead of deleting and recreating the demo. Slot, teacher and
+        /// pipeline stage are untouched. Any email address that is new or changed gets the join
+        /// link sent to it (only while the demo is still upcoming), since the original went to
+        /// the wrong address.
+        /// </summary>
+        Task<DemoBookingDto> UpdateAsync(Guid bookingId, UpdateDemoBookingRequest request, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Manually re-sends the demo's join link to the parent, every extra invitee, and the
+        /// assigned teacher — for when a parent reports never getting (or losing) the original
+        /// confirmation email. Always uses the teacher's current fixed personal room.
+        /// </summary>
+        Task<DemoBookingDto> ResendLinkAsync(Guid bookingId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Moves a still-scheduled demo to a new date/time. Reuses ISessionService.RescheduleAsync
+        /// on the booking's linked session (same holiday/teacher-availability checks a regular
+        /// session's reschedule enforces), re-points the booking at the resulting replacement
+        /// session, and re-sends the parent/teacher confirmation emails with the new time — the
+        /// same templates ResendLinkAsync uses. Before this, staff had no way to just move a demo:
+        /// only Cancel (kills the lead) or Delete (loses the record) existed.
+        /// </summary>
+        Task<DemoBookingDto> RescheduleAsync(
+            Guid bookingId,
+            RescheduleSessionRequest request,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>The parent's join link for this demo, for staff to copy and share manually. Never expires.</summary>
+        Task<string> GetJoinLinkAsync(Guid bookingId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Resolves a parent/participant's demo join link fresh, right now — the current Jitsi
+        /// domain and a newly-signed token, never whatever was baked into an email or copied
+        /// link at some earlier moment. Backs the public GET /api/demo-bookings/{id}/join
+        /// redirect that the confirmation email, resend and "Copy Link" now all point at instead
+        /// of a static URL, so a Jitsi domain change (or just time passing) can't leave a parent
+        /// holding a dead link the way a frozen one could — reported live as a parent's join
+        /// link 404-ing while teachers, who always re-resolve fresh through the authenticated
+        /// app, kept joining fine.
+        /// <paramref name="participantId"/> null means the primary parent; otherwise the id of
+        /// one of the booking's extra invitees.
+        /// Deliberately no time-based expiry — see the implementation's own remarks. Returns null
+        /// only when there's nothing to resolve at all: no such booking/session, no room yet, or
+        /// the given participant id doesn't belong to this booking. The link dies only when the
+        /// booking itself is deleted (<see cref="DeleteAsync"/>), never on a clock.
+        /// </summary>
+        Task<string?> ResolveLiveJoinUrlAsync(Guid bookingId, Guid? participantId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Permanently removes a demo booking staff no longer want on the books (a test entry, a
+        /// mistaken double-booking) — the booking, its extra invitees and any submitted feedback,
+        /// and cancels the linked class session so the teacher's slot frees up and the join link
+        /// stops resolving. Refuses once the lead has already converted to real money — invoiced
+        /// or Enrolled — since that has its own history to preserve; change its conversion status
+        /// instead of deleting those.
+        /// </summary>
+        Task DeleteAsync(Guid bookingId, CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// Every active teacher's load around the booking's slot, so staff can see who's
         /// free/light before overriding the assignment — not just a blind name dropdown.
         /// </summary>
@@ -56,5 +121,9 @@ namespace iucs.meettomanage.application.Services
 
         /// <summary>Every manual teacher reassignment ever made on this booking, newest first.</summary>
         Task<IReadOnlyList<DemoReassignmentHistoryDto>> GetReassignmentHistoryAsync(Guid bookingId, CancellationToken cancellationToken = default);
+
+        /// <summary>Every follow-up note ever logged on this booking, newest first, with the
+        /// actual logging user and timestamp attached — see <see cref="UpdateConversionStatusAsync"/>.</summary>
+        Task<IReadOnlyList<DemoBookingFollowUpDto>> GetFollowUpNotesAsync(Guid bookingId, CancellationToken cancellationToken = default);
     }
 }

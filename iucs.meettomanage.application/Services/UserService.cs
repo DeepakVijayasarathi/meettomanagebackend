@@ -29,6 +29,7 @@ namespace iucs.meettomanage.application.Services
         private readonly IWhatsAppSender _whatsAppSender;
         private readonly ISmsSender _smsSender;
         private readonly IBulkFileReader _bulkFileReader;
+        private readonly IPinVault _pinVault;
         private readonly ILogger<UserService> _logger;
 
         public UserService(
@@ -41,6 +42,7 @@ namespace iucs.meettomanage.application.Services
             IWhatsAppSender whatsAppSender,
             ISmsSender smsSender,
             IBulkFileReader bulkFileReader,
+            IPinVault pinVault,
             ILogger<UserService> logger)
         {
             _unitOfWork = unitOfWork;
@@ -52,6 +54,7 @@ namespace iucs.meettomanage.application.Services
             _whatsAppSender = whatsAppSender;
             _smsSender = smsSender;
             _bulkFileReader = bulkFileReader;
+            _pinVault = pinVault;
             _logger = logger;
         }
 
@@ -222,6 +225,7 @@ namespace iucs.meettomanage.application.Services
             {
                 Email = email,
                 PinHash = _passwordHasher.Hash(temporaryPin),
+                PinEncrypted = _pinVault.Protect(temporaryPin),
                 FirstName = request.FirstName.Trim(),
                 LastName = request.LastName?.Trim() ?? string.Empty,
                 Phone = request.Phone,
@@ -265,18 +269,21 @@ namespace iucs.meettomanage.application.Services
 
             // Requirement: the account holder receives login credentials on creation.
             // The plain-text temp PIN lives only in this email, never in the database.
-            await _notifications.SendTemplatedEmailAsync(
-                user.Id,
-                user.Email,
-                NotificationType.General,
-                "welcome-credentials",
-                new Dictionary<string, string>
-                {
-                    ["FirstName"] = user.FirstName,
-                    ["Email"] = user.Email,
-                    ["TemporaryPin"] = temporaryPin,
-                },
-                cancellationToken);
+            if (!request.SuppressWelcomeEmail)
+            {
+                await _notifications.SendTemplatedEmailAsync(
+                    user.Id,
+                    user.Email,
+                    NotificationType.General,
+                    "welcome-credentials",
+                    new Dictionary<string, string>
+                    {
+                        ["FirstName"] = user.FirstName,
+                        ["Email"] = user.Email,
+                        ["TemporaryPin"] = temporaryPin,
+                    },
+                    cancellationToken);
+            }
 
             await _auditLog.StageAsync(AuditAction.Create, nameof(User), user.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -297,6 +304,20 @@ namespace iucs.meettomanage.application.Services
             if (!string.IsNullOrWhiteSpace(request.TimeZoneId))
             {
                 user.TimeZoneId = request.TimeZoneId;
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.Email))
+            {
+                var newEmail = request.Email.Trim().ToLowerInvariant();
+                if (newEmail != user.Email)
+                {
+                    if (await _unitOfWork.Repository<User>().ExistsAsync(u => u.Email == newEmail && u.Id != id, cancellationToken))
+                    {
+                        throw new ConflictException($"A user with email '{newEmail}' already exists.");
+                    }
+
+                    user.Email = newEmail;
+                }
             }
 
             if (request.DepartmentId.HasValue && user.TeacherProfile is not null)
@@ -521,6 +542,23 @@ namespace iucs.meettomanage.application.Services
                 throw new DomainValidationException($"Module '{duplicateModule.Key}' appears more than once.");
             }
 
+            // Module was a compile-time-checked enum on the wire until it became a plain
+            // string key (to allow Admin-defined custom modules) — model binding no longer
+            // rejects a bogus value on its own.
+            var requestedKeys = permissions.Select(p => p.Module).Distinct().ToList();
+            if (requestedKeys.Count > 0)
+            {
+                var validKeys = (await _unitOfWork.Repository<PermissionModuleDefinition>().Query()
+                    .Select(m => m.Key)
+                    .ToListAsync(cancellationToken))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var unknown = requestedKeys.Where(k => !validKeys.Contains(k)).ToList();
+                if (unknown.Count > 0)
+                {
+                    throw new DomainValidationException($"Unknown permission module(s): {string.Join(", ", unknown)}.");
+                }
+            }
+
             // Only an explicit role assignment (apply-preset) stamps the user's
             // named role; hand-editing individual checkboxes leaves it as-is.
             if (roleDefinitionId.HasValue)
@@ -656,7 +694,13 @@ namespace iucs.meettomanage.application.Services
             }
 
             user.PinHash = _passwordHasher.Hash(temporaryPin);
+            user.PinEncrypted = _pinVault.Protect(temporaryPin);
             _unitOfWork.Repository<User>().Update(user);
+
+            // The original welcome notification (and any earlier resend) still shows the
+            // now-invalid PIN in plaintext in the parent's persistent Notifications feed —
+            // redact those before adding this send's own (PIN-free) confirmation row below.
+            await RedactStalePinNotificationsAsync(user.Id, cancellationToken);
 
             await _unitOfWork.Repository<Notification>().AddAsync(
                 new Notification
@@ -680,6 +724,37 @@ namespace iucs.meettomanage.application.Services
             await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
+        public async Task<string> RevealPinAsync(Guid userId, CancellationToken cancellationToken = default)
+        {
+            var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
+                ?? throw new NotFoundException(nameof(User), userId);
+
+            // Same rule as ResetPinAsync: a PIN is the whole credential (email + PIN), so an Admin
+            // account's is never shown through this action.
+            if (user.Role == UserRole.Admin)
+            {
+                throw new DomainValidationException("Admin accounts' PINs can't be viewed through this action.");
+            }
+
+            var pin = string.IsNullOrEmpty(user.PinEncrypted) ? null : _pinVault.TryReveal(user.PinEncrypted);
+            if (pin is null)
+            {
+                throw new DomainValidationException(
+                    "No PIN is stored for this account to view -- the user chose their own PIN, or it was set before PIN viewing existed. Use Reset PIN to issue a new one.");
+            }
+
+            // Reading a credential is itself a sensitive action: recorded with who did it.
+            await _auditLog.StageAsync(
+                AuditAction.Update,
+                nameof(User),
+                user.Id.ToString(),
+                "System-issued PIN viewed by admin",
+                cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            return pin;
+        }
+
         public async Task<string> ResetPinAsync(Guid userId, CancellationToken cancellationToken = default)
         {
             var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
@@ -699,7 +774,12 @@ namespace iucs.meettomanage.application.Services
 
             var temporaryPin = TemporaryPinGenerator.Generate();
             user.PinHash = _passwordHasher.Hash(temporaryPin);
+            user.PinEncrypted = _pinVault.Protect(temporaryPin);
             _unitOfWork.Repository<User>().Update(user);
+
+            // Same staleness problem as ResendCredentialsAsync: the original welcome
+            // notification still shows the PIN this reset just invalidated.
+            await RedactStalePinNotificationsAsync(user.Id, cancellationToken);
 
             // Logged as an admin-visible action, distinct from ResendCredentialsAsync's audit
             // entry, since this one was never sent anywhere and only the viewing admin ever
@@ -713,6 +793,22 @@ namespace iucs.meettomanage.application.Services
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return temporaryPin;
+        }
+
+        // The welcome-credentials notification (and, in principle, any future template that
+        // embeds a plaintext PIN) is a permanent row in the recipient's Notifications feed —
+        // once the PIN it shows has been superseded by a reset or resend, leaving the old
+        // plaintext value on screen is actively misleading, not just stale. Blank it out in
+        // place rather than deleting the row, so the feed still shows that onboarding happened.
+        private async Task RedactStalePinNotificationsAsync(Guid userId, CancellationToken cancellationToken)
+        {
+            const string redactedBody =
+                "Your login PIN was reset after this message was sent, so it no longer shows your current PIN. Contact your admin if you need it resent.";
+
+            await _unitOfWork.Repository<Notification>().ExecuteUpdateAsync(
+                n => n.RecipientUserId == userId && n.TemplateKey == "welcome-credentials" && n.Body != redactedBody,
+                setters => setters.SetProperty(n => n.Body, redactedBody),
+                cancellationToken);
         }
 
         public async Task<CredentialChannelsDto> GetCredentialChannelsAsync(CancellationToken cancellationToken = default)

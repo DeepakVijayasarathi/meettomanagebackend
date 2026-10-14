@@ -17,23 +17,62 @@ namespace iucs.meettomanage.application.Common
         public static readonly IReadOnlyList<RequiredGrant> All =
         [
             new("teacher", PermissionModule.Payouts, View: true),
+            // The Relationship Manager Dashboard's KPI tiles read GET /api/reports/dashboard-summary,
+            // gated on this module — the "sub-admin" preset shipped with an empty grant set ("grant
+            // modules as needed"), so every Relationship Manager who never had this hand-granted saw
+            // every KPI tile fail with "Couldn't load" from the moment they first logged in.
+            new("sub-admin", PermissionModule.ReportsAnalytics, View: true),
+            // Batches, Users (view) and Audit Log are baseline Relationship Manager access —
+            // granted the moment the role is assigned, never gated behind the Admin's
+            // Access-Requests approval popup. No Delete flag: BatchesController has no delete
+            // endpoint at all (a batch only moves Active/Dormant/Archived via SetStatus, which
+            // is PermissionAction.Edit), so "Create/Edit/View/Delete" for batches means
+            // Create + Edit + View here, with Edit covering the archive-as-delete action.
+            new("sub-admin", PermissionModule.CourseBatchManagement, View: true, Create: true, Edit: true),
+            new("sub-admin", PermissionModule.UserManagement, View: true),
+            // Parent Tickets is the Relationship Manager's own queue (families raise tickets now
+            // that WhatsApp/phone contact is retired). Reported live: an RM couldn't open parent
+            // tickets -- nothing guaranteed this grant, so any RM whose snapshot predated the
+            // module (or a preset re-save without the box) silently lost the whole screen.
+            new("sub-admin", PermissionModule.SupportTickets, View: true, Edit: true),
+            // The Founder Dashboard role was seeded with "every module" on 2026-09-21, two days
+            // before Parent Tickets existed, so it never had this grant: reported live
+            // (2026-10-09) as parent tickets not opening on the Founder Dashboard.
+            new("admin-management", PermissionModule.SupportTickets, View: true, Edit: true),
             // Lets a teacher see and resolve doubts the "Ask a Doubt" chatbot escalated —
             // Communication already gates Progress Reports/Email Templates for the same module.
             new("teacher", PermissionModule.Communication, View: true, Edit: true),
             new("coordinator", PermissionModule.Communication, View: true, Edit: true),
-            // SessionService.IsSessionParticipantAsync's SubAdmin branch requires CanEdit
-            // specifically (not just View) before letting a coordinator join a live class as a
-            // monitor — the seeded default grants Edit, but nothing protected it from being
-            // silently wiped by a preset re-save missing that checkbox, unlike every other
-            // required grant here. Confirmed live: a coordinator account could see every class
-            // on the calendar fine (View survives) but got 403 "You do not have access to this
-            // session" on every single Join Class click, with no per-session pattern to it.
+            // The coordinator schedules and reschedules classes, so its Create/Edit is baseline
+            // too, not just the View every admin-team preset now carries (below) — nothing else
+            // protected it from being silently wiped by a preset re-save missing that checkbox.
             new("coordinator", PermissionModule.SessionCalendarManagement, View: true, Create: true, Edit: true),
+            // Full calendar visibility for the whole admin team (client requirement): the
+            // Relationship Manager and Management see every upcoming and ongoing class too, and
+            // — since IsSessionParticipantAsync's SubAdmin branch only asks for this View grant —
+            // can join any of them as a monitor with no further approval.
+            new("sub-admin", PermissionModule.SessionCalendarManagement, View: true),
+            new("management", PermissionModule.SessionCalendarManagement, View: true),
+            // Short-class payout approval: Management / Owners decide full, partial or no payout
+            // for any class that ran shorter than scheduled (Payout Approvals), alongside Admin.
+            // Edit added alongside: staff compensation (fixed salary / collection percentage) is
+            // set and edited by Admin/Management (client requirement), same Payouts module.
+            new("management", PermissionModule.Payouts, View: true, Edit: true, Approve: true),
+            // Client requirement: an Admin's own leave is approved only by Management, never by
+            // Admin. The plain "Management" preset shipped read-only (no UserManagement grant at
+            // all), so without this there would be no one able to approve it — StaffLeaveService.
+            // ReviewAsync's own carve-out refuses an Admin reviewer on an Admin-submitted leave.
+            new("management", PermissionModule.UserManagement, View: true, Approve: true),
             new("parent", PermissionModule.SessionCalendarManagement, View: true),
             new("parent", PermissionModule.ContentAccessManagement, View: true),
             new("parent", PermissionModule.BillingFinance, View: true),
             new("parent", PermissionModule.Communication, View: true),
             new("admission", PermissionModule.BillingFinance, View: true, Edit: true, Approve: true),
+            // Delete is what DELETE /api/demo-bookings/{id} is gated on — the admission preset
+            // shipped without it, so the Demo Scheduling "Delete" button 403'd for the very team
+            // that books demos, and a demo created with a wrong parent email could neither be
+            // removed nor have its teacher slot freed to rebook it correctly.
+            new("admission", PermissionModule.Admission, View: true, Create: true, Edit: true, Delete: true, Approve: true),
             // The Admission Dashboard's KPI tiles, conversion funnel and "Today & Upcoming
             // Demos" list all read GET /api/sessions, which is gated on this module (see
             // SessionsController.List's [HasPermission] — the [Authorize(Roles=...)] on that
@@ -42,11 +81,38 @@ namespace iucs.meettomanage.application.Common
             // even on a real account with real demos. Confirmed live via network trace:
             // GET /api/sessions?fromUtc=...&toUtc=... → 403 for the admission role.
             new("admission", PermissionModule.SessionCalendarManagement, View: true),
+            // The Admission Dashboard's KPI tiles (Demos This Week, Demo->Enrollment Conversion,
+            // Pending Follow-ups, Revenue From Conversions) and Conversion Funnel chart all read
+            // GET /api/reports/dashboard-summary, gated on this module -- same root cause as the
+            // "sub-admin" grant above, just never applied to the AdmissionTeam system role itself.
+            // Confirmed live: a real AdmissionTeam account 403'd on this endpoint, showing
+            // "Couldn't load" on every KPI tile despite having real demos/leads to show.
+            new("admission", PermissionModule.ReportsAnalytics, View: true),
             // /management/revenue's course-wise breakdown reads GET /api/courses, which is
             // gated on this module, not ReportsAnalytics — without it the page's own API call
             // 403's and silently renders "No records found, ₹0 total" instead of the real
             // figures shown by the chart above it.
             new("management", PermissionModule.CourseBatchManagement, View: true),
+            // ClassSessionLogs is a net-new module (added alongside the Class Session Logs
+            // screen) — SeedRolesAsync's existing-role branch never re-derives a role's
+            // Permissions from AllModulesFull() once the row already exists, so an already-
+            // seeded "admin" RoleDefinition (every real install) never picked up this module
+            // the way a brand-new database's admin role automatically would. Functionally a
+            // real Admin *account* was never blocked by this — HasPermissionAttribute passes
+            // Admin implicitly, independent of any RolePermission row — but the Roles &
+            // Permissions screen's own matrix showed "Class Session Logs" unchecked for the
+            // Admin system role while every other module showed fully checked, which read as
+            // a real inconsistency/bug. Admin-only; no other system role gets this module by
+            // default (Class Session Logs is an IT/ops-monitoring capability, granted per-role
+            // like any other custom module — e.g. to a custom "IT Admin" preset — not baseline
+            // access for Coordinator/Management/etc.).
+            new("admin", PermissionModule.ClassSessionLogs, View: true, Create: true, Edit: true, Delete: true, Approve: true),
+            // Parent support tickets: the portal replaces WhatsApp/phone contact between families
+            // and the team, so every Relationship Manager must be able to read and answer them
+            // from day one. A net-new module, so existing "admin" rows need the same backfill as
+            // ClassSessionLogs above for the Roles & Permissions matrix to show it checked.
+            new("sub-admin", PermissionModule.SupportTickets, View: true, Edit: true),
+            new("admin", PermissionModule.SupportTickets, View: true, Create: true, Edit: true, Delete: true, Approve: true),
         ];
 
         public sealed record RequiredGrant(

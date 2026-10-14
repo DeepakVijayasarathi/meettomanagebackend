@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Dto.Auth;
 using iucs.meettomanage.application.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -31,12 +32,37 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<ActionResult<LoginResponse>> Me(CancellationToken cancellationToken)
         {
             var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            if (Guid.TryParse(User.FindFirstValue(ViewAsParent.ActorClaimType), out var actorId)
+                && long.TryParse(User.FindFirstValue("exp"), out var exp))
+            {
+                var expiresAtUtc = DateTimeOffset.FromUnixTimeSeconds(exp).UtcDateTime;
+                return Ok(await _authService.GetViewAsCurrentUserAsync(userId, actorId, expiresAtUtc, cancellationToken));
+            }
+
             return Ok(await _authService.GetCurrentUserAsync(userId, cancellationToken));
         }
 
         /// <summary>
-        /// Always responds the same way whether or not the address has an account — the
-        /// frontend shows one fixed "if that email exists, we've sent a link" message either way.
+        /// Closes a "view as parent" session (called with the view-as token itself, the one
+        /// write ViewAsReadOnlyMiddleware lets through) so the audit log records when it ended.
+        /// </summary>
+        [HttpPost("view-as/end")]
+        [Authorize]
+        public async Task<IActionResult> EndViewAs(CancellationToken cancellationToken)
+        {
+            if (User.FindFirstValue(ViewAsParent.ActorClaimType) is null)
+            {
+                return NoContent();
+            }
+
+            var parentId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            await _authService.EndViewAsParentAsync(parentId, cancellationToken);
+            return NoContent();
+        }
+
+        /// <summary>
+        /// 204 if the address/mobile number has an account and the reset link (or WhatsApp-only
+        /// staff alert) was sent; 404 otherwise — see AuthService.RequestPinResetAsync.
         /// </summary>
         [HttpPost("forgot-pin")]
         [AllowAnonymous]
@@ -44,6 +70,17 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<IActionResult> ForgotPin(ForgotPinRequest request, CancellationToken cancellationToken)
         {
             await _authService.RequestPinResetAsync(request, cancellationToken);
+            return NoContent();
+        }
+
+        /// <summary>The signed-in user (any role, Admin included) changes their own PIN.</summary>
+        [HttpPost("change-pin")]
+        [Authorize]
+        [EnableRateLimiting("pin-reset")]
+        public async Task<IActionResult> ChangePin(ChangePinRequest request, CancellationToken cancellationToken)
+        {
+            var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            await _authService.ChangePinAsync(userId, request, cancellationToken);
             return NoContent();
         }
 

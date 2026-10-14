@@ -1,16 +1,19 @@
 using System.Text;
+using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.application.Dto.Reports;
 using iucs.meettomanage.application.Helper;
 using iucs.meettomanage.domain.Entities.Academics;
 using iucs.meettomanage.domain.Entities.Admission;
 using iucs.meettomanage.domain.Entities.Billing;
+using iucs.meettomanage.domain.Entities.Communication;
 using iucs.meettomanage.domain.Entities.Payouts;
 using iucs.meettomanage.domain.Entities.Sessions;
 using iucs.meettomanage.domain.Entities.Users;
 using iucs.meettomanage.domain.Enums;
 using iucs.meettomanage.domain.Repository;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace iucs.meettomanage.application.Services
 {
@@ -18,11 +21,18 @@ namespace iucs.meettomanage.application.Services
     {
         private readonly IUnitOfWork _unitOfWork;
         private readonly INotificationService _notificationService;
+        private readonly IMemoryCache? _cache;
 
-        public ReportsService(IUnitOfWork unitOfWork, INotificationService notificationService)
+        // The dashboard summary is org-wide (not per user) and a screenful of aggregates; a
+        // minute of staleness is invisible, recomputing it on every page view is not.
+        private const string DashboardSummaryCacheKey = "reports:dashboard-summary";
+        private static readonly TimeSpan DashboardSummaryTtl = TimeSpan.FromSeconds(60);
+
+        public ReportsService(IUnitOfWork unitOfWork, INotificationService notificationService, IMemoryCache? cache = null)
         {
             _unitOfWork = unitOfWork;
             _notificationService = notificationService;
+            _cache = cache;
         }
 
         public async Task<IReadOnlyList<TeacherPerformanceDto>> GetTeacherPerformanceAsync(CancellationToken cancellationToken = default)
@@ -50,6 +60,18 @@ namespace iucs.meettomanage.application.Services
             var sessionsByTeacher = sessions.ToLookup(s => s.TeacherProfileId);
             var attendanceBySession = attendanceRows.ToLookup(a => a.ClassSessionId);
 
+            // Status + total only, not the itemized items collection — see LatestPayoutMonth's
+            // own doc comment on why this stays a summary and GET /api/payouts (Admin-only)
+            // remains the only place to see line items.
+            var latestPayoutByTeacher = (await _unitOfWork.Repository<Payout>().Query()
+                .Where(p => teacherIds.Contains(p.TeacherProfileId))
+                .Select(p => new { p.TeacherProfileId, p.PeriodYear, p.PeriodMonth, p.Status, p.TotalAmount })
+                .ToListAsync(cancellationToken))
+                .GroupBy(p => p.TeacherProfileId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderByDescending(p => p.PeriodYear).ThenByDescending(p => p.PeriodMonth).First());
+
             var now = DateTime.UtcNow;
             var result = new List<TeacherPerformanceDto>(teachers.Count);
             foreach (var teacher in teachers)
@@ -63,19 +85,27 @@ namespace iucs.meettomanage.application.Services
                     .SelectMany(id => attendanceBySession[id])
                     .Select(a => a.Status)
                     .ToList();
+                var latestPayout = latestPayoutByTeacher.GetValueOrDefault(teacher.Id);
 
                 result.Add(new TeacherPerformanceDto
                 {
                     TeacherProfileId = teacher.Id,
-                    TeacherName = $"{teacher.User.FirstName} {teacher.User.LastName}",
+                    TeacherName = $"{teacher.User.FirstName} {teacher.User.LastName}".Trim(),
                     Department = teacher.Department?.Name,
                     SessionsCompleted = teacherCompletedIds.Count,
                     TeacherNoShows = teacherSessions.Count(s => s.Status == SessionStatus.TeacherNoShow),
                     UpcomingSessions = teacherSessions.Count(s => s.Status == SessionStatus.Scheduled && s.ScheduledStartAtUtc > now),
+                    // Null (not a vacuous 100%) when there's no attendance data yet — a teacher
+                    // with zero completed sessions hasn't earned a perfect score, they just
+                    // haven't been measured. See the DTO's doc comment.
                     StudentAttendancePercent = teacherAttendance.Count == 0
-                        ? 100
+                        ? null
                         : Math.Round(100.0 * teacherAttendance.Count(a => a != AttendanceStatus.Absent) / teacherAttendance.Count, 1),
                     SummariesWritten = teacherSessions.Count(s => s.HasSummary),
+                    LatestPayoutPeriodYear = latestPayout?.PeriodYear,
+                    LatestPayoutPeriodMonth = latestPayout?.PeriodMonth,
+                    LatestPayoutStatus = latestPayout?.Status,
+                    LatestPayoutAmount = latestPayout?.TotalAmount,
                 });
             }
 
@@ -92,7 +122,9 @@ namespace iucs.meettomanage.application.Services
                 .Select(a => a.Status)
                 .ToListAsync(cancellationToken);
             var attended = attendance.Count(a => a != AttendanceStatus.Absent);
-            var attendancePercent = attendance.Count == 0 ? 100 : Math.Round(100.0 * attended / attendance.Count, 1);
+            // Null (not a vacuous 100%) when there's no attendance data yet -- same fix as
+            // ParentPortalService.GetDashboardAsync and TeacherPerformanceDto.
+            double? attendancePercent = attendance.Count == 0 ? null : Math.Round(100.0 * attended / attendance.Count, 1);
 
             var events = await _unitOfWork.Repository<EngagementEvent>().Query()
                 .Where(e => e.ChildId == childId)
@@ -123,11 +155,13 @@ namespace iucs.meettomanage.application.Services
             // Generated progress insights: rule-based narrative from the captured signals
             var name = child.FirstName;
             var insights = new List<string>();
-            insights.Add(attendancePercent >= 90
-                ? $"{name} attends consistently ({attendancePercent}%) — a strong routine is in place."
-                : attendancePercent >= 75
-                    ? $"{name}'s attendance is {attendancePercent}%; a steadier routine would compound progress."
-                    : $"Attendance is {attendancePercent}% — missed classes are the biggest lever for {name} right now.");
+            insights.Add(attendancePercent is null
+                ? $"No completed sessions yet for {name} — attendance insights will appear after their first class."
+                : attendancePercent >= 90
+                    ? $"{name} attends consistently ({attendancePercent}%) — a strong routine is in place."
+                    : attendancePercent >= 75
+                        ? $"{name}'s attendance is {attendancePercent}%; a steadier routine would compound progress."
+                        : $"Attendance is {attendancePercent}% — missed classes are the biggest lever for {name} right now.");
             if (quizAttempts > 0)
             {
                 var accuracy = Math.Round(100.0 * quizCorrect / Math.Max(1, quizAttempts));
@@ -159,7 +193,7 @@ namespace iucs.meettomanage.application.Services
             return new StudentAnalyticsDto
             {
                 ChildId = child.Id,
-                ChildName = $"{child.FirstName} {child.LastName}",
+                ChildName = $"{child.FirstName} {child.LastName}".Trim(),
                 AttendancePercent = attendancePercent,
                 SessionsAttended = attended,
                 QuizAttempts = quizAttempts,
@@ -175,13 +209,33 @@ namespace iucs.meettomanage.application.Services
 
         public async Task<DashboardSummaryDto> GetDashboardSummaryAsync(CancellationToken cancellationToken = default)
         {
+            if (_cache is null)
+            {
+                return await ComputeDashboardSummaryAsync(cancellationToken);
+            }
+
+            // GetOrCreateAsync doesn't lock, so concurrent cold hits may each compute once —
+            // harmless, and still far cheaper than computing on every request.
+            var summary = await _cache.GetOrCreateAsync(DashboardSummaryCacheKey, entry =>
+            {
+                entry.AbsoluteExpirationRelativeToNow = DashboardSummaryTtl;
+                return ComputeDashboardSummaryAsync(cancellationToken);
+            });
+            return summary!;
+        }
+
+        private async Task<DashboardSummaryDto> ComputeDashboardSummaryAsync(CancellationToken cancellationToken)
+        {
             var totalStudents = await _unitOfWork.Repository<Child>().Query().CountAsync(cancellationToken);
             var activeStudents = await _unitOfWork.Repository<Child>().Query().CountAsync(c => c.IsActive, cancellationToken);
             var totalEnrollments = await _unitOfWork.Repository<BatchEnrollment>().Query()
                 .CountAsync(e => e.Status == EnrollmentStatus.Active, cancellationToken);
 
+            // Grouped in the database: this used to pull every invoice ever raised into memory
+            // just to sum them, getting slower with every invoice.
             var invoices = await _unitOfWork.Repository<Invoice>().Query()
-                .Select(i => new { DepartmentName = i.Department.Name, i.Amount, i.AmountPaid, i.Status, i.CourseId, CourseName = i.Course != null ? i.Course.Name : null })
+                .GroupBy(i => new { DepartmentName = i.Department.Name, i.CourseId, CourseName = i.Course != null ? i.Course.Name : null, i.Status })
+                .Select(g => new { g.Key.DepartmentName, g.Key.CourseId, g.Key.CourseName, g.Key.Status, Amount = g.Sum(i => i.Amount), AmountPaid = g.Sum(i => i.AmountPaid) })
                 .ToListAsync(cancellationToken);
             var revenueCollected = invoices.Sum(i => i.AmountPaid);
             var revenuePending = invoices
@@ -257,17 +311,25 @@ namespace iucs.meettomanage.application.Services
                 .ToList();
 
             // Revenue trend: successful payments grouped into the last 6 calendar months (oldest first).
-            var trendStart = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(-5);
-            var successfulPayments = await _unitOfWork.Repository<PaymentTransaction>().Query()
-                .Where(t => t.Status == TransactionStatus.Success && t.PaidAtUtc != null && t.PaidAtUtc >= trendStart)
-                .Select(t => new { t.PaidAtUtc, t.Amount })
-                .ToListAsync(cancellationToken);
+            // Months are the academy's local (IST) calendar months, not UTC ones -- a UTC month
+            // put every payment made between 00:00 and 05:30 IST on the 1st into the previous
+            // month, so "Revenue This Month" on the dashboards didn't match what staff collected.
+            var zone = TimeZoneInfo.FindSystemTimeZoneById(DateTimeDisplay.DefaultTimeZoneId);
+            var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zone);
+            var localTrendStart = new DateTime(localNow.Year, localNow.Month, 1, 0, 0, 0, DateTimeKind.Unspecified).AddMonths(-5);
+            var trendStart = TimeZoneInfo.ConvertTimeToUtc(localTrendStart, zone);
+            var successfulPayments = (await _unitOfWork.Repository<PaymentTransaction>().Query()
+                    .Where(t => t.Status == TransactionStatus.Success && t.PaidAtUtc != null && t.PaidAtUtc >= trendStart)
+                    .Select(t => new { t.PaidAtUtc, t.Amount })
+                    .ToListAsync(cancellationToken))
+                .Select(t => new { PaidLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(t.PaidAtUtc!.Value, DateTimeKind.Utc), zone), t.Amount })
+                .ToList();
             var revenueTrend = Enumerable.Range(0, 6)
                 .Select(offset =>
                 {
-                    var month = trendStart.AddMonths(offset);
+                    var month = localTrendStart.AddMonths(offset);
                     var revenue = successfulPayments
-                        .Where(p => p.PaidAtUtc!.Value.Year == month.Year && p.PaidAtUtc.Value.Month == month.Month)
+                        .Where(p => p.PaidLocal.Year == month.Year && p.PaidLocal.Month == month.Month)
                         .Sum(p => p.Amount);
                     return new RevenuePointDto { Month = month.ToString("MMM"), Revenue = revenue };
                 })
@@ -277,26 +339,28 @@ namespace iucs.meettomanage.application.Services
             var today = DateTime.UtcNow.Date;
             var mondayThisWeek = today.AddDays(-(((int)today.DayOfWeek + 6) % 7));
             var attendanceWindowStart = mondayThisWeek.AddDays(-7 * 5);
-            var attendanceRows = await _unitOfWork.Repository<SessionAttendance>().Query()
-                .Where(a => a.ParticipantType == ParticipantType.Student
-                    && a.ClassSession.ScheduledStartAtUtc >= attendanceWindowStart)
-                .Select(a => new { a.Status, a.ClassSession.ScheduledStartAtUtc })
-                .ToListAsync(cancellationToken);
-            var weeklyAttendanceTrend = Enumerable.Range(0, 6)
-                .Select(offset =>
+            // One small grouped count per week instead of loading six weeks of attendance rows
+            // (one per student per class) just to bucket them in memory.
+            var weeklyAttendanceTrend = new List<AttendanceWeekDto>();
+            for (var offset = 0; offset < 6; offset++)
+            {
+                var weekStart = attendanceWindowStart.AddDays(7 * offset);
+                var weekEnd = weekStart.AddDays(7);
+                var counts = await _unitOfWork.Repository<SessionAttendance>().Query()
+                    .Where(a => a.ParticipantType == ParticipantType.Student
+                        && a.ClassSession.ScheduledStartAtUtc >= weekStart
+                        && a.ClassSession.ScheduledStartAtUtc < weekEnd)
+                    .GroupBy(a => a.Status == AttendanceStatus.Absent)
+                    .Select(g => new { Absent = g.Key, Count = g.Count() })
+                    .ToListAsync(cancellationToken);
+                var total = counts.Sum(c => c.Count);
+                var present = counts.Where(c => !c.Absent).Sum(c => c.Count);
+                weeklyAttendanceTrend.Add(new AttendanceWeekDto
                 {
-                    var weekStart = attendanceWindowStart.AddDays(7 * offset);
-                    var weekEnd = weekStart.AddDays(7);
-                    var week = attendanceRows.Where(r => r.ScheduledStartAtUtc >= weekStart && r.ScheduledStartAtUtc < weekEnd).ToList();
-                    return new AttendanceWeekDto
-                    {
-                        Week = weekStart.ToString("dd MMM"),
-                        Attendance = week.Count == 0
-                            ? 0
-                            : Math.Round(100.0 * week.Count(r => r.Status != AttendanceStatus.Absent) / week.Count, 1),
-                    };
-                })
-                .ToList();
+                    Week = weekStart.ToString("dd MMM"),
+                    Attendance = total == 0 ? 0 : Math.Round(100.0 * present / total, 1),
+                });
+            }
 
             // Batch occupancy split by course (active batches only, highest fill first).
             var occupancyByCourseRows = await _unitOfWork.Repository<Batch>().Query()
@@ -350,7 +414,7 @@ namespace iucs.meettomanage.application.Services
             var enrollmentFunnel = new List<FunnelStageDto>
             {
                 new() { Stage = "Demo Booked", Value = demoTotal },
-                new() { Stage = "Demo Completed", Value = StageCount(ConversionStatus.DemoCompleted, ConversionStatus.FollowUpInProgress, ConversionStatus.Enrolled) },
+                new() { Stage = "Demo Completed", Value = StageCount(ConversionStatus.DemoCompleted, ConversionStatus.FollowUpInProgress, ConversionStatus.PaymentPending, ConversionStatus.PartiallyPaid, ConversionStatus.PaymentReceived, ConversionStatus.ReadyForEnrollment, ConversionStatus.Enrolled) },
                 new() { Stage = "Follow-up", Value = StageCount(ConversionStatus.FollowUpInProgress, ConversionStatus.Enrolled) },
                 new() { Stage = "Enrolled", Value = demoEnrolled },
             };
@@ -381,6 +445,144 @@ namespace iucs.meettomanage.application.Services
             };
         }
 
+        public async Task<MyCollectionsDto> GetMyCollectionsAsync(Guid userId, CancellationToken cancellationToken = default)
+        {
+            var zone = TimeZoneInfo.FindSystemTimeZoneById(DateTimeDisplay.DefaultTimeZoneId);
+            var localNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, zone);
+            var localMonthStart = new DateTime(localNow.Year, localNow.Month, 1, 0, 0, 0, DateTimeKind.Unspecified);
+            var thisMonthStart = TimeZoneInfo.ConvertTimeToUtc(localMonthStart, zone);
+            var lastMonthStart = TimeZoneInfo.ConvertTimeToUtc(localMonthStart.AddMonths(-1), zone);
+
+            var payments = await CollectionOwnership.OwnedBy(
+                    _unitOfWork.Repository<PaymentTransaction>().Query(),
+                    _unitOfWork.Repository<DemoBooking>().Query(),
+                    userId)
+                .Where(t => t.Status == TransactionStatus.Success && t.PaidAtUtc != null && t.PaidAtUtc >= lastMonthStart)
+                .Select(t => new
+                {
+                    PaidAtUtc = t.PaidAtUtc!.Value,
+                    t.Amount,
+                    t.Invoice.InvoiceNumber,
+                    ParentFirst = t.Invoice.ParentProfile.User.FirstName,
+                    ParentLast = t.Invoice.ParentProfile.User.LastName,
+                    ChildFirst = t.Invoice.Child != null ? t.Invoice.Child.FirstName : null,
+                    ChildLast = t.Invoice.Child != null ? t.Invoice.Child.LastName : null,
+                    t.Method,
+                })
+                .ToListAsync(cancellationToken);
+
+            var thisMonth = payments.Where(p => p.PaidAtUtc >= thisMonthStart).ToList();
+            return new MyCollectionsDto
+            {
+                ThisMonth = thisMonth.Sum(p => p.Amount),
+                ThisMonthPayments = thisMonth.Count,
+                LastMonth = payments.Where(p => p.PaidAtUtc < thisMonthStart).Sum(p => p.Amount),
+                Payments = thisMonth
+                    .OrderByDescending(p => p.PaidAtUtc)
+                    .Select(p => new MyCollectionPaymentDto
+                    {
+                        PaidAtUtc = DateTime.SpecifyKind(p.PaidAtUtc, DateTimeKind.Utc),
+                        Amount = p.Amount,
+                        InvoiceNumber = p.InvoiceNumber,
+                        ParentName = $"{p.ParentFirst} {p.ParentLast}".Trim(),
+                        ChildName = p.ChildFirst is null ? null : $"{p.ChildFirst} {p.ChildLast}".Trim(),
+                        Method = p.Method?.ToString(),
+                    })
+                    .ToList(),
+            };
+        }
+
+        public async Task<MonthlyFinanceSummaryDto> GetMonthlyFinanceSummaryAsync(int year, int month, CancellationToken cancellationToken = default)
+        {
+            if (year is < 2000 or > 2100 || month is < 1 or > 12)
+            {
+                throw new DomainValidationException("Pick a valid month.");
+            }
+
+            var zone = TimeZoneInfo.FindSystemTimeZoneById(DateTimeDisplay.DefaultTimeZoneId);
+            var localMonthStart = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Unspecified);
+            var monthStart = TimeZoneInfo.ConvertTimeToUtc(localMonthStart, zone);
+            var monthEnd = TimeZoneInfo.ConvertTimeToUtc(localMonthStart.AddMonths(1), zone);
+
+            // A demo counts as conducted once its class completed or the lead moved past
+            // "scheduled" -- same stage set as the dashboard funnel's "Demo Completed".
+            ConversionStatus[] pastDemo =
+            [
+                ConversionStatus.DemoCompleted, ConversionStatus.FollowUpInProgress, ConversionStatus.PaymentPending,
+                ConversionStatus.PartiallyPaid, ConversionStatus.PaymentReceived, ConversionStatus.ReadyForEnrollment,
+                ConversionStatus.Enrolled,
+            ];
+            var demos = await _unitOfWork.Repository<DemoBooking>().Query()
+                .Where(b => b.ClassSession != null
+                    && b.ClassSession.ScheduledStartAtUtc >= monthStart && b.ClassSession.ScheduledStartAtUtc < monthEnd
+                    && (b.ClassSession.Status == SessionStatus.Completed || pastDemo.Contains(b.ConversionStatus)))
+                .Select(b => new { b.CreatedBy, b.ConversionStatus })
+                .ToListAsync(cancellationToken);
+            static bool Converted(ConversionStatus s) => s is ConversionStatus.Enrolled or ConversionStatus.ReadyForEnrollment;
+            static double Rate(int converted, int conducted) => conducted == 0 ? 0 : Math.Round(100.0 * converted / conducted, 1);
+
+            var totalCollected = await _unitOfWork.Repository<PaymentTransaction>().Query()
+                .Where(t => t.Status == TransactionStatus.Success && t.PaidAtUtc != null && t.PaidAtUtc >= monthStart && t.PaidAtUtc < monthEnd)
+                .SumAsync(t => (decimal?)t.Amount, cancellationToken) ?? 0m;
+
+            // Counselor rows: the admission team, plus anyone paid a percentage of their own
+            // collection. Everyone else's collections (an admin's manual invoice, say) are "Others".
+            var percentPaidUserIds = _unitOfWork.Repository<StaffCompensationSetting>().Query()
+                .Where(s => s.Basis == CompensationBasis.PercentOfMonthlyCollection)
+                .Select(s => s.UserId);
+            var counselors = await _unitOfWork.Repository<User>().Query()
+                .Where(u => u.Role == UserRole.AdmissionTeam || percentPaidUserIds.Contains(u.Id))
+                .OrderBy(u => u.FirstName).ThenBy(u => u.LastName)
+                .Select(u => new { u.Id, u.FirstName, u.LastName, u.Status })
+                .ToListAsync(cancellationToken);
+
+            var rows = new List<CounselorMonthDto>();
+            foreach (var counselor in counselors)
+            {
+                // The very same query their salary and their own dashboard figure use, so the
+                // three can never disagree.
+                var collected = await CollectionOwnership.OwnedBy(
+                        _unitOfWork.Repository<PaymentTransaction>().Query(),
+                        _unitOfWork.Repository<DemoBooking>().Query(),
+                        counselor.Id)
+                    .Where(t => t.Status == TransactionStatus.Success && t.PaidAtUtc != null && t.PaidAtUtc >= monthStart && t.PaidAtUtc < monthEnd)
+                    .SumAsync(t => (decimal?)t.Amount, cancellationToken) ?? 0m;
+                var own = demos.Where(d => d.CreatedBy == counselor.Id).ToList();
+                var converted = own.Count(d => Converted(d.ConversionStatus));
+
+                // Someone who has left and did nothing this month is just noise in the table.
+                if (counselor.Status != UserStatus.Active && collected == 0m && own.Count == 0)
+                {
+                    continue;
+                }
+
+                rows.Add(new CounselorMonthDto
+                {
+                    UserId = counselor.Id,
+                    Name = $"{counselor.FirstName} {counselor.LastName}".Trim(),
+                    DemosConducted = own.Count,
+                    DemosConverted = converted,
+                    ConversionRatePercent = Rate(converted, own.Count),
+                    AmountCollected = collected,
+                });
+            }
+
+            var counselorCollected = rows.Sum(r => r.AmountCollected);
+            var demosConverted = demos.Count(d => Converted(d.ConversionStatus));
+            return new MonthlyFinanceSummaryDto
+            {
+                Year = year,
+                Month = month,
+                DemosConducted = demos.Count,
+                DemosConverted = demosConverted,
+                ConversionRatePercent = Rate(demosConverted, demos.Count),
+                CounselorCollected = counselorCollected,
+                OthersCollected = totalCollected - counselorCollected,
+                TotalCollected = totalCollected,
+                Counselors = rows,
+            };
+        }
+
         public async Task<string> ExportCsvAsync(string report, CancellationToken cancellationToken = default)
         {
             return report.ToLowerInvariant() switch
@@ -394,23 +596,229 @@ namespace iucs.meettomanage.application.Services
             };
         }
 
-        public async Task<BulkEmailResultDto> SendBulkEmailAsync(BulkEmailRequest request, CancellationToken cancellationToken = default)
+        public async Task<BulkEmailResultDto> SendBulkEmailAsync(
+            Guid sentByUserId, BulkEmailRequest request, CancellationToken cancellationToken = default)
+        {
+            var result = await QueueBulkEmailAsync(sentByUserId, request, cancellationToken);
+            await ProcessPendingBulkEmailAsync(cancellationToken);
+            return result;
+        }
+
+        // Records the blast and one Pending recipient row per parent, then returns at once.
+        // BulkEmailQueueBackgroundService drains the Pending rows, so a few hundred SMTP round
+        // trips never sit inside the admin's HTTP request (which used to time out with "Can't
+        // reach the server"), and anything still Pending after a restart is picked up again.
+        public async Task<BulkEmailResultDto> QueueBulkEmailAsync(
+            Guid sentByUserId, BulkEmailRequest request, CancellationToken cancellationToken = default)
         {
             var recipients = await ResolveBulkEmailRecipientsAsync(request.BatchId, cancellationToken);
 
+            var blast = new BulkEmailBlast
+            {
+                SentByUserId = sentByUserId,
+                Subject = request.Subject,
+                Body = request.Body,
+                Scope = request.BatchId.HasValue ? BulkEmailScope.Batch : BulkEmailScope.AllActiveParents,
+                BatchId = request.BatchId,
+                SentAtUtc = DateTime.UtcNow,
+                TotalRecipients = recipients.Count,
+            };
+            await _unitOfWork.Repository<BulkEmailBlast>().AddAsync(blast, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
             foreach (var user in recipients)
             {
-                await _notificationService.SendEmailAsync(
-                    user.Id, user.Email, NotificationType.General, request.Subject, request.Body, cancellationToken);
+                await _unitOfWork.Repository<BulkEmailRecipient>().AddAsync(new BulkEmailRecipient
+                {
+                    BulkEmailBlastId = blast.Id,
+                    RecipientUserId = user.Id,
+                    Email = user.Email,
+                    Status = NotificationStatus.Pending,
+                }, cancellationToken);
             }
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return new BulkEmailResultDto { RecipientCount = recipients.Count };
+        }
+
+        // Delivers every Pending bulk-email recipient, oldest first. One recipient's failed
+        // delivery (bad address, transport hiccup) must never abort the rest -- SendEmailAsync
+        // already swallows its own delivery error and reports the resulting status instead of
+        // throwing. Returns how many recipients were attempted.
+        public async Task<int> ProcessPendingBulkEmailAsync(CancellationToken cancellationToken = default)
+        {
+            var processed = 0;
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                var pendingIds = await _unitOfWork.Repository<BulkEmailRecipient>().Query()
+                    .Where(r => r.Status == NotificationStatus.Pending)
+                    .OrderBy(r => r.CreatedAtUtc)
+                    .Select(r => r.Id)
+                    .Take(25)
+                    .ToListAsync(cancellationToken);
+                if (pendingIds.Count == 0) break;
+
+                foreach (var id in pendingIds)
+                {
+                    // Tracked loads (not Query(), which is no-tracking): every recipient of a blast
+                    // must share ONE blast instance so its Success/Failure counts accumulate.
+                    var recipient = await _unitOfWork.Repository<BulkEmailRecipient>().GetByIdAsync(id, cancellationToken);
+                    if (recipient is null || recipient.Status != NotificationStatus.Pending) continue;
+                    var blast = await _unitOfWork.Repository<BulkEmailBlast>().GetByIdAsync(recipient.BulkEmailBlastId, cancellationToken);
+                    if (blast is null) continue;
+
+                    var status = await _notificationService.SendEmailAsync(
+                        recipient.RecipientUserId, recipient.Email, NotificationType.General,
+                        blast.Subject, blast.Body, recipient.Id, cancellationToken);
+
+                    var sent = status == NotificationStatus.Sent;
+                    recipient.Status = sent ? NotificationStatus.Sent : NotificationStatus.Failed;
+                    recipient.SentAtUtc = sent ? DateTime.UtcNow : null;
+                    if (sent)
+                    {
+                        blast.SuccessCount++;
+                    }
+                    else
+                    {
+                        recipient.ErrorMessage = "Email delivery failed.";
+                        blast.FailureCount++;
+                    }
+
+                    await _unitOfWork.SaveChangesAsync(cancellationToken);
+                    processed++;
+                }
+            }
+
+            return processed;
         }
 
         public async Task<BulkEmailResultDto> PreviewBulkEmailAsync(Guid? batchId, CancellationToken cancellationToken = default)
         {
             var recipients = await ResolveBulkEmailRecipientsAsync(batchId, cancellationToken);
             return new BulkEmailResultDto { RecipientCount = recipients.Count };
+        }
+
+        public async Task<IReadOnlyList<BulkEmailHistoryItemDto>> GetBulkEmailHistoryAsync(CancellationToken cancellationToken = default)
+        {
+            return await _unitOfWork.Repository<BulkEmailBlast>().Query()
+                .Include(b => b.SentByUser)
+                .Include(b => b.Batch)
+                .OrderByDescending(b => b.SentAtUtc)
+                .Select(b => new BulkEmailHistoryItemDto
+                {
+                    Id = b.Id,
+                    Subject = b.Subject,
+                    SentByName = (b.SentByUser.FirstName + " " + b.SentByUser.LastName).Trim(),
+                    Scope = b.Scope,
+                    BatchName = b.Batch != null ? b.Batch.Name : null,
+                    SentAtUtc = b.SentAtUtc,
+                    TotalRecipients = b.TotalRecipients,
+                    SuccessCount = b.SuccessCount,
+                    FailureCount = b.FailureCount,
+                })
+                .ToListAsync(cancellationToken);
+        }
+
+        public async Task<BulkEmailBlastDetailDto> GetBulkEmailBlastDetailAsync(Guid blastId, CancellationToken cancellationToken = default)
+        {
+            var blast = await _unitOfWork.Repository<BulkEmailBlast>().Query()
+                .Include(b => b.SentByUser)
+                .Include(b => b.Batch)
+                .Include(b => b.Recipients).ThenInclude(r => r.RecipientUser)
+                .Include(b => b.Recipients).ThenInclude(r => r.Reply)
+                .FirstOrDefaultAsync(b => b.Id == blastId, cancellationToken)
+                ?? throw new NotFoundException(nameof(BulkEmailBlast), blastId);
+
+            return new BulkEmailBlastDetailDto
+            {
+                Id = blast.Id,
+                Subject = blast.Subject,
+                Body = blast.Body,
+                SentByName = $"{blast.SentByUser.FirstName} {blast.SentByUser.LastName}".Trim(),
+                Scope = blast.Scope,
+                BatchName = blast.Batch?.Name,
+                SentAtUtc = blast.SentAtUtc,
+                Recipients = blast.Recipients
+                    .OrderBy(r => r.RecipientUser.FirstName)
+                    .Select(r => new BulkEmailRecipientDto
+                    {
+                        Id = r.Id,
+                        RecipientName = $"{r.RecipientUser.FirstName} {r.RecipientUser.LastName}".Trim(),
+                        Email = r.Email,
+                        Status = r.Status,
+                        ErrorMessage = r.ErrorMessage,
+                        SentAtUtc = r.SentAtUtc,
+                        ReplyMessage = r.Reply?.Message,
+                        ReplyAtUtc = r.Reply?.RepliedAtUtc,
+                    })
+                    .ToList(),
+            };
+        }
+
+        public async Task<IReadOnlyList<EmailHistoryItemDto>> GetEmailHistoryAsync(
+            NotificationType? type, int take, CancellationToken cancellationToken = default)
+        {
+            // BulkEmailRecipientId != null is exactly a Bulk Email's own per-recipient copy
+            // (SendBulkEmailAsync sets it on every SendEmailAsync call it makes) -- excluded here
+            // since BulkEmailHistoryItemDto/BulkEmailBlastDetailDto already cover those, grouped
+            // by the send event rather than one flat row per recipient.
+            var query = _unitOfWork.Repository<Notification>().Query()
+                .Include(n => n.RecipientUser)
+                .Where(n => n.Channel == NotificationChannel.Email && n.BulkEmailRecipientId == null);
+
+            if (type.HasValue)
+            {
+                query = query.Where(n => n.Type == type.Value);
+            }
+
+            return await query
+                // Sent/Failed both leave SentAtUtc null on failure -- CreatedAtUtc is what every
+                // row actually has, so it's the reliable newest-first key regardless of outcome.
+                .OrderByDescending(n => n.CreatedAtUtc)
+                .Take(take)
+                .Select(n => new EmailHistoryItemDto
+                {
+                    Id = n.Id,
+                    RecipientName = (n.RecipientUser.FirstName + " " + n.RecipientUser.LastName).Trim(),
+                    RecipientEmail = n.RecipientUser.Email,
+                    Subject = n.Subject,
+                    Type = n.Type,
+                    TemplateKey = n.TemplateKey,
+                    Status = n.Status,
+                    SentAtUtc = n.SentAtUtc,
+                    CreatedAtUtc = n.CreatedAtUtc,
+                })
+                .ToListAsync(cancellationToken);
+        }
+
+        public async Task ReplyToBulkEmailAsync(
+            Guid parentUserId, Guid bulkEmailRecipientId, ReplyToBulkEmailRequest request, CancellationToken cancellationToken = default)
+        {
+            var recipient = await _unitOfWork.Repository<BulkEmailRecipient>().Query()
+                .Include(r => r.Reply)
+                .FirstOrDefaultAsync(r => r.Id == bulkEmailRecipientId, cancellationToken)
+                ?? throw new NotFoundException(nameof(BulkEmailRecipient), bulkEmailRecipientId);
+
+            if (recipient.RecipientUserId != parentUserId)
+            {
+                throw new DomainValidationException("This Bulk Email wasn't sent to you.");
+            }
+
+            if (recipient.Reply is not null)
+            {
+                throw new DomainValidationException("You've already replied to this email.");
+            }
+
+            await _unitOfWork.Repository<BulkEmailReply>().AddAsync(
+                new BulkEmailReply
+                {
+                    BulkEmailRecipientId = bulkEmailRecipientId,
+                    ParentUserId = parentUserId,
+                    Message = request.Message.Trim(),
+                    RepliedAtUtc = DateTime.UtcNow,
+                },
+                cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
         /// <summary>
@@ -445,7 +853,7 @@ namespace iucs.meettomanage.application.Services
             var csv = new StringBuilder("SessionStartUtc,ParticipantType,Participant,Status,JoinedAtUtc,LeftAtUtc\n");
             foreach (var a in rows)
             {
-                var name = a.Child is null ? a.TeacherProfileId?.ToString() : $"{a.Child.FirstName} {a.Child.LastName}";
+                var name = a.Child is null ? a.TeacherProfileId?.ToString() : $"{a.Child.FirstName} {a.Child.LastName}".Trim();
                 csv.AppendLine(string.Join(',',
                     Escape($"{a.ClassSession.ScheduledStartAtUtc:u}"), a.ParticipantType, Escape(name),
                     a.Status, Escape($"{a.JoinedAtUtc:u}"), Escape($"{a.LeftAtUtc:u}")));
@@ -484,7 +892,7 @@ namespace iucs.meettomanage.application.Services
             foreach (var p in payouts)
             {
                 csv.AppendLine(string.Join(',',
-                    Escape($"{p.TeacherProfile.User.FirstName} {p.TeacherProfile.User.LastName}"),
+                    Escape($"{p.TeacherProfile.User.FirstName} {p.TeacherProfile.User.LastName}".Trim()),
                     $"{p.PeriodYear}-{p.PeriodMonth:D2}", p.Status,
                     p.Items.Count(i => i.Type == PayoutItemType.SessionEarning), p.TotalAmount));
             }

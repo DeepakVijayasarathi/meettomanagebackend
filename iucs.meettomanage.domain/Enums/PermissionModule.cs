@@ -16,6 +16,8 @@ namespace iucs.meettomanage.domain.Enums
         LeaveManagement,
         Communication,
         Settings,
-        SystemMonitoring
+        SystemMonitoring,
+        ClassSessionLogs,
+        SupportTickets
     }
 }
