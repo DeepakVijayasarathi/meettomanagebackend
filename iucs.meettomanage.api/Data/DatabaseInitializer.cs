@@ -424,6 +424,7 @@ namespace iucs.meettomanage.api.Data
                 (PermissionModule.SystemMonitoring, "Server Monitoring"),
                 (PermissionModule.ClassSessionLogs, "Class Session Logs"),
                 (PermissionModule.SupportTickets, "Support Tickets"),
+                (PermissionModule.Marketing, "Marketing"),
             ];
 
             var existingKeys = await context.PermissionModuleDefinitions
@@ -614,7 +615,7 @@ namespace iucs.meettomanage.api.Data
                     var grant = existingSubAdminGrants.FirstOrDefault(p => p.UserId == userId && p.Module == module.ToString());
                     if (grant is null)
                     {
-                        context.SubAdminPermissions.Add(new SubAdminPermission
+                        grant = new SubAdminPermission
                         {
                             UserId = userId,
                             Module = module.ToString(),
@@ -623,7 +624,14 @@ namespace iucs.meettomanage.api.Data
                             CanEdit = edit,
                             CanDelete = delete,
                             CanApprove = approve,
-                        });
+                        };
+                        context.SubAdminPermissions.Add(grant);
+                        // existingSubAdminGrants is a plain preloaded list (no EF fixup, unlike
+                        // role.Permissions above), so record the new row here too — otherwise a
+                        // (role, module) pair listed twice in `additions` inserts it twice and
+                        // startup dies on ix_sub_admin_permissions_user_id_module (seen live on
+                        // a database that had never had the sub-admin SupportTickets grant).
+                        existingSubAdminGrants.Add(grant);
                     }
                     else
                     {
