@@ -14,9 +14,17 @@ namespace iucs.meettomanage.application
         {
             services.AddScoped<IMonitoringService, MonitoringService>();
             services.AddScoped<IServerLogService, ServerLogService>();
+            services.AddScoped<IDatabaseBackupService, DatabaseBackupService>();
+            services.AddScoped<IBurstWorkerUsageService, BurstWorkerUsageService>();
+            services.AddScoped<IRecordingPipelineService, RecordingPipelineService>();
+            services.AddScoped<ICallQualityIncidentService, CallQualityIncidentService>();
+            services.AddScoped<IBurstWorkerControlService, BurstWorkerControlService>();
+            services.AddScoped<IServerControlService, ServerControlService>();
             services.AddSingleton<IClassroomPresenceTracker, ClassroomPresenceTracker>();
             services.AddSingleton<IPasswordHasher, BcryptPasswordHasher>();
+            services.AddSingleton<IPinVault, AesGcmPinVault>();
             services.AddScoped<IAuditLogService, AuditLogService>();
+            services.AddScoped<IShortLinkService, ShortLinkService>();
             services.AddScoped<INotificationService, NotificationService>();
             services.AddScoped<IEmailTemplateService, EmailTemplateService>();
             services.AddScoped<IAuthService, AuthService>();
@@ -30,22 +38,36 @@ namespace iucs.meettomanage.application
             services.AddScoped<IGamificationService, GamificationService>();
             services.AddScoped<IBillingService, BillingService>();
             services.AddScoped<IPayoutService, PayoutService>();
+            services.AddScoped<IStaffPayoutService, StaffPayoutService>();
             services.AddScoped<IProgressReportService, ProgressReportService>();
+            services.AddScoped<IParentFeedbackService, ParentFeedbackService>();
+            services.AddScoped<IResourceFolderService, ResourceFolderService>();
             services.AddScoped<IStoreService, StoreService>();
             services.AddScoped<IPlatformDemoRequestService, PlatformDemoRequestService>();
             services.AddScoped<IBlogService, BlogService>();
             services.AddScoped<IAcademicOpsService, AcademicOpsService>();
+            services.AddScoped<ILeaveCancellationReportService, LeaveCancellationReportService>();
+            services.AddScoped<IClassSessionEventLogService, ClassSessionEventLogService>();
+            services.AddScoped<IClassSessionLogService, ClassSessionLogService>();
             services.AddScoped<IEnrollmentService, EnrollmentService>();
+            services.AddScoped<IChildSchedulePreferenceService, ChildSchedulePreferenceService>();
+            services.AddScoped<IManualAdmissionService, ManualAdmissionService>();
+            services.AddScoped<IAdmissionPaymentService, AdmissionPaymentService>();
+            services.AddScoped<IUserDeletionService, UserDeletionService>();
             services.AddScoped<IParentPortalService, ParentPortalService>();
             services.AddScoped<IReportsService, ReportsService>();
             services.AddScoped<ISettingsService, SettingsService>();
             services.AddScoped<IMenuService, MenuService>();
             services.AddScoped<IRoleService, RoleService>();
+            services.AddScoped<IPermissionModuleService, PermissionModuleService>();
             services.AddScoped<IIntegrationService, IntegrationService>();
             services.AddScoped<IFloatingNoteService, FloatingNoteService>();
             services.AddScoped<IAccessRequestService, AccessRequestService>();
             services.AddScoped<IQuizQuestionService, QuizQuestionService>();
+            services.AddScoped<IWhiteboardActivityService, WhiteboardActivityService>();
             services.AddScoped<IChatbotService, ChatbotService>();
+            services.AddScoped<ISupportTicketService, SupportTicketService>();
+            services.AddScoped<IStaffLeaveService, StaffLeaveService>();
             return services;
         }
     }

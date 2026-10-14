@@ -1,6 +1,7 @@
 using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Dto.Sessions;
 using iucs.meettomanage.application.Services;
+using iucs.meettomanage.domain.Entities.Academics;
 using iucs.meettomanage.domain.Entities.Admission;
 using iucs.meettomanage.domain.Entities.Sessions;
 using iucs.meettomanage.domain.Enums;
@@ -28,6 +29,15 @@ namespace iucs.meettomanage.api.Services
     /// needs — a session simply stops matching the query once it's been handled, and a
     /// missed cycle (a crash, a slow run) is safely picked up by the next one instead of
     /// being lost.
+    /// <para>
+    /// A demo with no <see cref="DemoBooking"/> linked to it at all is the one case that
+    /// doesn't fit that shape: nobody was ever going to attend, so it's a misconfigured/orphaned
+    /// slot rather than a genuine no-show, and <see cref="ISessionService.FlagOrphanedDemoSessionAsync"/>
+    /// alerts an admin without touching status or payout — which means it never leaves
+    /// Scheduled/CarriedForward on its own, so <see cref="ClassSession.OrphanedDemoAlertSentAtUtc"/>
+    /// does the de-duplication instead, the same role <see cref="ClassSession.RecordingMissingAlertSentAtUtc"/>
+    /// plays for <see cref="RecordingReconciliationBackgroundService"/>.
+    /// </para>
     /// </summary>
     public class NoShowDetectionBackgroundService : BackgroundService
     {
@@ -76,13 +86,70 @@ namespace iucs.meettomanage.api.Services
             var cutoff = DateTime.UtcNow.Subtract(gracePeriod);
             var candidates = await unitOfWork.Repository<ClassSession>().Query()
                 .Where(s => (s.Status == SessionStatus.Scheduled || s.Status == SessionStatus.CarriedForward)
-                            && s.ScheduledStartAtUtc <= cutoff)
+                            && s.ScheduledStartAtUtc <= cutoff
+                            // An orphaned demo (no DemoBooking at all) never changes status — see
+                            // the else-branch below — so without this exclusion it would keep
+                            // matching here and re-alert admins every cycle instead of once.
+                            && s.OrphanedDemoAlertSentAtUtc == null)
                 .ToListAsync(cancellationToken);
+
+            // A class covered by a teacher's leave request that's still awaiting an admin decision
+            // is not a no-show: with no minimum notice, urgent leave is often applied for shortly
+            // before class, and penalising the teacher (payout deduction, no-show alert, auto
+            // make-up) because nobody had reviewed it yet is wrong. It stays Scheduled until the
+            // review: approval cancels it; a rejection lets this job treat it normally next cycle.
+            var pendingLeaves = await unitOfWork.Repository<LeaveRequest>().Query()
+                .Where(l => l.Status == LeaveStatus.Pending)
+                .Select(l => new
+                {
+                    l.TeacherProfileId,
+                    l.IsClassWise,
+                    l.StartAtUtc,
+                    l.EndAtUtc,
+                    SessionIds = l.Sessions.Select(s => s.ClassSessionId).ToList(),
+                })
+                .ToListAsync(cancellationToken);
+            if (pendingLeaves.Count > 0)
+            {
+                candidates = candidates
+                    .Where(s => !pendingLeaves.Any(l => l.IsClassWise
+                        ? l.SessionIds.Contains(s.Id)
+                        : l.TeacherProfileId == s.TeacherProfileId
+                            && l.StartAtUtc < s.ScheduledEndAtUtc
+                            && l.EndAtUtc > s.ScheduledStartAtUtc))
+                    .ToList();
+            }
 
             if (candidates.Count == 0)
             {
                 return;
             }
+
+            // Prefetched once for the whole cycle instead of 1-3 queries per candidate
+            // (per-session existence checks + a per-orphaned-demo lookup): the candidate set
+            // is already known up front, so there's no reason to round-trip per row.
+            var candidateIds = candidates.Select(s => s.Id).ToList();
+            var teacherPresentSessionIds = (await unitOfWork.Repository<SessionAttendance>().Query()
+                .Where(a => candidateIds.Contains(a.ClassSessionId) && a.TeacherProfileId != null)
+                .Select(a => new { a.ClassSessionId, a.TeacherProfileId })
+                .ToListAsync(cancellationToken))
+                .Where(a => candidates.Any(s => s.Id == a.ClassSessionId && s.TeacherProfileId == a.TeacherProfileId))
+                .Select(a => a.ClassSessionId)
+                .ToHashSet();
+            var studentPresentSessionIds = (await unitOfWork.Repository<SessionAttendance>().Query()
+                // Absent rows don't count as present — e.g. a parent's planned absence from a
+                // group class is recorded up front as Absent (SessionService.CancelByParentAsync).
+                .Where(a => candidateIds.Contains(a.ClassSessionId) && a.ChildId != null && a.Status != AttendanceStatus.Absent)
+                .Select(a => a.ClassSessionId)
+                .ToListAsync(cancellationToken))
+                .ToHashSet();
+            var demoBatchlessIds = candidates.Where(s => !s.BatchId.HasValue).Select(s => s.Id).ToList();
+            var demoBookingsBySessionId = demoBatchlessIds.Count == 0
+                ? new Dictionary<Guid, DemoBooking>()
+                : await unitOfWork.Repository<DemoBooking>().Query()
+                    .Include(b => b.Participants)
+                    .Where(b => b.ClassSessionId != null && demoBatchlessIds.Contains(b.ClassSessionId.Value))
+                    .ToDictionaryAsync(b => b.ClassSessionId!.Value, cancellationToken);
 
             var teacherNoShows = 0;
             var studentNoShows = 0;
@@ -93,9 +160,7 @@ namespace iucs.meettomanage.api.Services
                 // the rest of the cycle's genuinely overdue sessions from being processed.
                 try
                 {
-                    var teacherPresent = await unitOfWork.Repository<SessionAttendance>().ExistsAsync(
-                        a => a.ClassSessionId == session.Id && a.TeacherProfileId == session.TeacherProfileId,
-                        cancellationToken);
+                    var teacherPresent = teacherPresentSessionIds.Contains(session.Id);
                     if (!teacherPresent)
                     {
                         await sessionService.MarkNoShowSystemAsync(
@@ -106,21 +171,42 @@ namespace iucs.meettomanage.api.Services
                         continue;
                     }
 
-                    var studentPresent = session.BatchId.HasValue
-                        ? await unitOfWork.Repository<SessionAttendance>().ExistsAsync(
-                            a => a.ClassSessionId == session.Id && a.ChildId != null,
-                            cancellationToken)
-                        : await unitOfWork.Repository<DemoBooking>().ExistsAsync(
-                            b => b.ClassSessionId == session.Id
-                                && (b.ParentJoinedAtUtc != null || b.Participants.Any(p => p.HasJoined)),
-                            cancellationToken);
-                    if (!studentPresent)
+                    if (session.BatchId.HasValue)
                     {
-                        await sessionService.MarkNoShowSystemAsync(
-                            session.Id, NoShowParty.Student,
-                            $"Auto-detected: no student/parent joined within {gracePeriod.TotalMinutes:0} minutes of the scheduled start.",
-                            cancellationToken);
-                        studentNoShows++;
+                        var studentPresent = studentPresentSessionIds.Contains(session.Id);
+                        if (!studentPresent)
+                        {
+                            await sessionService.MarkNoShowSystemAsync(
+                                session.Id, NoShowParty.Student,
+                                $"Auto-detected: no student/parent joined within {gracePeriod.TotalMinutes:0} minutes of the scheduled start.",
+                                cancellationToken);
+                            studentNoShows++;
+                        }
+                    }
+                    else
+                    {
+                        // A demo has no batch/attendance row to check — its only link to a student
+                        // is DemoBooking. "No DemoBooking row at all" and "a DemoBooking exists but
+                        // nobody joined" look identical from this query's shape alone, but they are
+                        // not the same event: the first is a misconfigured/orphaned slot nobody was
+                        // ever going to attend, not a genuine no-show. Conflating them used to flag
+                        // it StudentNoShow anyway — wrongly docking the teacher a no-show-waiting
+                        // payout and carrying the (still bookingless) slot forward, where it would
+                        // just repeat the same false no-show every week (see MarkNoShowCoreAsync's
+                        // carry-forward comment for the incident this caused).
+                        var demoBooking = demoBookingsBySessionId.GetValueOrDefault(session.Id);
+                        if (demoBooking is null)
+                        {
+                            await sessionService.FlagOrphanedDemoSessionAsync(session.Id, cancellationToken);
+                        }
+                        else if (demoBooking.ParentJoinedAtUtc is null && !demoBooking.Participants.Any(p => p.HasJoined))
+                        {
+                            await sessionService.MarkNoShowSystemAsync(
+                                session.Id, NoShowParty.Student,
+                                $"Auto-detected: no student/parent joined within {gracePeriod.TotalMinutes:0} minutes of the scheduled start.",
+                                cancellationToken);
+                            studentNoShows++;
+                        }
                     }
 
                     // Both sides present: leave it running, this job has nothing to do here —

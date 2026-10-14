@@ -1,7 +1,10 @@
+using iucs.meettomanage.application.Common;
 using System.Text.Json;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Admission;
+using iucs.meettomanage.application.Dto.Sessions;
+using iucs.meettomanage.application.Dto.Users;
 using iucs.meettomanage.application.Helper;
 using iucs.meettomanage.application.Mappings;
 using iucs.meettomanage.domain.Entities.Academics;
@@ -11,8 +14,10 @@ using iucs.meettomanage.domain.Entities.Integrations;
 using iucs.meettomanage.domain.Entities.Sessions;
 using iucs.meettomanage.domain.Entities.Users;
 using iucs.meettomanage.domain.Enums;
+using iucs.meettomanage.domain.Common;
 using iucs.meettomanage.domain.Repository;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
 namespace iucs.meettomanage.application.Services
@@ -20,6 +25,7 @@ namespace iucs.meettomanage.application.Services
     public class DemoBookingService : IDemoBookingService
     {
         private const string ReassignmentAuditEntityName = "DemoBookingTeacherReassignment";
+        private const string FollowUpAuditEntityName = "DemoBookingFollowUp";
 
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
@@ -28,7 +34,11 @@ namespace iucs.meettomanage.application.Services
         private readonly IEmailTemplateService _emailTemplateService;
         private readonly IJitsiTokenService _jitsiTokenService;
         private readonly INotificationService _notificationService;
+        private readonly IUserService _userService;
+        private readonly ISessionService _sessionService;
+        private readonly IConfiguration _configuration;
         private readonly ILogger<DemoBookingService> _logger;
+        private readonly ICurrentUserService? _currentUser;
 
         public DemoBookingService(
             IUnitOfWork unitOfWork,
@@ -38,8 +48,13 @@ namespace iucs.meettomanage.application.Services
             ICrmNotifier crmNotifier,
             IJitsiTokenService jitsiTokenService,
             INotificationService notificationService,
-            ILogger<DemoBookingService> logger)
+            IUserService userService,
+            ISessionService sessionService,
+            IConfiguration configuration,
+            ILogger<DemoBookingService> logger,
+            ICurrentUserService? currentUser = null)
         {
+            _currentUser = currentUser;
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _emailSender = emailSender;
@@ -47,6 +62,9 @@ namespace iucs.meettomanage.application.Services
             _crmNotifier = crmNotifier;
             _jitsiTokenService = jitsiTokenService;
             _notificationService = notificationService;
+            _userService = userService;
+            _sessionService = sessionService;
+            _configuration = configuration;
             _logger = logger;
         }
 
@@ -55,6 +73,11 @@ namespace iucs.meettomanage.application.Services
             CancellationToken cancellationToken = default)
         {
             var query = BaseQuery();
+            if (await CreatorScopeAsync(cancellationToken) is { } scope)
+            {
+                query = query.Where(b => b.CreatedBy == scope);
+            }
+
             if (status.HasValue)
             {
                 query = query.Where(b => b.ConversionStatus == status.Value);
@@ -66,7 +89,10 @@ namespace iucs.meettomanage.application.Services
 
         public async Task<DemoBookingDto> GetAsync(Guid id, CancellationToken cancellationToken = default)
         {
-            var booking = await BaseQuery().FirstOrDefaultAsync(b => b.Id == id, cancellationToken)
+            var scope = await CreatorScopeAsync(cancellationToken);
+            var booking = await BaseQuery()
+                .Where(b => scope == null || b.CreatedBy == scope)
+                .FirstOrDefaultAsync(b => b.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(DemoBooking), id);
 
             return booking.ToDto();
@@ -81,6 +107,8 @@ namespace iucs.meettomanage.application.Services
                 throw new DomainValidationException("Demo end time must be after the start time.");
             }
 
+            var parentEmail = ParentLogin.ResolveLoginEmail(request.ParentEmail, request.ParentPhone);
+
             // Picking a free teacher and booking them into the slot is one indivisible decision:
             // the "nobody overlaps this slot" read is only worth anything if no one else can
             // slip a conflicting session in before this one is committed. There is no single
@@ -88,7 +116,7 @@ namespace iucs.meettomanage.application.Services
             // so this runs SERIALIZABLE and lets PostgreSQL's SSI arbitrate, retrying from the
             // top on a serialization failure. Nothing irreversible — emails, the CRM push —
             // happens inside; a retry must be free to redo the whole thing.
-            var (session, booking) = await _unitOfWork.ExecuteInSerializableTransactionAsync(async ct =>
+            var (session, booking, teacher) = await _unitOfWork.ExecuteInSerializableTransactionAsync(async ct =>
             {
                 Guid teacherProfileId;
                 if (request.TeacherProfileId.HasValue)
@@ -122,6 +150,12 @@ namespace iucs.meettomanage.application.Services
                     teacherProfileId = await AutoAssignTeacherAsync(request, ct);
                 }
 
+                // Every teacher gets one fixed, permanent room (the same one backing
+                // GET /api/users/me/meeting-room) reused for every demo they run, instead of a
+                // fresh random room per booking — so the link in this email never goes stale
+                // and is identical to the one the teacher already sees in their own portal.
+                var teacher = await EnsureTeacherMeetingRoomAsync(teacherProfileId, ct);
+
                 // Demos are always one-time sessions, never recurring, and have no batch
                 var newSession = new ClassSession
                 {
@@ -129,7 +163,7 @@ namespace iucs.meettomanage.application.Services
                     Type = SessionType.Demo,
                     ScheduledStartAtUtc = request.ScheduledStartAtUtc,
                     ScheduledEndAtUtc = request.ScheduledEndAtUtc,
-                    MeetingRoomId = $"trn-demo-{Guid.NewGuid():N}",
+                    MeetingRoomId = teacher.User.PersonalMeetingRoomId,
                 };
                 await _unitOfWork.Repository<ClassSession>().AddAsync(newSession, ct);
 
@@ -137,8 +171,8 @@ namespace iucs.meettomanage.application.Services
                 {
                     ClassSession = newSession,
                     ParentName = request.ParentName.Trim(),
-                    ParentEmail = request.ParentEmail.Trim().ToLowerInvariant(),
-                    ParentPhone = request.ParentPhone,
+                    ParentEmail = parentEmail,
+                    ParentPhone = string.IsNullOrWhiteSpace(request.ParentPhone) ? null : request.ParentPhone.Trim(),
                     ChildName = request.ChildName.Trim(),
                     ChildAge = request.ChildAge,
                     DepartmentId = request.DepartmentId,
@@ -166,66 +200,22 @@ namespace iucs.meettomanage.application.Services
                 await _auditLog.StageAsync(AuditAction.Create, nameof(DemoBooking), newBooking.Id.ToString(), cancellationToken: ct);
                 await _unitOfWork.SaveChangesAsync(ct);
 
-                return (Session: newSession, Booking: newBooking);
+                return (Session: newSession, Booking: newBooking, Teacher: teacher);
             }, cancellationToken);
 
-            // Booking confirmation to the parent and every extra invitee (they may not
-            // have accounts yet, so this bypasses the user-bound notification log).
-            // The booking itself is already committed at this point — a template-render
-            // glitch or an SMTP failure (e.g. the sender account's own daily limit) must not
-            // turn an already-successful booking into a 500 response, the same reasoning
+            // Booking confirmation to the parent, every extra invitee, and the teacher (they may
+            // not have accounts yet, so this bypasses the user-bound notification log). The
+            // booking itself is already committed at this point — a template-render glitch or an
+            // SMTP failure (e.g. the sender account's own daily limit) must not turn an
+            // already-successful booking into a 500 response, the same reasoning
             // NotificationService.SendRenderedEmailAsync already applies to every other email
             // this app sends. Confirmed via production logs: this exact path was throwing an
             // uncaught SmtpException after the booking had already been saved.
-            try
-            {
-                var jitsiConfigJson = await _unitOfWork.Repository<Integration>().Query()
-                    .Where(i => i.Key == "jitsi")
-                    .Select(i => i.ConfigJson)
-                    .FirstOrDefaultAsync(cancellationToken);
-                var domain = JitsiLinkBuilder.ResolveDomain(jitsiConfigJson);
-
-                // No account exists yet for a demo lead, so each invitee gets their own token
-                // (name + email baked in, expiring a couple of hours past the demo) instead of
-                // a bare room name that would work forever for anyone who ever saw the email.
-                string JoinUrlFor(string participantName, string participantEmail) =>
-                    JitsiLinkBuilder.BuildJoinUrl(
-                        session.MeetingRoomId,
-                        jitsiConfigJson,
-                        _jitsiTokenService.CreateToken(
-                            domain, jitsiConfigJson, session.MeetingRoomId!, participantName, participantEmail,
-                            moderator: false, request.ScheduledEndAtUtc.AddHours(2)),
-                        participantName)
-                    ?? "#";
-
-                var (parentSubject, parentHtml) = await _emailTemplateService.RenderAsync(
-                    "demo-confirmed",
-                    new Dictionary<string, string>
-                    {
-                        ["ChildName"] = booking.ChildName,
-                        ["WhenLocal"] = DateTimeDisplay.ToLocal(request.ScheduledStartAtUtc),
-                        ["JoinUrl"] = JoinUrlFor(booking.ParentName, booking.ParentEmail),
-                    },
-                    cancellationToken);
-                await _emailSender.SendAsync(booking.ParentEmail, parentSubject, parentHtml, cancellationToken);
-                foreach (var participant in booking.Participants.Where(p => !string.IsNullOrWhiteSpace(p.Email)))
-                {
-                    var (participantSubject, participantHtml) = await _emailTemplateService.RenderAsync(
-                        "demo-confirmed",
-                        new Dictionary<string, string>
-                        {
-                            ["ChildName"] = booking.ChildName,
-                            ["WhenLocal"] = DateTimeDisplay.ToLocal(request.ScheduledStartAtUtc),
-                            ["JoinUrl"] = JoinUrlFor(participant.Name, participant.Email!),
-                        },
-                        cancellationToken);
-                    await _emailSender.SendAsync(participant.Email!, participantSubject, participantHtml, cancellationToken);
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.LogError(ex, "Demo confirmation email delivery failed for booking {BookingId}", booking.Id);
-            }
+            await SendParentDemoLinkEmailsAsync(session, booking, cancellationToken);
+            await SendTeacherDemoLinkEmailAsync(
+                session, booking, teacher, "demo-scheduled-teacher",
+                new Dictionary<string, string> { ["ParentName"] = booking.ParentName },
+                cancellationToken);
 
             // New lead lands in the client's CRM (no-op when no webhook is configured)
             await _crmNotifier.PushLeadEventAsync("lead.created", new
@@ -242,6 +232,255 @@ namespace iucs.meettomanage.application.Services
             }, cancellationToken);
 
             return await GetAsync(booking.Id, cancellationToken);
+        }
+
+        public async Task<DemoBookingDto> CreateDirectAdmissionLeadAsync(
+            CreateDirectAdmissionLeadRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            string parentName;
+            string parentEmail;
+            string? parentPhone;
+            Guid? departmentId = request.DepartmentId;
+            if (request.SiblingOfBookingId is { } siblingId)
+            {
+                // Same visibility as every other lead screen; the parent is copied verbatim so both
+                // children's payment links land on the one parent account (Terms asked only once).
+                var sibling = await GetAsync(siblingId, cancellationToken);
+                parentName = sibling.ParentName;
+                parentEmail = sibling.ParentEmail;
+                parentPhone = sibling.ParentPhone;
+                departmentId ??= sibling.DepartmentId;
+            }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(request.ParentName))
+                {
+                    throw new DomainValidationException("Enter the parent's name.");
+                }
+                if (string.IsNullOrWhiteSpace(request.ParentPhone))
+                {
+                    throw new DomainValidationException("Enter the parent's mobile number.");
+                }
+                parentName = request.ParentName.Trim();
+                parentEmail = ParentLogin.ResolveLoginEmail(request.ParentEmail, request.ParentPhone);
+                parentPhone = request.ParentPhone.Trim();
+            }
+
+            if (departmentId.HasValue
+                && !await _unitOfWork.Repository<Department>().ExistsAsync(d => d.Id == departmentId.Value, cancellationToken))
+            {
+                throw new NotFoundException(nameof(Department), departmentId.Value);
+            }
+
+            // No ClassSession: there is no demo, so no teacher, no join link and no demo fee. It
+            // starts in FollowUpInProgress, a stage the payment link can be issued from.
+            var booking = new DemoBooking
+            {
+                ParentName = parentName,
+                ParentEmail = parentEmail,
+                ParentPhone = parentPhone,
+                ChildName = request.ChildName.Trim(),
+                ChildAge = request.ChildAge,
+                DepartmentId = departmentId,
+                ConversionStatus = ConversionStatus.FollowUpInProgress,
+            };
+            await _unitOfWork.Repository<DemoBooking>().AddAsync(booking, cancellationToken);
+            await _auditLog.StageAsync(AuditAction.Create, nameof(DemoBooking), booking.Id.ToString(),
+                request.SiblingOfBookingId is { } fromId
+                    ? $"{{\"note\":\"Direct admission (no demo) for a sibling from lead {fromId}\"}}"
+                    : "{\"note\":\"Direct admission (no demo)\"}",
+                cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            await _crmNotifier.PushLeadEventAsync("lead.created", new
+            {
+                booking.Id,
+                booking.ParentName,
+                booking.ParentEmail,
+                booking.ParentPhone,
+                booking.ChildName,
+                Department = departmentId.HasValue
+                    ? (await _unitOfWork.Repository<Department>().GetByIdAsync(departmentId.Value, cancellationToken))?.Name
+                    : null,
+                DemoAtUtc = (DateTime?)null,
+            }, cancellationToken);
+
+            return await GetAsync(booking.Id, cancellationToken);
+        }
+
+        public async Task<DemoBookingDto> UpdateAsync(
+            Guid bookingId,
+            UpdateDemoBookingRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            await EnsureVisibleAsync(bookingId, cancellationToken);
+
+            // Tracked with Participants, same reason as DeleteAsync: the invitees are edited,
+            // added and removed on this same graph.
+            var booking = await _unitOfWork.Repository<DemoBooking>().TrackedQuery()
+                .Include(b => b.Participants)
+                .FirstOrDefaultAsync(b => b.Id == bookingId, cancellationToken)
+                ?? throw new NotFoundException(nameof(DemoBooking), bookingId);
+
+            // Addresses that never received this demo's link — the whole point of the edit is
+            // usually a mistyped parent email, so the corrected one needs the link sent to it.
+            var newAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var parentEmail = ParentLogin.ResolveLoginEmail(request.ParentEmail, request.ParentPhone);
+            if (parentEmail != booking.ParentEmail)
+            {
+                newAddresses.Add(parentEmail);
+            }
+
+            booking.ParentName = request.ParentName.Trim();
+            booking.ParentEmail = parentEmail;
+            booking.ParentPhone = string.IsNullOrWhiteSpace(request.ParentPhone) ? null : request.ParentPhone.Trim();
+            booking.ChildName = request.ChildName.Trim();
+            booking.ChildAge = request.ChildAge;
+            booking.DepartmentId = request.DepartmentId;
+
+            var keptIds = request.Participants.Where(p => p.Id.HasValue).Select(p => p.Id!.Value).ToHashSet();
+            // Repository Remove() is the app-wide soft delete (see DeleteAsync) — left in the
+            // tracked collection rather than also detached from it, so EF doesn't additionally
+            // treat it as an orphan of the required FK.
+            foreach (var removed in booking.Participants.Where(p => !keptIds.Contains(p.Id)).ToList())
+            {
+                _unitOfWork.Repository<DemoParticipant>().Remove(removed);
+            }
+
+            foreach (var incoming in request.Participants)
+            {
+                // Same rule as CreateAsync: adults need an email for the invite; children carry none.
+                if (!incoming.IsChild && string.IsNullOrWhiteSpace(incoming.Email))
+                {
+                    throw new DomainValidationException($"Participant '{incoming.Name}' needs an email address (children don't).");
+                }
+
+                var email = incoming.IsChild || string.IsNullOrWhiteSpace(incoming.Email)
+                    ? null
+                    : incoming.Email.Trim().ToLowerInvariant();
+
+                var existing = incoming.Id.HasValue
+                    ? booking.Participants.FirstOrDefault(p => p.Id == incoming.Id.Value)
+                    : null;
+                if (incoming.Id.HasValue && existing is null)
+                {
+                    throw new NotFoundException(nameof(DemoParticipant), incoming.Id.Value);
+                }
+
+                if (email is not null && email != existing?.Email)
+                {
+                    newAddresses.Add(email);
+                }
+
+                if (existing is null)
+                {
+                    booking.Participants.Add(new DemoParticipant
+                    {
+                        Name = incoming.Name.Trim(),
+                        Email = email,
+                        Phone = incoming.Phone,
+                        IsChild = incoming.IsChild,
+                    });
+                }
+                else
+                {
+                    existing.Name = incoming.Name.Trim();
+                    existing.Email = email;
+                    existing.Phone = incoming.Phone;
+                    existing.IsChild = incoming.IsChild;
+                }
+            }
+
+            await _auditLog.StageAsync(AuditAction.Update, nameof(DemoBooking), booking.Id.ToString(), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            // Only for a demo that's still ahead — a corrected address on a demo that already ran
+            // (or was cancelled) has nothing left to join. Sent after the save, and never allowed
+            // to fail the edit (SendParentDemoLinkEmailsAsync logs and swallows delivery errors).
+            if (newAddresses.Count > 0 && booking.ClassSessionId is { } sessionId)
+            {
+                var session = await _unitOfWork.Repository<ClassSession>().Query()
+                    .FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken);
+                if (session is not null
+                    && session.Status is SessionStatus.Scheduled or SessionStatus.CarriedForward
+                    && session.ScheduledEndAtUtc > DateTime.UtcNow)
+                {
+                    await SendParentDemoLinkEmailsAsync(session, booking, cancellationToken, onlyTo: newAddresses);
+                }
+            }
+
+            return await GetAsync(booking.Id, cancellationToken);
+        }
+
+        /// <summary>
+        /// Permanently removes a demo booking (a test entry, a mistaken double-booking) -- see
+        /// the interface's own remarks for the guard on already-converted leads. Every repository
+        /// Remove() here is the app-wide soft delete (IsDeleted, filtered out of every query
+        /// going forward) rather than a real SQL DELETE, so this is safe against the FK-Restrict
+        /// convention every relationship in this schema uses (no cascade to fight).
+        /// </summary>
+        public async Task DeleteAsync(Guid bookingId, CancellationToken cancellationToken = default)
+        {
+            await EnsureVisibleAsync(bookingId, cancellationToken);
+
+            // Tracked, not the no-tracking Query() the rest of this method's reads use -- booking
+            // and its Included Participants must come off the SAME tracked graph that gets
+            // Remove()'d below, or re-attaching a second, separately-queried copy of an entity
+            // EF already tracks throws "already being tracked" (confirmed: this is exactly what
+            // a detached Query() + Remove() on the same rows did here originally).
+            var booking = await _unitOfWork.Repository<DemoBooking>().TrackedQuery()
+                .Include(b => b.Participants)
+                .FirstOrDefaultAsync(b => b.Id == bookingId, cancellationToken)
+                ?? throw new NotFoundException(nameof(DemoBooking), bookingId);
+
+            if (booking.InvoiceId.HasValue || booking.ConversionStatus == ConversionStatus.Enrolled)
+            {
+                throw new DomainValidationException(
+                    "This booking is already invoiced or enrolled -- change its conversion status instead of deleting it.");
+            }
+
+            // Frees the teacher's slot the same way any other cancelled class does, reusing
+            // SessionService's own cancellation rather than duplicating that status/audit logic
+            // here. A session that's already terminal (cancelled/completed/etc.) has nothing
+            // left to free -- fine to just proceed with deleting the booking itself.
+            if (booking.ClassSessionId is { } sessionId)
+            {
+                try
+                {
+                    await _sessionService.CancelAsync(
+                        sessionId,
+                        new CancelSessionRequest { Reason = "Demo booking deleted" },
+                        cancellationToken);
+                }
+                catch (Exception ex) when (ex is DomainValidationException or NotFoundException)
+                {
+                    _logger.LogInformation(
+                        ex, "Demo booking {BookingId}'s session {SessionId} was already terminal or missing; deleting the booking anyway.",
+                        bookingId, sessionId);
+                }
+            }
+
+            // Feedback isn't reachable through booking.Participants -- deleted separately so it
+            // doesn't linger, visible to nobody, once its parent booking is gone.
+            var feedbacks = await _unitOfWork.Repository<DemoFeedback>().Query()
+                .Where(f => f.DemoBookingId == bookingId)
+                .ToListAsync(cancellationToken);
+            foreach (var feedback in feedbacks)
+            {
+                _unitOfWork.Repository<DemoFeedback>().Remove(feedback);
+            }
+
+            foreach (var participant in booking.Participants)
+            {
+                _unitOfWork.Repository<DemoParticipant>().Remove(participant);
+            }
+
+            _unitOfWork.Repository<DemoBooking>().Remove(booking);
+
+            await _auditLog.StageAsync(AuditAction.Delete, nameof(DemoBooking), booking.Id.ToString(), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
         /// <summary>
@@ -317,17 +556,74 @@ namespace iucs.meettomanage.application.Services
             UpdateConversionStatusRequest request,
             CancellationToken cancellationToken = default)
         {
+            await EnsureVisibleAsync(id, cancellationToken);
+
             var booking = await _unitOfWork.Repository<DemoBooking>().GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(DemoBooking), id);
 
+            // Fires the account creation on the transition INTO ReadyForEnrollment, not every
+            // save while the booking is already there -- editing FollowUpNotes on a booking
+            // that's already ReadyForEnrollment must never re-trigger it (and can't anyway,
+            // once EnsureParentAccountAsync's own existence check finds the account it just made).
+            var enteringReadyForEnrollment = request.ConversionStatus == ConversionStatus.ReadyForEnrollment
+                && booking.ConversionStatus != ConversionStatus.ReadyForEnrollment;
+            var enteringNotInterested = request.ConversionStatus == ConversionStatus.NotInterested
+                && booking.ConversionStatus != ConversionStatus.NotInterested;
+
             booking.ConversionStatus = request.ConversionStatus;
-            if (request.FollowUpNotes is not null)
+            if (!string.IsNullOrWhiteSpace(request.Note))
             {
-                booking.FollowUpNotes = request.FollowUpNotes;
+                // Full history (who logged it, exactly when) lives in the audit trail — see
+                // GetFollowUpNotesAsync — rather than concatenated into one string, which used
+                // to collapse every note ever logged into a single fabricated date/author on
+                // reload. This field stays as a quick "most recent note" snapshot only.
+                booking.FollowUpNotes = request.Note;
+                await _auditLog.StageAsync(
+                    AuditAction.Create,
+                    FollowUpAuditEntityName,
+                    booking.Id.ToString(),
+                    JsonSerializer.Serialize(new { request.Note, request.NextFollowUpOn }),
+                    cancellationToken);
+            }
+            if (request.NextFollowUpOn.HasValue)
+            {
+                booking.NextFollowUpOn = request.NextFollowUpOn;
+            }
+
+            Guid? createdParentId = null;
+            if (enteringReadyForEnrollment)
+            {
+                createdParentId = await EnsureParentAccountAsync(booking, cancellationToken);
             }
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(DemoBooking), booking.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            // Cancelling a demo that hasn't happened yet ("Cancel" on Demo Scheduling moves it to
+            // NotInterested) must also release the teacher's slot. It used to leave the linked
+            // session Scheduled, so the overlap check in CreateAsync kept treating the teacher as
+            // booked and admissions couldn't put a corrected demo into the same slot. A demo whose
+            // start time has already passed is left alone if anyone joined it: it may well have
+            // run, and cancelling its session would erase that from the teacher's history and
+            // payouts. One nobody joined was not held -- leaving it Scheduled let the no-show job
+            // pick it up after the counselor had already cancelled it.
+            if (enteringNotInterested && booking.ClassSessionId is { } sessionId)
+            {
+                var session = await _unitOfWork.Repository<ClassSession>().Query()
+                    .FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken);
+                var anyoneJoined = booking.ParentJoinedAtUtc is not null
+                    || await _unitOfWork.Repository<DemoParticipant>().ExistsAsync(p => p.DemoBookingId == booking.Id && p.HasJoined, cancellationToken)
+                    || await _unitOfWork.Repository<SessionAttendance>().ExistsAsync(a => a.ClassSessionId == sessionId, cancellationToken);
+                if (session is not null
+                    && session.Status is SessionStatus.Scheduled or SessionStatus.CarriedForward
+                    && (session.ScheduledStartAtUtc > DateTime.UtcNow || !anyoneJoined))
+                {
+                    await _sessionService.CancelAsync(
+                        sessionId,
+                        new CancelSessionRequest { Reason = "Demo cancelled (lead marked Not Interested)" },
+                        cancellationToken);
+                }
+            }
 
             await _crmNotifier.PushLeadEventAsync("lead.status-changed", new
             {
@@ -338,7 +634,96 @@ namespace iucs.meettomanage.application.Services
                 booking.FollowUpNotes,
             }, cancellationToken);
 
-            return await GetAsync(booking.Id, cancellationToken);
+            var result = await GetAsync(booking.Id, cancellationToken);
+
+            // A parent with no email just got a mobile-number login, but no email can carry the
+            // PIN (and WhatsApp sending may be off) -- hand it to the staff member once, now, so
+            // they can send it on WhatsApp. Never for an email parent: their PIN went by email.
+            if (createdParentId is { } parentUserId && ParentLogin.IsPlaceholderEmail(booking.ParentEmail))
+            {
+                var pin = await _userService.RevealPinAsync(parentUserId, cancellationToken);
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+                var loginUrl = (_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in").TrimEnd('/') + "/login";
+                var loginId = booking.ParentPhone ?? string.Empty;
+                result.IssuedLogin = new IssuedParentLoginDto
+                {
+                    LoginId = loginId,
+                    TemporaryPin = pin,
+                    LoginUrl = loginUrl,
+                    WhatsAppMessage = string.Join("\n",
+                        $"Hello {booking.ParentName},",
+                        "",
+                        "Your Meet to Manage parent portal login:",
+                        loginUrl,
+                        $"Login: {loginId}",
+                        $"PIN: {pin}",
+                        "",
+                        "Thank you!"),
+                };
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// The account-creation half of ReadyForEnrollment (see the enum value's own doc
+        /// comment). Reuses UserService.CreateAsync wholesale -- temp PIN generation/hashing,
+        /// the ParentProfile row, and the same "welcome-credentials" email an admin manually
+        /// adding a parent through Users already sends -- rather than duplicating any of that
+        /// here. A no-op when an account for this email already exists (a sibling's earlier
+        /// demo, or a repeat lead): reuses it silently, no duplicate account and no re-sent
+        /// credentials for someone who can already log in.
+        /// </summary>
+        /// <returns>The new account's user id, or null when one already existed.</returns>
+        private async Task<Guid?> EnsureParentAccountAsync(DemoBooking booking, CancellationToken cancellationToken)
+        {
+            // A no-email parent's booking already carries their internal login key
+            // (ParentLogin.ResolveLoginEmail), so they get a mobile-number login the same way.
+            var email = booking.ParentEmail.Trim().ToLowerInvariant();
+            var alreadyHasAccount = await _unitOfWork.Repository<User>().ExistsAsync(u => u.Email == email, cancellationToken);
+            if (alreadyHasAccount)
+            {
+                return null;
+            }
+
+            var nameParts = booking.ParentName.Trim().Split(' ', 2);
+            var created = await _userService.CreateAsync(
+                new CreateUserRequest
+                {
+                    Email = email,
+                    FirstName = nameParts[0],
+                    LastName = nameParts.Length > 1 ? nameParts[1] : string.Empty,
+                    Phone = booking.ParentPhone,
+                    Role = UserRole.Parent,
+                    // The generic "your account is ready" email is replaced by the parent welcome
+                    // email below (portal link, email, PIN and the child-details next step) -- the
+                    // same one the payment-link Enroll sends -- so every route into enrollment
+                    // welcomes the parent identically.
+                    SuppressWelcomeEmail = true,
+                },
+                cancellationToken);
+
+            if (ParentLogin.IsDeliverable(email))
+            {
+                var pin = await _userService.RevealPinAsync(created.Id, cancellationToken);
+                var portalUrl = (_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in").TrimEnd('/');
+                await _notificationService.SendTemplatedEmailAsync(
+                    created.Id,
+                    email,
+                    NotificationType.General,
+                    "parent-enrollment-welcome",
+                    new Dictionary<string, string>
+                    {
+                        ["FirstName"] = created.FirstName,
+                        ["Email"] = email,
+                        ["TemporaryPin"] = pin,
+                        ["PortalUrl"] = portalUrl,
+                        ["LoginUrl"] = portalUrl + "/login",
+                    },
+                    cancellationToken);
+            }
+
+            return created.Id;
         }
 
         public async Task<DemoFeedbackDto> SubmitFeedbackAsync(
@@ -460,7 +845,7 @@ namespace iucs.meettomanage.application.Services
                 ChildName = feedback.DemoBooking.ChildName,
                 ParentName = feedback.DemoBooking.ParentName,
                 TeacherProfileId = feedback.TeacherProfileId,
-                TeacherName = $"{feedback.TeacherProfile.User.FirstName} {feedback.TeacherProfile.User.LastName}",
+                TeacherName = $"{feedback.TeacherProfile.User.FirstName} {feedback.TeacherProfile.User.LastName}".Trim(),
                 AcademicLevel = feedback.AcademicLevel,
                 Strengths = feedback.Strengths,
                 ImprovementAreas = feedback.ImprovementAreas,
@@ -477,6 +862,11 @@ namespace iucs.meettomanage.application.Services
             CancellationToken cancellationToken = default)
         {
             var query = BaseQuery();
+            if (await CreatorScopeAsync(cancellationToken) is { } historyScope)
+            {
+                query = query.Where(b => b.CreatedBy == historyScope);
+            }
+
             if (!string.IsNullOrWhiteSpace(search))
             {
                 var term = search.Trim().ToLower();
@@ -499,7 +889,7 @@ namespace iucs.meettomanage.application.Services
                         ParentEmail = g.Key,
                         ParentName = g.First().ParentName,
                         ParentPhone = g.First().ParentPhone,
-                        TotalDemos = dtos.Count,
+                        TotalDemos = dtos.Count(d => d.ClassSessionId.HasValue),
                         EnrolledCount = dtos.Count(d => d.ConversionStatus == ConversionStatus.Enrolled),
                         LastDemoAtUtc = dtos.Max(d => d.ScheduledStartAtUtc),
                         TotalPayable = dtos.Sum(d => d.PayableAmount),
@@ -515,6 +905,8 @@ namespace iucs.meettomanage.application.Services
             ReassignTeacherRequest request,
             CancellationToken cancellationToken = default)
         {
+            await EnsureVisibleAsync(bookingId, cancellationToken);
+
             // Same reasoning as CreateAsync's auto-assign race: the "is the new teacher free"
             // read and the write that commits them to the slot must be one indivisible decision,
             // or a concurrent booking/reassignment could double-book them in the gap between the
@@ -523,6 +915,7 @@ namespace iucs.meettomanage.application.Services
             var result = await _unitOfWork.ExecuteInSerializableTransactionAsync(async ct =>
             {
                 var booking = await _unitOfWork.Repository<DemoBooking>().Query()
+                    .Include(b => b.Participants)
                     .FirstOrDefaultAsync(b => b.Id == bookingId, ct)
                     ?? throw new NotFoundException(nameof(DemoBooking), bookingId);
 
@@ -547,10 +940,7 @@ namespace iucs.meettomanage.application.Services
                     .FirstOrDefaultAsync(s => s.Id == classSessionId, ct)
                     ?? throw new NotFoundException(nameof(ClassSession), classSessionId);
 
-                var newTeacher = await _unitOfWork.Repository<TeacherProfile>().Query()
-                    .Include(t => t.User)
-                    .FirstOrDefaultAsync(t => t.Id == request.TeacherProfileId, ct)
-                    ?? throw new NotFoundException(nameof(TeacherProfile), request.TeacherProfileId);
+                var newTeacher = await EnsureTeacherMeetingRoomAsync(request.TeacherProfileId, ct);
 
                 if (newTeacher.User.Status != UserStatus.Active)
                 {
@@ -582,6 +972,11 @@ namespace iucs.meettomanage.application.Services
                     .FirstOrDefaultAsync(t => t.Id == demoSession.TeacherProfileId, ct);
 
                 demoSession.TeacherProfileId = newTeacher.Id;
+                // The room is the teacher's fixed personal room, so it must follow them --
+                // otherwise the parent's already-sent link keeps pointing at the old teacher's
+                // room. SendDemoLinkEmailsAsync below re-sends the parent/participants their
+                // demo-confirmed email with the new room's link so they're never left stale.
+                demoSession.MeetingRoomId = newTeacher.User.PersonalMeetingRoomId;
 
                 await _auditLog.StageAsync(
                     AuditAction.Update,
@@ -590,9 +985,9 @@ namespace iucs.meettomanage.application.Services
                     JsonSerializer.Serialize(new
                     {
                         OldTeacherProfileId = oldTeacher?.Id,
-                        OldTeacherName = oldTeacher is not null ? $"{oldTeacher.User.FirstName} {oldTeacher.User.LastName}" : null,
+                        OldTeacherName = oldTeacher is not null ? $"{oldTeacher.User.FirstName} {oldTeacher.User.LastName}".Trim() : null,
                         NewTeacherProfileId = newTeacher.Id,
-                        NewTeacherName = $"{newTeacher.User.FirstName} {newTeacher.User.LastName}",
+                        NewTeacherName = $"{newTeacher.User.FirstName} {newTeacher.User.LastName}".Trim(),
                         request.Reason,
                     }),
                     ct);
@@ -616,6 +1011,7 @@ namespace iucs.meettomanage.application.Services
                         ["StartAtLocal"] = DateTimeDisplay.ToLocal(result.Session.ScheduledStartAtUtc, result.NewTeacher.User.TimeZoneId),
                         ["EndAtLocal"] = DateTimeDisplay.ToLocal(result.Session.ScheduledEndAtUtc, result.NewTeacher.User.TimeZoneId),
                         ["Reason"] = string.IsNullOrWhiteSpace(request.Reason) ? string.Empty : $"Reason: {request.Reason}",
+                        ["JoinUrl"] = BuildTeacherDemoAppJoinUrl(result.Session),
                     },
                     cancellationToken);
 
@@ -640,13 +1036,225 @@ namespace iucs.meettomanage.application.Services
                 _logger.LogError(ex, "Teacher reassignment notification failed for booking {BookingId}", bookingId);
             }
 
+            // The room moved to the new teacher's fixed room -- the parent (and every extra
+            // invitee) already has a link to the old room, so re-send the demo-confirmed email
+            // with the new one or they'd be locked out at demo time.
+            await SendParentDemoLinkEmailsAsync(result.Session, result.Booking, cancellationToken);
+
             return await GetAsync(bookingId, cancellationToken);
+        }
+
+        /// <summary>
+        /// Manually re-sends the demo's join link to the parent, every extra invitee, and the
+        /// assigned teacher -- for when a parent reports never getting (or losing) the original
+        /// confirmation email. Always uses the teacher's current fixed room: if this booking
+        /// still carries a pre-fixed-link random room (created before this feature shipped), it
+        /// is corrected to the teacher's permanent room here, same as CreateAsync/ReassignTeacherAsync.
+        /// </summary>
+        public async Task<DemoBookingDto> ResendLinkAsync(Guid bookingId, CancellationToken cancellationToken = default)
+        {
+            await EnsureVisibleAsync(bookingId, cancellationToken);
+
+            var (session, booking, teacher) = await _unitOfWork.ExecuteInSerializableTransactionAsync(async ct =>
+            {
+                var demoBooking = await _unitOfWork.Repository<DemoBooking>().Query()
+                    .Include(b => b.Participants)
+                    .FirstOrDefaultAsync(b => b.Id == bookingId, ct)
+                    ?? throw new NotFoundException(nameof(DemoBooking), bookingId);
+
+                if (demoBooking.ClassSessionId is not { } sessionId)
+                {
+                    throw new DomainValidationException("This booking has no linked class session to send a link for.");
+                }
+
+                var demoSession = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
+                    .FirstOrDefaultAsync(s => s.Id == sessionId, ct)
+                    ?? throw new NotFoundException(nameof(ClassSession), sessionId);
+
+                var teacherProfile = await EnsureTeacherMeetingRoomAsync(demoSession.TeacherProfileId, ct);
+                demoSession.MeetingRoomId = teacherProfile.User.PersonalMeetingRoomId;
+                await _unitOfWork.SaveChangesAsync(ct);
+
+                return (Session: demoSession, Booking: demoBooking, Teacher: teacherProfile);
+            }, cancellationToken);
+
+            await SendParentDemoLinkEmailsAsync(session, booking, cancellationToken);
+            await SendTeacherDemoLinkEmailAsync(
+                session, booking, teacher, "demo-scheduled-teacher",
+                new Dictionary<string, string> { ["ParentName"] = booking.ParentName },
+                cancellationToken);
+
+            return await GetAsync(bookingId, cancellationToken);
+        }
+
+        public async Task<DemoBookingDto> RescheduleAsync(
+            Guid bookingId,
+            RescheduleSessionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            await EnsureVisibleAsync(bookingId, cancellationToken);
+
+            var booking = await _unitOfWork.Repository<DemoBooking>().TrackedQuery()
+                .Include(b => b.Participants)
+                .FirstOrDefaultAsync(b => b.Id == bookingId, cancellationToken)
+                ?? throw new NotFoundException(nameof(DemoBooking), bookingId);
+
+            // Same boundary ReassignTeacherAsync enforces — the frontend only offers this for a
+            // still-scheduled demo, but that's a UI convenience, not the actual gate.
+            if (booking.ConversionStatus != ConversionStatus.DemoScheduled)
+            {
+                throw new DomainValidationException("Only a demo that is still scheduled can be rescheduled.");
+            }
+
+            if (booking.ClassSessionId is not { } classSessionId)
+            {
+                throw new DomainValidationException("This booking has no linked class session to reschedule.");
+            }
+
+            // ISessionService.RescheduleAsync already runs the holiday check and the teacher's
+            // own availability check, and creates a brand new ClassSession row linked back to the
+            // original (see its own remarks — a reschedule is a fresh calendar entry, not an
+            // in-place time edit, so history stays traceable). This booking's ClassSessionId has
+            // to follow that new row, or every screen reading through it — including the parent's
+            // own join link — would keep resolving against the old, now-Rescheduled session.
+            var newSession = await _sessionService.RescheduleAsync(classSessionId, request, cancellationToken);
+            booking.ClassSessionId = newSession.Id;
+            // Who joined describes the old time (e.g. a parent who waited at a demo the teacher
+            // missed), not the new one -- left set, the no-show check would treat the new demo
+            // as attended.
+            booking.ParentJoinedAtUtc = null;
+            foreach (var participant in booking.Participants)
+            {
+                participant.HasJoined = false;
+            }
+
+            await _auditLog.StageAsync(AuditAction.Update, nameof(DemoBooking), booking.Id.ToString(),
+                changesJson: $"{{\"rescheduledSessionId\":\"{newSession.Id}\"}}", cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            var demoSession = await _unitOfWork.Repository<ClassSession>().TrackedQuery()
+                .FirstOrDefaultAsync(s => s.Id == newSession.Id, cancellationToken)
+                ?? throw new NotFoundException(nameof(ClassSession), newSession.Id);
+            var teacher = await EnsureTeacherMeetingRoomAsync(demoSession.TeacherProfileId, cancellationToken);
+
+            // Same "don't let parent/teacher find out the time changed some other way" reasoning
+            // as ResendLinkAsync — reuses the exact same templates, just with the new time now
+            // baked into WhenLocal via SendParentDemoLinkEmailsAsync reading session.ScheduledStartAtUtc.
+            await SendParentDemoLinkEmailsAsync(demoSession, booking, cancellationToken);
+            await SendTeacherDemoLinkEmailAsync(
+                demoSession, booking, teacher, "demo-scheduled-teacher",
+                new Dictionary<string, string> { ["ParentName"] = booking.ParentName },
+                cancellationToken);
+
+            return await GetAsync(bookingId, cancellationToken);
+        }
+
+        /// <summary>
+        /// The parent's join link for this demo, for staff to copy and share manually (WhatsApp,
+        /// SMS) instead of relying on the email actually landing. The same stable /join redirect
+        /// the confirmation email carries (see BuildStableJoinUrl) rather than a raw,
+        /// moment-in-time Jitsi URL -- staff used to be able to copy a link whose room/domain was
+        /// correct when copied but went stale (404) by the time a parent actually opened it days
+        /// later; this one re-resolves everything fresh on every click and never expires (see
+        /// ResolveLiveJoinUrlAsync), so "copy it now" and "click it next month" behave identically.
+        /// </summary>
+        public async Task<string> GetJoinLinkAsync(Guid bookingId, CancellationToken cancellationToken = default)
+        {
+            await EnsureVisibleAsync(bookingId, cancellationToken);
+
+            var exists = await _unitOfWork.Repository<DemoBooking>().ExistsAsync(b => b.Id == bookingId, cancellationToken);
+            if (!exists)
+            {
+                throw new NotFoundException(nameof(DemoBooking), bookingId);
+            }
+
+            return BuildStableJoinUrl(bookingId, participantId: null);
+        }
+
+        /// <summary>
+        /// Resolves a parent/participant's join link fresh, right now -- see the interface's own
+        /// remarks for the staleness problem this replaces (a static domain/token baked into an
+        /// email or copied link, versus a teacher's always-fresh authenticated join). Public,
+        /// unauthenticated callers reach this only through DemoBookingsController's anonymous
+        /// GET /join redirect -- never expose the raw signed URL this returns from an endpoint
+        /// requiring no proof of identity beyond knowing the booking id.
+        /// Deliberately no time-based cutoff: a demo that ran long, got revisited weeks later for
+        /// a recap, or whose invite just sat unopened all still resolve -- the only things that
+        /// make this return null are the booking/session/room not existing, or an unrelated
+        /// participant id. (The link dies the moment the booking itself is deleted -- see
+        /// DeleteAsync -- not on any clock.)
+        /// Points at the app's own "/guest-join" bridge page now, not straight at Jitsi's hosted
+        /// client the way this used to (see CreateGuestLinkForParticipantAsync) -- confirmed live
+        /// that a bare Jitsi redirect left the parent/lead with no Whiteboard/Slides at all, the
+        /// same gap BuildTeacherDemoAppJoinUrl below already fixed for the teacher's own copy of
+        /// this link. SessionService.GetGuestJoinAsync recognizes a "named guest" token (carries
+        /// a name/email instead of a childId) and deliberately skips its own expiry/live-status
+        /// gate for it, preserving the "no time-based cutoff" contract this doc comment promises.
+        /// </summary>
+        public async Task<string?> ResolveLiveJoinUrlAsync(Guid bookingId, Guid? participantId, CancellationToken cancellationToken = default)
+        {
+            var booking = await _unitOfWork.Repository<DemoBooking>().Query()
+                .Include(b => b.ClassSession)
+                .Include(b => b.Participants)
+                .FirstOrDefaultAsync(b => b.Id == bookingId, cancellationToken);
+
+            if (booking?.ClassSession is not { } session || string.IsNullOrWhiteSpace(session.MeetingRoomId))
+            {
+                return null;
+            }
+
+            string participantName;
+            string participantEmail;
+            if (participantId.HasValue)
+            {
+                var participant = booking.Participants.FirstOrDefault(p => p.Id == participantId.Value);
+                if (participant is null || string.IsNullOrWhiteSpace(participant.Email))
+                {
+                    return null;
+                }
+                participantName = participant.Name;
+                participantEmail = participant.Email!;
+            }
+            else
+            {
+                participantName = booking.ParentName;
+                participantEmail = booking.ParentEmail;
+            }
+
+            var guestLink = await _sessionService.CreateGuestLinkForParticipantAsync(
+                session.Id, participantName, participantEmail, cancellationToken);
+            var frontendBaseUrl = (_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173").TrimEnd('/');
+            return $"{frontendBaseUrl}/guest-join?token={Uri.EscapeDataString(guestLink.Token)}";
+        }
+
+        /// <summary>
+        /// The link actually handed to a parent/invitee (email, resend, or staff's "Copy Link")
+        /// -- a stable pointer at this booking's own public join redirect
+        /// (DemoBookingsController.Join → ResolveLiveJoinUrlAsync) rather than a raw Jitsi URL
+        /// with the domain and a signed token already baked in. Baking those in at send time is
+        /// exactly what went stale: reported live as a parent's join link 404-ing while the
+        /// teacher's own join kept working — traced to the old /join-link short link's target
+        /// (or the raw URL's baked-in domain/token) drifting from what's current by the time it
+        /// was actually opened, something a teacher's always-fresh authenticated join never hits.
+        /// This link instead re-resolves both on every single click, so it can't go stale that
+        /// way no matter how long it sits in an inbox.
+        /// `Api:BaseUrl` lets a deployment override its own public origin explicitly; falling
+        /// back to the current production API host keeps this working out of the box without
+        /// that config needing to exist first.
+        /// </summary>
+        private string BuildStableJoinUrl(Guid bookingId, Guid? participantId)
+        {
+            var apiBaseUrl = (_configuration["Api:BaseUrl"] ?? "https://api.thereadernest.in").TrimEnd('/');
+            var query = participantId.HasValue ? $"?p={participantId.Value}" : string.Empty;
+            return $"{apiBaseUrl}/api/demo-bookings/{bookingId}/join{query}";
         }
 
         public async Task<IReadOnlyList<TeacherWorkloadDto>> GetTeacherWorkloadAsync(
             Guid bookingId,
             CancellationToken cancellationToken = default)
         {
+            await EnsureVisibleAsync(bookingId, cancellationToken);
+
             var booking = await _unitOfWork.Repository<DemoBooking>().Query()
                 .Include(b => b.ClassSession)
                 .FirstOrDefaultAsync(b => b.Id == bookingId, cancellationToken)
@@ -714,6 +1322,8 @@ namespace iucs.meettomanage.application.Services
             Guid bookingId,
             CancellationToken cancellationToken = default)
         {
+            await EnsureVisibleAsync(bookingId, cancellationToken);
+
             var exists = await _unitOfWork.Repository<DemoBooking>().ExistsAsync(b => b.Id == bookingId, cancellationToken);
             if (!exists)
             {
@@ -770,11 +1380,232 @@ namespace iucs.meettomanage.application.Services
         private sealed record ReassignmentAuditPayload(
             Guid? OldTeacherProfileId, string? OldTeacherName, Guid NewTeacherProfileId, string NewTeacherName, string? Reason);
 
+        public async Task<IReadOnlyList<DemoBookingFollowUpDto>> GetFollowUpNotesAsync(
+            Guid bookingId,
+            CancellationToken cancellationToken = default)
+        {
+            await EnsureVisibleAsync(bookingId, cancellationToken);
+
+            var exists = await _unitOfWork.Repository<DemoBooking>().ExistsAsync(b => b.Id == bookingId, cancellationToken);
+            if (!exists)
+            {
+                throw new NotFoundException(nameof(DemoBooking), bookingId);
+            }
+
+            var logs = await _unitOfWork.Repository<AuditLog>().Query()
+                .Where(a => a.EntityName == FollowUpAuditEntityName && a.EntityId == bookingId.ToString())
+                .OrderByDescending(a => a.CreatedAtUtc)
+                .ToListAsync(cancellationToken);
+
+            if (logs.Count == 0)
+            {
+                return [];
+            }
+
+            var actorIds = logs.Where(l => l.ActorUserId.HasValue).Select(l => l.ActorUserId!.Value).Distinct().ToList();
+            var actorNames = await _unitOfWork.Repository<User>().Query()
+                .Where(u => actorIds.Contains(u.Id))
+                .Select(u => new { u.Id, Name = u.FirstName + " " + u.LastName })
+                .ToDictionaryAsync(u => u.Id, u => u.Name, cancellationToken);
+
+            return logs.Select(log =>
+            {
+                FollowUpAuditPayload? payload = null;
+                if (!string.IsNullOrWhiteSpace(log.ChangesJson))
+                {
+                    try
+                    {
+                        payload = JsonSerializer.Deserialize<FollowUpAuditPayload>(log.ChangesJson);
+                    }
+                    catch (JsonException)
+                    {
+                        _logger.LogWarning("Unparseable follow-up-note audit payload on log {LogId} for booking {BookingId}", log.Id, bookingId);
+                    }
+                }
+
+                return new DemoBookingFollowUpDto
+                {
+                    Id = log.Id,
+                    AtUtc = log.CreatedAtUtc,
+                    LoggedByName = log.ActorUserId.HasValue && actorNames.TryGetValue(log.ActorUserId.Value, out var name) ? name : null,
+                    Note = payload?.Note ?? "—",
+                    NextFollowUpOn = payload?.NextFollowUpOn,
+                };
+            }).ToList();
+        }
+
+        private sealed record FollowUpAuditPayload(string? Note, DateOnly? NextFollowUpOn);
+
+        /// <summary>
+        /// Every teacher's fixed demo room: their permanent personal meeting room (the same
+        /// one GET /api/users/me/meeting-room mints), so a demo's join link is stable across
+        /// every booking, reassignment and resend rather than a new random room each time.
+        /// Mints the room on first use, same convention as UsersController.MyMeetingRoom.
+        /// Caller is responsible for SaveChangesAsync (this may run inside a larger transaction).
+        /// </summary>
+        private async Task<TeacherProfile> EnsureTeacherMeetingRoomAsync(Guid teacherProfileId, CancellationToken cancellationToken)
+        {
+            var teacher = await _unitOfWork.Repository<TeacherProfile>().TrackedQuery()
+                .Include(t => t.User)
+                .FirstOrDefaultAsync(t => t.Id == teacherProfileId, cancellationToken)
+                ?? throw new NotFoundException(nameof(TeacherProfile), teacherProfileId);
+
+            if (string.IsNullOrEmpty(teacher.User.PersonalMeetingRoomId))
+            {
+                teacher.User.PersonalMeetingRoomId = $"trn-personal-{Guid.NewGuid():N}";
+                _unitOfWork.Repository<User>().Update(teacher.User);
+            }
+
+            return teacher;
+        }
+
+        /// <summary>
+        /// The teacher's own demo join link points at this app's authenticated in-app classroom,
+        /// via /teacher/live/:sessionId (gated by RequireAuth, which bounces to /login and back
+        /// if they aren't already signed in) — the teacher already has a real login, so there's
+        /// no need for the token-carrying bridge ResolveLiveJoinUrlAsync's own "/guest-join" link
+        /// now sends the parent/lead through (see CreateGuestLinkForParticipantAsync). Both paths
+        /// land in the exact same full interactive classroom a regular class uses; confirmed live
+        /// once, when only this half of the pair worked, that skipping either one (a bare Jitsi
+        /// redirect) left the opener with no Whiteboard/Slides at all — those only ever render
+        /// inside JitsiLive's InteractivePanel, over an authenticated ClassroomHub connection a
+        /// bare redirect never establishes. This also can't go stale the way a baked-in domain/
+        /// token could: JitsiLive re-resolves the room fresh via its own getJitsiJoin(sessionId)
+        /// call on every open, rather than trusting anything carried in the link itself.
+        /// </summary>
+        private string BuildTeacherDemoAppJoinUrl(ClassSession session)
+        {
+            var frontendBaseUrl = (_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173").TrimEnd('/');
+            return $"{frontendBaseUrl}/teacher/live/{session.Id}";
+        }
+
+        /// <summary>
+        /// Sends (or re-sends) the demo's join link to the parent and every extra invitee —
+        /// always the same room (session.MeetingRoomId, the teacher's fixed personal room).
+        /// Used by CreateAsync, ReassignTeacherAsync (the room changes with the teacher, so the
+        /// parent's earlier link goes stale) and ResendLinkAsync, so the three call sites can't
+        /// drift. Swallows delivery failures: the write this follows is already committed, and a
+        /// template-render glitch or SMTP hiccup must not turn an already-successful write into a
+        /// 500 (confirmed via production logs — this exact path once threw an uncaught
+        /// SmtpException after the booking had already saved).
+        /// </summary>
+        /// <param name="onlyTo">When set, only these addresses are emailed (UpdateAsync uses this to
+        /// reach just a corrected/new address without re-sending to everyone else).</param>
+        private async Task SendParentDemoLinkEmailsAsync(
+            ClassSession session,
+            DemoBooking booking,
+            CancellationToken cancellationToken,
+            IReadOnlySet<string>? onlyTo = null)
+        {
+            try
+            {
+                if (onlyTo is null || onlyTo.Contains(booking.ParentEmail))
+                {
+                    var (parentSubject, parentHtml) = await _emailTemplateService.RenderAsync(
+                        "demo-confirmed",
+                        new Dictionary<string, string>
+                        {
+                            ["ChildName"] = booking.ChildName,
+                            ["WhenLocal"] = DateTimeDisplay.ToLocal(session.ScheduledStartAtUtc),
+                            ["JoinUrl"] = BuildStableJoinUrl(booking.Id, participantId: null),
+                        },
+                        cancellationToken);
+                    await _emailSender.SendAsync(booking.ParentEmail, parentSubject, parentHtml, cancellationToken);
+                }
+                foreach (var participant in booking.Participants.Where(p => !string.IsNullOrWhiteSpace(p.Email) && (onlyTo is null || onlyTo.Contains(p.Email!))))
+                {
+                    var (participantSubject, participantHtml) = await _emailTemplateService.RenderAsync(
+                        "demo-confirmed",
+                        new Dictionary<string, string>
+                        {
+                            ["ChildName"] = booking.ChildName,
+                            ["WhenLocal"] = DateTimeDisplay.ToLocal(session.ScheduledStartAtUtc),
+                            ["JoinUrl"] = BuildStableJoinUrl(booking.Id, participant.Id),
+                        },
+                        cancellationToken);
+                    await _emailSender.SendAsync(participant.Email!, participantSubject, participantHtml, cancellationToken);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Demo link email delivery to parent/participants failed for booking {BookingId}", booking.Id);
+            }
+        }
+
+        /// <summary>
+        /// Sends the assigned teacher their copy of the demo's join link (same room as the
+        /// parent, a moderator token) using the given template plus whatever extra placeholders
+        /// that template needs beyond ChildName/WhenLocal/JoinUrl. Swallows delivery failures for
+        /// the same reason as SendParentDemoLinkEmailsAsync.
+        /// </summary>
+        private async Task SendTeacherDemoLinkEmailAsync(
+            ClassSession session,
+            DemoBooking booking,
+            TeacherProfile teacher,
+            string templateKey,
+            Dictionary<string, string>? extraPlaceholders,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                var teacherName = $"{teacher.User.FirstName} {teacher.User.LastName}".Trim();
+                var placeholders = new Dictionary<string, string>
+                {
+                    ["ChildName"] = booking.ChildName,
+                    ["WhenLocal"] = DateTimeDisplay.ToLocal(session.ScheduledStartAtUtc, teacher.User.TimeZoneId),
+                    ["JoinUrl"] = BuildTeacherDemoAppJoinUrl(session),
+                };
+                if (extraPlaceholders is not null)
+                {
+                    foreach (var (key, value) in extraPlaceholders)
+                    {
+                        placeholders[key] = value;
+                    }
+                }
+
+                var (subject, html) = await _emailTemplateService.RenderAsync(templateKey, placeholders, cancellationToken);
+                await _emailSender.SendAsync(teacher.User.Email, subject, html, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Demo link email delivery to teacher failed for booking {BookingId}", booking.Id);
+            }
+        }
+
+        /// <summary>
+        /// When the signed-in user is an Admission Counselor or a Relationship Manager, their own
+        /// user id -- they only ever see (and act on) the demos they scheduled themselves, not the
+        /// whole team's. Null for everyone else (Admin, Management, Coordinator, ...) and for
+        /// system/background callers with no signed-in user, who keep the unrestricted view.
+        /// </summary>
+        private Task<Guid?> CreatorScopeAsync(CancellationToken cancellationToken) =>
+            DemoOwnershipScope.GetAsync(_unitOfWork, _currentUser?.UserId, cancellationToken);
+
+        /// <summary>Throws NotFound (not Forbidden -- don't confirm it exists) when a scoped user
+        /// touches a demo somebody else scheduled.</summary>
+        private async Task EnsureVisibleAsync(Guid bookingId, CancellationToken cancellationToken)
+        {
+            var scope = await CreatorScopeAsync(cancellationToken);
+            if (scope is null)
+            {
+                return;
+            }
+
+            var visible = await _unitOfWork.Repository<DemoBooking>()
+                .ExistsAsync(b => b.Id == bookingId && b.CreatedBy == scope, cancellationToken);
+            if (!visible)
+            {
+                throw new NotFoundException(nameof(DemoBooking), bookingId);
+            }
+        }
+
         private IQueryable<DemoBooking> BaseQuery()
         {
             return _unitOfWork.Repository<DemoBooking>().Query()
                 .Include(b => b.ClassSession!).ThenInclude(s => s.TeacherProfile).ThenInclude(t => t.User)
                 .Include(b => b.Participants)
+                .Include(b => b.Invoice)
+                .Include(b => b.Course)
                 .Include(b => b.Department);
         }
     }

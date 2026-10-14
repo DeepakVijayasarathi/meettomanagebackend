@@ -7,7 +7,9 @@ using iucs.meettomanage.application.Dto.Common;
 using iucs.meettomanage.application.Mappings;
 using iucs.meettomanage.domain.Common;
 using iucs.meettomanage.domain.Entities.Academics;
+using iucs.meettomanage.domain.Entities.Admission;
 using iucs.meettomanage.domain.Entities.Billing;
+using iucs.meettomanage.domain.Entities.Integrations;
 using iucs.meettomanage.domain.Entities.Settings;
 using iucs.meettomanage.domain.Entities.Users;
 using iucs.meettomanage.domain.Enums;
@@ -395,7 +397,10 @@ namespace iucs.meettomanage.application.Services
             query
                 .Include(i => i.Child)
                 .Include(i => i.Course)
+                .Include(i => i.Department)
                 .Include(i => i.ParentProfile).ThenInclude(p => p.User)
+                .Include(i => i.ParentProfile).ThenInclude(p => p.Children)
+                .Include(i => i.Subscription).ThenInclude(s => s!.Child)
                 .Include(i => i.Subscription).ThenInclude(s => s!.PackagePlan).ThenInclude(p => p.Course);
 
         public async Task<PagedResult<InvoiceDto>> ListInvoicesAsync(
@@ -417,6 +422,14 @@ namespace iucs.meettomanage.application.Services
             if (parentProfileId.HasValue)
             {
                 query = query.Where(i => i.ParentProfileId == parentProfileId.Value);
+            }
+
+            // An admission counselor's Payment Tracking shows only her own collections (client
+            // requirement), not the whole team's -- see CollectionOwnership.
+            if (_currentUser.UserId is { } callerId
+                && await _unitOfWork.Repository<User>().ExistsAsync(u => u.Id == callerId && u.Role == UserRole.AdmissionTeam, cancellationToken))
+            {
+                query = CollectionOwnership.OwnedBy(query, _unitOfWork.Repository<DemoBooking>().Query(), callerId);
             }
 
             // Counted before the includes matter: EF translates this to a COUNT over the
@@ -467,6 +480,41 @@ namespace iucs.meettomanage.application.Services
                 .FirstOrDefaultAsync(i => i.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(Invoice), id);
 
+            var data = await BuildInvoicePdfDataAsync(invoice, cancellationToken);
+            var content = _invoicePdfGenerator.Generate(data);
+            return (content, $"{invoice.InvoiceNumber}.pdf");
+        }
+
+        /// <summary>
+        /// Ownership-checked equivalent of <see cref="GenerateInvoicePdfAsync"/> for the parent
+        /// portal's own invoice download — same "Bill of Supply" PDF admin gets, not a separate,
+        /// unbranded document. A parent can only download their own invoice.
+        /// </summary>
+        public async Task<(byte[] Content, string FileName)> GenerateParentInvoicePdfAsync(
+            Guid parentUserId,
+            Guid invoiceId,
+            CancellationToken cancellationToken = default)
+        {
+            var parent = await _unitOfWork.Repository<ParentProfile>()
+                .FirstOrDefaultAsync(p => p.UserId == parentUserId, cancellationToken)
+                ?? throw new NotFoundException("No parent profile is linked to the current account.");
+
+            var invoice = await WithDtoIncludes(_unitOfWork.Repository<Invoice>().Query())
+                .FirstOrDefaultAsync(i => i.Id == invoiceId && i.ParentProfileId == parent.Id, cancellationToken)
+                ?? throw new NotFoundException(nameof(Invoice), invoiceId);
+
+            var data = await BuildInvoicePdfDataAsync(invoice, cancellationToken);
+            var content = _invoicePdfGenerator.Generate(data);
+            return (content, $"{invoice.InvoiceNumber}.pdf");
+        }
+
+        /// <summary>Shared by GenerateInvoicePdfAsync and GenerateParentInvoicePdfAsync — both put
+        /// the same "Bill of Supply" PDF in front of the caller, just with different ownership
+        /// rules on which invoice they're allowed to reach. <paramref name="invoice"/> must come
+        /// from a query built on <see cref="WithDtoIncludes"/> (Course, ParentProfile.User,
+        /// Subscription.PackagePlan.Course) or the navigation properties below will be null.</summary>
+        private async Task<InvoicePdfData> BuildInvoicePdfDataAsync(Invoice invoice, CancellationToken cancellationToken)
+        {
             var settings = await _unitOfWork.Repository<AppSetting>().Query()
                 .Where(s => InvoiceSettingKeys.Contains(s.Key))
                 .ToDictionaryAsync(s => s.Key, s => s.Value, cancellationToken);
@@ -476,7 +524,7 @@ namespace iucs.meettomanage.application.Services
                     ? value
                     : InvoiceSettingNotConfigured;
 
-            var data = new InvoicePdfData
+            return new InvoicePdfData
             {
                 InvoiceNumber = invoice.InvoiceNumber,
                 IssuedAtUtc = invoice.IssuedAtUtc,
@@ -485,6 +533,16 @@ namespace iucs.meettomanage.application.Services
                     : $"{invoice.ParentProfile.User.FirstName} {invoice.ParentProfile.User.LastName}".Trim(),
                 ParentPhone = invoice.ParentProfile?.User?.Phone,
                 Description = invoice.Course?.Name ?? invoice.Subscription?.PackagePlan?.Course?.Name ?? "Course Fee",
+                // Subscription's own plan wins over the course, the OPPOSITE precedence from
+                // Description above. Invoice.CourseId is typically set on a subscription-driven
+                // invoice too (copied from the plan's course — see Invoice.CourseId's own doc
+                // comment), so a Course-first order here would almost always pick the course's
+                // generic list price/session count instead of what this specific parent's
+                // subscription actually includes (a course can have several plans at different
+                // prices/session counts — a trial vs. a full package, say). Only a pure one-time
+                // course invoice with no subscription at all falls back to the course's own values.
+                Sessions = invoice.Subscription?.PackagePlan?.SessionsIncluded ?? invoice.Course?.TotalSessions,
+                Fee = invoice.Subscription?.PackagePlan?.Price ?? invoice.Course?.Price,
                 Amount = invoice.Amount,
                 Currency = invoice.Currency,
                 AccountNumber = Setting("invoice.accountNumber"),
@@ -496,15 +554,13 @@ namespace iucs.meettomanage.application.Services
                 SignatoryName = Setting("invoice.signatoryName"),
                 SignatoryTitle = Setting("invoice.signatoryTitle"),
             };
-
-            var content = _invoicePdfGenerator.Generate(data);
-            return (content, $"{invoice.InvoiceNumber}.pdf");
         }
 
         public async Task<InvoiceDto> CreateInvoiceAsync(
             CreateInvoiceRequest request,
             CancellationToken cancellationToken = default,
-            bool isAutoGenerated = false)
+            bool isAutoGenerated = false,
+            bool notifyParent = true)
         {
             var parent = await _unitOfWork.Repository<ParentProfile>()
                 .FirstOrDefaultAsync(p => p.Id == request.ParentProfileId, cancellationToken)
@@ -541,6 +597,13 @@ namespace iucs.meettomanage.application.Services
                 IssuedAtUtc = DateTime.UtcNow,
                 IsAutoGenerated = isAutoGenerated,
             };
+            if (invoice.Amount == 0)
+            {
+                // Nothing to collect (e.g. a fee agreed at ₹0): born Paid, or it would sit Pending
+                // and go overdue, feeding the fee-suspension check for no money owed.
+                invoice.Status = InvoiceStatus.Paid;
+                invoice.PaidAtUtc = invoice.IssuedAtUtc;
+            }
             await _unitOfWork.Repository<Invoice>().AddAsync(invoice, cancellationToken);
             await _auditLog.StageAsync(AuditAction.Create, nameof(Invoice), invoice.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -551,7 +614,7 @@ namespace iucs.meettomanage.application.Services
             // it's the same parent-facing fee email as the daily due/overdue sweep
             // (SendPaymentRemindersAsync in BillingBackgroundService); leaving it ungated
             // meant every subscription renewal kept emailing the parent regardless of the toggle.
-            var parentUser = await NotificationToggles.IsEnabledAsync(_unitOfWork, NotificationToggles.FeeReminders, cancellationToken)
+            var parentUser = notifyParent && await NotificationToggles.IsEnabledAsync(_unitOfWork, NotificationToggles.FeeReminders, cancellationToken)
                 ? await _unitOfWork.Repository<ParentProfile>().Query()
                     .Where(p => p.Id == invoice.ParentProfileId)
                     .Select(p => p.User)
@@ -729,16 +792,35 @@ namespace iucs.meettomanage.application.Services
                 invoice.Status = InvoiceStatus.Paid;
                 invoice.PaidAtUtc = DateTime.UtcNow;
 
-                // Access restoration: full payment on THIS invoice auto-lifts any active fee
-                // suspension for the parent — but only when nothing else is outstanding. A
-                // suspension is one row per parent (it can cover several overdue invoices at
-                // once, see BillingBackgroundService), so lifting it just because one of
-                // several overdue invoices got paid would silently restore access while the
-                // parent still owes money on another invoice.
+                // A demo admitted manually waits in PaymentPending on this invoice
+                // (ManualAdmissionService) — the fee is in, so it's now a real enrollment.
+                var awaitingBookings = await _unitOfWork.Repository<DemoBooking>().TrackedQuery()
+                    .Where(b => b.InvoiceId == invoice.Id
+                        && (b.ConversionStatus == ConversionStatus.PaymentPending
+                            || (b.PaymentToken != null && b.ConversionStatus == ConversionStatus.PartiallyPaid)))
+                    .ToListAsync(cancellationToken);
+                foreach (var awaiting in awaitingBookings)
+                {
+                    // Portal admission flow (payment link -> counsellor verification): a fully-paid
+                    // lead waits for the counsellor to verify and click Enroll. The manual-admission
+                    // path has no token and its child is already enrolled, so it stays as it was.
+                    awaiting.ConversionStatus = awaiting.PaymentToken is not null
+                        ? ConversionStatus.PaymentReceived
+                        : ConversionStatus.Enrolled;
+                }
+
+                // Access restoration: full payment on THIS invoice auto-lifts the matching fee
+                // suspension -- but only when nothing else in that same scope is outstanding.
+                // A child-specific invoice (ChildId set) only ever checks/lifts that child's own
+                // suspension; a family-level invoice (ChildId null) only checks/lifts the
+                // account-wide one. Paying off your own overdue invoice must never silently
+                // restore a sibling's access (or vice versa) -- see FeeSuspension's own doc
+                // comment on why suspensions are scoped this way.
                 var hasOtherOverdueInvoice = await _unitOfWork.Repository<Invoice>().ExistsAsync(
                     i => i.ParentProfileId == invoice.ParentProfileId
                         && i.Id != invoice.Id
-                        && i.Status == InvoiceStatus.Overdue,
+                        && i.Status == InvoiceStatus.Overdue
+                        && i.ChildId == invoice.ChildId,
                     cancellationToken);
 
                 if (!hasOtherOverdueInvoice)
@@ -746,7 +828,9 @@ namespace iucs.meettomanage.application.Services
                     // TrackedQuery() fetches every matching row already tracked, so each is
                     // mutated in place with no extra per-row round trip to re-fetch it.
                     var suspensions = await _unitOfWork.Repository<FeeSuspension>().TrackedQuery()
-                        .Where(s => s.ParentProfileId == invoice.ParentProfileId && s.Status == SuspensionStatus.Active)
+                        .Where(s => s.ParentProfileId == invoice.ParentProfileId
+                            && s.Status == SuspensionStatus.Active
+                            && s.ChildId == invoice.ChildId)
                         .ToListAsync(cancellationToken);
                     foreach (var suspension in suspensions)
                     {
@@ -788,6 +872,18 @@ namespace iucs.meettomanage.application.Services
             else
             {
                 invoice.Status = InvoiceStatus.PartiallyPaid;
+
+                // Portal admission flow: any payment received -- even part of the agreed amount --
+                // counts as verified (client decision 2026-09-26), so the counsellor can Enroll
+                // right away. The balance stays due on the invoice.
+                var partBookings = await _unitOfWork.Repository<DemoBooking>().TrackedQuery()
+                    .Where(b => b.InvoiceId == invoice.Id && b.PaymentToken != null
+                        && b.ConversionStatus == ConversionStatus.PaymentPending)
+                    .ToListAsync(cancellationToken);
+                foreach (var part in partBookings)
+                {
+                    part.ConversionStatus = ConversionStatus.PaymentReceived;
+                }
             }
         }
 
@@ -814,23 +910,32 @@ namespace iucs.meettomanage.application.Services
             }
         }
 
-        public async Task<(InvoiceDto Invoice, string ParentName)> GetParentInvoiceAsync(
-            Guid parentUserId,
-            Guid invoiceId,
-            CancellationToken cancellationToken = default)
+
+        /// <summary>
+        /// The amount a parent pay-now attempt charges: the whole outstanding balance when they
+        /// didn't pick one, otherwise their chosen installment -- which must be at least 1 and
+        /// never more than what's still owed (a gateway would happily take the overpayment; the
+        /// invoice must not).
+        /// </summary>
+        private static decimal ResolveChargeAmount(decimal outstanding, decimal? requested)
         {
-            var parent = await _unitOfWork.Repository<ParentProfile>().Query()
-                .Include(p => p.User)
-                .FirstOrDefaultAsync(p => p.UserId == parentUserId, cancellationToken)
-                ?? throw new NotFoundException("No parent profile is linked to the current account.");
+            if (requested is null)
+            {
+                return outstanding;
+            }
 
-            var invoice = await _unitOfWork.Repository<Invoice>().Query()
-                .Include(i => i.Child)
-                .Include(i => i.Subscription).ThenInclude(s => s!.PackagePlan).ThenInclude(p => p.Course)
-                .FirstOrDefaultAsync(i => i.Id == invoiceId && i.ParentProfileId == parent.Id, cancellationToken)
-                ?? throw new NotFoundException(nameof(Invoice), invoiceId);
+            var amount = Math.Round(requested.Value, 2, MidpointRounding.AwayFromZero);
+            if (amount < 1m)
+            {
+                throw new DomainValidationException("Enter an amount of at least 1.");
+            }
 
-            return (invoice.ToDto(), $"{parent.User.FirstName} {parent.User.LastName}");
+            if (amount > outstanding)
+            {
+                throw new DomainValidationException($"The amount can't be more than the outstanding balance of {outstanding:0.00}.");
+            }
+
+            return amount;
         }
 
         public async Task<ParentPaymentResultDto> InitiateParentPaymentAsync(
@@ -853,7 +958,10 @@ namespace iucs.meettomanage.application.Services
                 throw new DomainValidationException($"Invoice '{invoice.InvoiceNumber}' is already {invoice.Status}.");
             }
 
-            var remaining = invoice.Amount - invoice.AmountPaid;
+            var outstanding = invoice.Amount - invoice.AmountPaid;
+            // Installment plans: the parent may pay any part of the balance now. Cash intents and
+            // gateway checkouts below both charge this amount, not the whole balance.
+            var remaining = ResolveChargeAmount(outstanding, request.Amount);
             var methodKey = request.MethodKey.Trim().ToLowerInvariant();
 
             if (methodKey == "cash")
@@ -903,7 +1011,7 @@ namespace iucs.meettomanage.application.Services
             var account = await _unitOfWork.Repository<PaymentAccount>().GetByIdAsync(invoice.PaymentAccountId, cancellationToken)
                 ?? throw new NotFoundException(nameof(PaymentAccount), invoice.PaymentAccountId);
 
-            var link = await _paymentGateway.CreatePaymentLinkAsync(invoice, account, methodKey, cancellationToken);
+            var link = await _paymentGateway.CreatePaymentLinkAsync(invoice, account, methodKey, remaining, cancellationToken);
 
             // Chosen gateway can't start a checkout (turned off / missing keys) → surface the
             // actionable reason; no pending transaction is created.
@@ -966,6 +1074,7 @@ namespace iucs.meettomanage.application.Services
             var account = await _unitOfWork.Repository<PaymentAccount>().GetByIdAsync(invoice.PaymentAccountId, cancellationToken)
                 ?? throw new NotFoundException(nameof(PaymentAccount), invoice.PaymentAccountId);
 
+            var chargeAmount = ResolveChargeAmount(invoice.Amount - invoice.AmountPaid, request.Amount);
             var checkout = await _paymentGateway.CreateInlineCheckoutAsync(
                 invoice,
                 account,
@@ -976,6 +1085,7 @@ namespace iucs.meettomanage.application.Services
                     Email = parent.User.Email,
                     Contact = parent.User.Phone,
                 },
+                chargeAmount,
                 cancellationToken);
 
             if (checkout.UnavailableReason is not null)
@@ -989,7 +1099,7 @@ namespace iucs.meettomanage.application.Services
                 {
                     InvoiceId = invoice.Id,
                     PaymentAccountId = invoice.PaymentAccountId,
-                    Amount = invoice.Amount - invoice.AmountPaid,
+                    Amount = chargeAmount,
                     Currency = invoice.Currency,
                     Status = TransactionStatus.Pending,
                     GatewayTransactionId = checkout.OrderId,
@@ -1296,7 +1406,7 @@ namespace iucs.meettomanage.application.Services
                 await _unitOfWork.SaveChangesAsync(cancellationToken);
             }
 
-            var parentName = parentUser is null ? "—" : $"{parentUser.FirstName} {parentUser.LastName}";
+            var parentName = parentUser is null ? "—" : $"{parentUser.FirstName} {parentUser.LastName}".Trim();
             transaction.Invoice = invoice;
             return ToCashIntentDto(transaction, parentName);
         }
@@ -1758,7 +1868,7 @@ namespace iucs.meettomanage.application.Services
             {
                 Id = suspension.Id,
                 ParentProfileId = suspension.ParentProfileId,
-                ParentName = $"{suspension.ParentProfile.User.FirstName} {suspension.ParentProfile.User.LastName}",
+                ParentName = $"{suspension.ParentProfile.User.FirstName} {suspension.ParentProfile.User.LastName}".Trim(),
                 InvoiceId = suspension.InvoiceId,
                 InvoiceNumber = suspension.Invoice?.InvoiceNumber,
                 Reason = suspension.Reason,
@@ -1797,7 +1907,54 @@ namespace iucs.meettomanage.application.Services
             var account = await _unitOfWork.Repository<PaymentAccount>().GetByIdAsync(invoice.PaymentAccountId, cancellationToken)
                 ?? throw new NotFoundException(nameof(PaymentAccount), invoice.PaymentAccountId);
 
-            var link = await _paymentGateway.CreatePaymentLinkAsync(invoice, account, cancellationToken: cancellationToken);
+            // Most department accounts are "Cash" (no gateway of their own). A link staff send a
+            // parent must still be a real online checkout, so fall back to whichever online
+            // gateway is live — the same routing parent Pay Now already does by method key.
+            var providerLive = !string.Equals(account.GatewayProvider, "cash", StringComparison.OrdinalIgnoreCase)
+                && await _paymentGateway.IsMethodConfiguredAsync(account.GatewayProvider, cancellationToken);
+            string? methodKey = null;
+            if (!providerLive)
+            {
+                var gatewayKeys = await _unitOfWork.Repository<Integration>().Query()
+                    .Where(i => i.Category == IntegrationCategory.PaymentGateway && i.IsEnabled && i.Key != "cash")
+                    .OrderBy(i => i.Name)
+                    .Select(i => i.Key)
+                    .ToListAsync(cancellationToken);
+                foreach (var key in gatewayKeys)
+                {
+                    if (await _paymentGateway.IsMethodConfiguredAsync(key, cancellationToken))
+                    {
+                        methodKey = key;
+                        break;
+                    }
+                }
+            }
+
+            var outstanding = invoice.Amount - invoice.AmountPaid;
+            var link = await _paymentGateway.CreatePaymentLinkAsync(invoice, account, methodKey, cancellationToken: cancellationToken);
+            if (link.UnavailableReason is not null)
+            {
+                throw new DomainValidationException(link.UnavailableReason);
+            }
+
+            // The gateway's "paid" webhook (and the parent's own status check) settle a payment
+            // only through a pending transaction carrying the link's reference. Without this a
+            // parent paying a staff-sent link was never credited. Not recorded for the portal
+            // fallback link (no gateway live) — that just opens Pay Now, which records its own.
+            if (providerLive || methodKey is not null)
+            {
+                await _unitOfWork.Repository<PaymentTransaction>().AddAsync(
+                    new PaymentTransaction
+                    {
+                        InvoiceId = invoice.Id,
+                        PaymentAccountId = invoice.PaymentAccountId,
+                        Amount = outstanding,
+                        Currency = invoice.Currency,
+                        Status = TransactionStatus.Pending,
+                        GatewayTransactionId = link.GatewayReference,
+                    },
+                    cancellationToken);
+            }
 
             await _auditLog.StageAsync(AuditAction.Update, nameof(Invoice), invoice.Id.ToString(),
                 changesJson: $"{{\"paymentLinkRef\":\"{link.GatewayReference}\"}}", cancellationToken: cancellationToken);
@@ -1863,6 +2020,7 @@ namespace iucs.meettomanage.application.Services
                 // one cycle out; a future start leaves the first invoice to the billing job
                 // on the start date itself.
                 NextBillingAtUtc = startsNow ? NextBillingFrom(startUtc, plan.BillingCycle) : startUtc,
+                PriceOverride = request.PriceOverride,
             };
             await _unitOfWork.Repository<Subscription>().AddAsync(subscription, cancellationToken);
             await _auditLog.StageAsync(AuditAction.Create, nameof(Subscription), subscription.Id.ToString(), cancellationToken: cancellationToken);
@@ -1896,7 +2054,7 @@ namespace iucs.meettomanage.application.Services
                         SubscriptionId = subscription.Id,
                         CourseId = plan.CourseId,
                         DepartmentId = await DepartmentIdForPlanAsync(plan, cancellationToken),
-                        Amount = plan.Price,
+                        Amount = subscription.PriceOverride ?? plan.Price,
                         DueDate = today.AddDays(7),
                     },
                     cancellationToken);
@@ -1974,7 +2132,7 @@ namespace iucs.meettomanage.application.Services
                     SubscriptionId = subscription.Id,
                     CourseId = plan.CourseId,
                     DepartmentId = await DepartmentIdForPlanAsync(plan, cancellationToken),
-                    Amount = plan.Price,
+                    Amount = subscription.PriceOverride ?? plan.Price,
                     DueDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(7),
                 },
                 cancellationToken);
@@ -2002,17 +2160,13 @@ namespace iucs.meettomanage.application.Services
             // still-unsettled invoices were otherwise left Pending/Overdue forever — nothing
             // else ever revisits them once the subscription they belong to is gone, so the
             // parent kept seeing a payable balance for a plan they'd already cancelled.
-            var openInvoiceIds = await _unitOfWork.Repository<Invoice>().Query()
+            var openInvoices = await _unitOfWork.Repository<Invoice>().TrackedQuery()
                 .Where(i => i.SubscriptionId == subscription.Id
                     && i.Status != InvoiceStatus.Paid
                     && i.Status != InvoiceStatus.Cancelled)
-                .Select(i => i.Id)
                 .ToListAsync(cancellationToken);
-            foreach (var openInvoiceId in openInvoiceIds)
+            foreach (var openInvoice in openInvoices)
             {
-                // Load each one tracked (Query() above is AsNoTracking) so the mutation persists.
-                var openInvoice = await _unitOfWork.Repository<Invoice>().GetByIdAsync(openInvoiceId, cancellationToken)
-                    ?? throw new NotFoundException(nameof(Invoice), openInvoiceId);
                 openInvoice.Status = InvoiceStatus.Cancelled;
                 _unitOfWork.Repository<Invoice>().Update(openInvoice);
                 await _auditLog.StageAsync(AuditAction.Update, nameof(Invoice), openInvoice.Id.ToString(),
@@ -2029,6 +2183,7 @@ namespace iucs.meettomanage.application.Services
         {
             return cycle switch
             {
+                BillingCycle.Biweekly => fromUtc.AddDays(14),
                 BillingCycle.Monthly => fromUtc.AddMonths(1),
                 BillingCycle.Quarterly => fromUtc.AddMonths(3),
                 BillingCycle.Yearly => fromUtc.AddYears(1),
@@ -2062,7 +2217,7 @@ namespace iucs.meettomanage.application.Services
                 Id = subscription.Id,
                 ParentProfileId = subscription.ParentProfileId,
                 ChildId = subscription.ChildId,
-                ChildName = $"{subscription.Child.FirstName} {subscription.Child.LastName}",
+                ChildName = $"{subscription.Child.FirstName} {subscription.Child.LastName}".Trim(),
                 PackagePlanId = subscription.PackagePlanId,
                 PlanName = subscription.PackagePlan.Name,
                 Status = subscription.Status,

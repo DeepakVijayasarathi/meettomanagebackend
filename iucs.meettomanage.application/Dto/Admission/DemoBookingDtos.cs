@@ -5,6 +5,10 @@ namespace iucs.meettomanage.application.Dto.Admission
 {
     public class DemoParticipantDto
     {
+        /// <summary>Existing participant's id — set on reads, and echoed back on an edit so the
+        /// invitee keeps their own join link (it's keyed by this id). Null for a new invitee.</summary>
+        public Guid? Id { get; set; }
+
         [Required]
         [MaxLength(200)]
         public string Name { get; set; } = null!;
@@ -30,11 +34,15 @@ namespace iucs.meettomanage.application.Dto.Admission
         [MaxLength(200)]
         public string ParentName { get; set; } = null!;
 
-        [Required]
-        [EmailAddress]
+        /// <summary>Optional (client decision 2026-09-26): a parent with no email still logs in with
+        /// their mobile number and gets their PIN over WhatsApp. When blank,
+        /// <see cref="ParentPhone"/> becomes their portal login.</summary>
         [MaxLength(256)]
-        public string ParentEmail { get; set; } = null!;
+        public string? ParentEmail { get; set; }
 
+        /// <summary>Mandatory: the counsellor's contact number for the parent, and the login for a
+        /// parent without an email. Enforced at the API boundary only.</summary>
+        [Required]
         [MaxLength(20)]
         public string? ParentPhone { get; set; }
 
@@ -60,13 +68,86 @@ namespace iucs.meettomanage.application.Dto.Admission
         public List<DemoParticipantDto> Participants { get; set; } = [];
     }
 
+    /// <summary>
+    /// A lead with no demo class, so the counsellor can go straight to a payment link: a family
+    /// that wants to enroll without a demo, or a second child who sat in on a sibling's demo
+    /// (each child is its own lead, so each gets its own payment link, Enroll and details form).
+    /// </summary>
+    public class CreateDirectAdmissionLeadRequest
+    {
+        /// <summary>The demo/lead of the sibling this child sat in with. When set, the parent's
+        /// details are copied from it (so both children land on the same parent account) and the
+        /// parent fields below are ignored.</summary>
+        public Guid? SiblingOfBookingId { get; set; }
+
+        [MaxLength(200)]
+        public string? ParentName { get; set; }
+
+        /// <summary>Optional, as on a demo booking: blank means <see cref="ParentPhone"/> is the login.</summary>
+        [MaxLength(256)]
+        public string? ParentEmail { get; set; }
+
+        [MaxLength(20)]
+        public string? ParentPhone { get; set; }
+
+        [Required]
+        [MaxLength(200)]
+        public string ChildName { get; set; } = null!;
+
+        [Range(1, 18)]
+        public int? ChildAge { get; set; }
+
+        public Guid? DepartmentId { get; set; }
+    }
+
+    /// <summary>
+    /// Corrects a booking's parent/child details (a mistyped email being the usual case) without
+    /// touching its slot, teacher or pipeline stage — those have their own endpoints (reschedule,
+    /// reassign, conversion-status). <see cref="Participants"/> replaces the extra-invitee list:
+    /// entries carrying an existing Id are updated in place, new ones are added, and any not sent
+    /// back are removed.
+    /// </summary>
+    public class UpdateDemoBookingRequest
+    {
+        [Required]
+        [MaxLength(200)]
+        public string ParentName { get; set; } = null!;
+
+        /// <summary>Optional: some parents want everything on WhatsApp. When blank,
+        /// <see cref="ParentPhone"/> is required (it becomes their portal login).</summary>
+        [MaxLength(256)]
+        public string? ParentEmail { get; set; }
+
+        [MaxLength(20)]
+        public string? ParentPhone { get; set; }
+
+        [Required]
+        [MaxLength(200)]
+        public string ChildName { get; set; } = null!;
+
+        [Range(1, 18)]
+        public int? ChildAge { get; set; }
+
+        public Guid? DepartmentId { get; set; }
+
+        public List<DemoParticipantDto> Participants { get; set; } = [];
+    }
+
     public class UpdateConversionStatusRequest
     {
         [Required]
         public ConversionStatus ConversionStatus { get; set; }
 
+        /// <summary>New follow-up note text to log now (optional — a stage move alone needs none).
+        /// Stored in the audit trail with the acting user and timestamp attached server-side,
+        /// not trusted from the client, so history stays accurate across multiple staff logging
+        /// notes on the same lead.</summary>
         [MaxLength(2000)]
-        public string? FollowUpNotes { get; set; }
+        public string? Note { get; set; }
+
+        /// <summary>When to follow up next — set alongside a note, or left null to leave the
+        /// booking's current reminder date untouched.</summary>
+        public DateOnly? NextFollowUpOn { get; set; }
     }
 
     public class DemoBookingDto
@@ -93,11 +174,17 @@ namespace iucs.meettomanage.application.Dto.Admission
 
         public string? FollowUpNotes { get; set; }
 
+        public DateOnly? NextFollowUpOn { get; set; }
+
         public DateTime? ScheduledStartAtUtc { get; set; }
 
         public DateTime? ScheduledEndAtUtc { get; set; }
 
         public string? MeetingRoomId { get; set; }
+
+        /// <summary>The linked demo class's own status. TeacherNoShow/StudentNoShow means the demo
+        /// was missed and is waiting for the counselor to reschedule or cancel it.</summary>
+        public SessionStatus? SessionStatus { get; set; }
 
         /// <summary>Teacher conducting (or who conducted) the demo, from the linked session.</summary>
         public Guid? TeacherProfileId { get; set; }
@@ -111,7 +198,41 @@ namespace iucs.meettomanage.application.Dto.Admission
         /// signed-in account matching <see cref="ParentEmail"/> joins this demo's classroom hub.</summary>
         public DateTime? ParentJoinedAtUtc { get; set; }
 
+        // Portal admission flow (payment link -> counsellor verification -> Enroll).
+        public Guid? CourseId { get; set; }
+
+        public string? CourseName { get; set; }
+
+        /// <summary>Parent-facing payment page (/pay/{token}) the counsellor shares; null until issued.</summary>
+        public string? PaymentLinkUrl { get; set; }
+
+        public Guid? InvoiceId { get; set; }
+
+        /// <summary>The agreed (possibly discounted) amount the payment link bills.</summary>
+        public decimal? InvoiceAmount { get; set; }
+
+        public decimal? InvoiceAmountPaid { get; set; }
+
+        public DateTime? TermsAcceptedAtUtc { get; set; }
+
+        public DateTime? PaymentVerifiedAtUtc { get; set; }
+
         public IReadOnlyList<DemoParticipantDto> Participants { get; set; } = [];
+
+        /// <summary>Only on the response that just created a no-email parent's mobile login
+        /// (moving the lead to ReadyForEnrollment): the PIN for staff to send on WhatsApp.</summary>
+        public IssuedParentLoginDto? IssuedLogin { get; set; }
+    }
+
+    public class IssuedParentLoginDto
+    {
+        public string LoginId { get; set; } = null!;
+
+        public string TemporaryPin { get; set; } = null!;
+
+        public string LoginUrl { get; set; } = null!;
+
+        public string WhatsAppMessage { get; set; } = null!;
     }
 
     public class ReassignTeacherRequest
@@ -157,6 +278,20 @@ namespace iucs.meettomanage.application.Dto.Admission
         public string NewTeacherName { get; set; } = null!;
 
         public string? Reason { get; set; }
+    }
+
+    /// <summary>One follow-up note logged on a demo booking, for the Leads page's history panel.</summary>
+    public class DemoBookingFollowUpDto
+    {
+        public Guid Id { get; set; }
+
+        public DateTime AtUtc { get; set; }
+
+        public string? LoggedByName { get; set; }
+
+        public string Note { get; set; } = null!;
+
+        public DateOnly? NextFollowUpOn { get; set; }
     }
 
     /// <summary>Per-parent demo record: every demo this parent has ever taken, with totals.</summary>

@@ -22,6 +22,7 @@ namespace iucs.meettomanage.application.Mappings
                 RoleDefinitionId = user.RoleDefinitionId,
                 CreatedAtUtc = user.CreatedAtUtc,
                 LastLoginAtUtc = user.LastLoginAtUtc,
+                PinViewable = user.PinEncrypted != null,
             };
         }
 

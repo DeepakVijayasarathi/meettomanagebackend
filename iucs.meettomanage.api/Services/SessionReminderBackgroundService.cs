@@ -58,7 +58,8 @@ namespace iucs.meettomanage.api.Services
             var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
             var emailTemplates = scope.ServiceProvider.GetRequiredService<IEmailTemplateService>();
             var emailSender = scope.ServiceProvider.GetRequiredService<IEmailSender>();
-            var jitsiTokens = scope.ServiceProvider.GetRequiredService<IJitsiTokenService>();
+            var sessionService = scope.ServiceProvider.GetRequiredService<ISessionService>();
+            var configuration = scope.ServiceProvider.GetRequiredService<IConfiguration>();
 
             var now = DateTime.UtcNow;
 
@@ -72,16 +73,35 @@ namespace iucs.meettomanage.api.Services
                             && s.ScheduledStartAtUtc < windowEnd)
                 .ToListAsync(cancellationToken);
 
-            string? jitsiConfigJson = null;
-            var demoBookingsBySessionId = new Dictionary<Guid, DemoBooking>();
-            var parentUsersByBatchId = new Dictionary<Guid, List<User>>();
+            // Reported live: parents saw a class as cancelled yet got "your class starts in one
+            // hour". A class whose teacher has leave still awaiting review is about to be
+            // cancelled, so no reminder goes out for it (approval cancels it; if rejected, it runs).
+            // Approved leave counts too: approval cancels the sessions that existed at the time, but
+            // a session created inside an approved window afterwards (schedule extended/adjusted,
+            // make-up or carry-forward landing there) is still Scheduled while its teacher is away.
             if (upcoming.Count > 0)
             {
-                jitsiConfigJson = await unitOfWork.Repository<Integration>().Query()
-                    .Where(i => i.Key == "jitsi")
-                    .Select(i => i.ConfigJson)
-                    .FirstOrDefaultAsync(cancellationToken);
+                var pendingLeaves = await unitOfWork.Repository<LeaveRequest>().Query()
+                    .Where(l => l.Status == LeaveStatus.Pending || l.Status == LeaveStatus.Approved)
+                    .Select(l => new { l.TeacherProfileId, l.IsClassWise, l.StartAtUtc, l.EndAtUtc, SessionIds = l.Sessions.Select(x => x.ClassSessionId).ToList() })
+                    .ToListAsync(cancellationToken);
+                if (pendingLeaves.Count > 0)
+                {
+                    upcoming = upcoming
+                        .Where(s => !pendingLeaves.Any(l => l.IsClassWise
+                            ? l.SessionIds.Contains(s.Id)
+                            : l.TeacherProfileId == s.TeacherProfileId && l.StartAtUtc < s.ScheduledEndAtUtc && l.EndAtUtc > s.ScheduledStartAtUtc))
+                        .ToList();
+                }
+            }
 
+            var demoBookingsBySessionId = new Dictionary<Guid, DemoBooking>();
+            var parentUsersByBatchId = new Dictionary<Guid, List<User>>();
+            // Parents whose every child in the class is marked absent (they cancelled a group class
+            // for their child, so their portal shows it as cancelled) get no reminder for it.
+            var absentParentsBySessionId = new Dictionary<Guid, HashSet<Guid>>();
+            if (upcoming.Count > 0)
+            {
                 // Both recipient lookups are resolved for the whole window up front. Done
                 // inside the loop they cost one query per session, so a busy hour's reminder
                 // fan-out scaled its round trips with the number of classes starting at once.
@@ -99,13 +119,34 @@ namespace iucs.meettomanage.api.Services
                 {
                     var enrolments = await unitOfWork.Repository<BatchEnrollment>().Query()
                         .Where(e => batchIds.Contains(e.BatchId) && e.Status == EnrollmentStatus.Active)
-                        .Select(e => new { e.BatchId, User = e.Child.ParentProfile.User })
+                        .Select(e => new { e.BatchId, e.ChildId, User = e.Child.ParentProfile.User })
                         .ToListAsync(cancellationToken);
                     parentUsersByBatchId = enrolments
                         .GroupBy(e => e.BatchId)
                         .ToDictionary(
                             g => g.Key,
                             g => g.Select(e => e.User).DistinctBy(u => u.Id).ToList());
+
+                    var batchSessionIds = upcoming.Where(s => s.BatchId is not null).Select(s => s.Id).ToList();
+                    var absent = (await unitOfWork.Repository<SessionAttendance>().Query()
+                            .Where(a => batchSessionIds.Contains(a.ClassSessionId) && a.ChildId != null && a.Status == AttendanceStatus.Absent)
+                            .Select(a => new { a.ClassSessionId, ChildId = a.ChildId!.Value })
+                            .ToListAsync(cancellationToken))
+                        .ToLookup(a => a.ClassSessionId, a => a.ChildId);
+                    foreach (var session in upcoming.Where(s => s.BatchId is not null && absent.Contains(s.Id)))
+                    {
+                        var absentChildren = absent[session.Id].ToHashSet();
+                        var absentParents = enrolments
+                            .Where(e => e.BatchId == session.BatchId)
+                            .GroupBy(e => e.User.Id)
+                            .Where(g => g.All(e => absentChildren.Contains(e.ChildId)))
+                            .Select(g => g.Key)
+                            .ToHashSet();
+                        if (absentParents.Count > 0)
+                        {
+                            absentParentsBySessionId[session.Id] = absentParents;
+                        }
+                    }
                 }
             }
 
@@ -119,9 +160,21 @@ namespace iucs.meettomanage.api.Services
                 // one bad recipient abort the batch.
                 try
                 {
+                    // The list above is a snapshot from the start of this cycle; re-check the live
+                    // status so a class cancelled in the meantime (teacher leave approved, parent
+                    // cancelled, rescheduled) never still gets its "starts in one hour" email.
+                    var liveStatus = await unitOfWork.Repository<ClassSession>().Query()
+                        .Where(s => s.Id == session.Id)
+                        .Select(s => (SessionStatus?)s.Status)
+                        .FirstOrDefaultAsync(cancellationToken);
+                    if (liveStatus is not (SessionStatus.Scheduled or SessionStatus.CarriedForward))
+                    {
+                        continue;
+                    }
+
                     await SendRemindersForSessionAsync(
-                        session, jitsiConfigJson, demoBookingsBySessionId, parentUsersByBatchId,
-                        notifications, emailTemplates, emailSender, jitsiTokens, cancellationToken);
+                        session, demoBookingsBySessionId, parentUsersByBatchId, absentParentsBySessionId.GetValueOrDefault(session.Id),
+                        notifications, emailTemplates, emailSender, sessionService, configuration, cancellationToken);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -158,7 +211,7 @@ namespace iucs.meettomanage.api.Services
                                 new Dictionary<string, string>
                                 {
                                     ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, admin.TimeZoneId),
-                                    ["TeacherName"] = $"{session.TeacherProfile.User.FirstName} {session.TeacherProfile.User.LastName}",
+                                    ["TeacherName"] = $"{session.TeacherProfile.User.FirstName} {session.TeacherProfile.User.LastName}".Trim(),
                                 },
                                 cancellationToken);
                         }
@@ -182,13 +235,14 @@ namespace iucs.meettomanage.api.Services
 
         private static async Task SendRemindersForSessionAsync(
             ClassSession session,
-            string? jitsiConfigJson,
             Dictionary<Guid, DemoBooking> demoBookingsBySessionId,
             Dictionary<Guid, List<User>> parentUsersByBatchId,
+            HashSet<Guid>? absentParentIds,
             INotificationService notifications,
             IEmailTemplateService emailTemplates,
             IEmailSender emailSender,
-            IJitsiTokenService jitsiTokens,
+            ISessionService sessionService,
+            IConfiguration configuration,
             CancellationToken cancellationToken)
         {
             var teacherUser = session.TeacherProfile.User;
@@ -203,18 +257,16 @@ namespace iucs.meettomanage.api.Services
                 },
                 cancellationToken);
 
-            var domain = JitsiLinkBuilder.ResolveDomain(jitsiConfigJson);
-            // Each recipient gets their own token, scoped to this room and expiring a
-            // couple of hours past the class — never a bare, forever-reusable room name.
-            string JoinUrlFor(string participantName, string? participantEmail) =>
-                JitsiLinkBuilder.BuildJoinUrl(
-                    session.MeetingRoomId,
-                    jitsiConfigJson,
-                    jitsiTokens.CreateToken(
-                        domain, jitsiConfigJson, session.MeetingRoomId!, participantName, participantEmail,
-                        moderator: false, session.ScheduledEndAtUtc.AddHours(2)),
-                    participantName)
-                ?? "#";
+            // 2026-09-15 fix: this used to build a bare Jitsi link (JitsiLinkBuilder.BuildJoinUrl)
+            // for every parent recipient — same "no Whiteboard/Slides, the interactive layer only
+            // ever renders over an authenticated ClassroomHub connection" gap already fixed for
+            // the demo confirmation email and the RM/Admin/Coordinator "Copy Guest Link" feature
+            // (see DemoBookingService.ResolveLiveJoinUrlAsync's own doc comment). A batch parent
+            // already has a real login, so their reminder link goes straight at the authenticated
+            // in-app classroom (mirrors BuildTeacherDemoAppJoinUrl's own reasoning) rather than
+            // needing a token-carrying bridge at all; a demo lead still has no account, so theirs
+            // routes through the same Guest Link bridge the confirmation email now uses.
+            var frontendBaseUrl = (configuration["Frontend:BaseUrl"] ?? "http://localhost:5173").TrimEnd('/');
 
             if (session.BatchId is null)
             {
@@ -224,12 +276,14 @@ namespace iucs.meettomanage.api.Services
                 demoBookingsBySessionId.TryGetValue(session.Id, out var demoBooking);
                 if (demoBooking is not null)
                 {
+                    var guestLink = await sessionService.CreateGuestLinkForParticipantAsync(
+                        session.Id, demoBooking.ParentName, demoBooking.ParentEmail, cancellationToken);
                     var (subject, body) = await emailTemplates.RenderAsync(
                         "session-reminder-parent",
                         new Dictionary<string, string>
                         {
                             ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, "Asia/Kolkata"),
-                            ["JoinUrl"] = JoinUrlFor(demoBooking.ParentName, demoBooking.ParentEmail),
+                            ["JoinUrl"] = $"{frontendBaseUrl}/guest-join?token={Uri.EscapeDataString(guestLink.Token)}",
                         },
                         cancellationToken);
                     await emailSender.SendAsync(demoBooking.ParentEmail, subject, body, cancellationToken);
@@ -243,15 +297,21 @@ namespace iucs.meettomanage.api.Services
                 return;
             }
 
+            var appJoinUrl = $"{frontendBaseUrl}/parent/live/{session.Id}";
             foreach (var parent in parentUsers)
             {
+                if (absentParentIds is not null && absentParentIds.Contains(parent.Id))
+                {
+                    continue; // their child is marked absent: the class is cancelled for them
+                }
+
                 await notifications.SendTemplatedEmailAsync(
                     parent.Id, parent.Email, NotificationType.SessionReminder,
                     "session-reminder-parent",
                     new Dictionary<string, string>
                     {
                         ["StartLocal"] = FormatLocal(session.ScheduledStartAtUtc, parent.TimeZoneId),
-                        ["JoinUrl"] = JoinUrlFor($"{parent.FirstName} {parent.LastName}", parent.Email),
+                        ["JoinUrl"] = appJoinUrl,
                     },
                     cancellationToken);
             }

@@ -15,21 +15,34 @@ namespace iucs.meettomanage.api.Controllers
     {
         private const long MaxUploadBytes = 100 * 1024 * 1024;
 
+        // Browser-to-bucket uploads (recordings) skip the API's body limit entirely; this is just a sanity cap.
+        private const long MaxLargeUploadBytes = 20L * 1024 * 1024 * 1024;
+
+        // Keys are always server-generated as <32 hex><ext>; anything else is not one of ours.
+        private static readonly System.Text.RegularExpressions.Regex StoredKeyPattern =
+            new(@"^[0-9a-f]{32}\.[a-z0-9]{2,5}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
         private readonly IResourceService _resourceService;
         private readonly IFileStorage _fileStorage;
+        private readonly IDirectUploadStorage _directUploads;
 
-        public ResourcesController(IResourceService resourceService, IFileStorage fileStorage)
+        public ResourcesController(IResourceService resourceService, IFileStorage fileStorage, IDirectUploadStorage directUploads)
         {
             _resourceService = resourceService;
             _fileStorage = fileStorage;
+            _directUploads = directUploads;
         }
 
         // Admin console only: Teacher and Parent also carry ContentAccessManagement:View
         // (they need SOME grant in that module to reach their own scoped /mine and portal
         // routes), so HasPermission alone doesn't exclude them from this unscoped,
-        // see/download-everything screen — the role check is what actually does.
+        // see/download-everything screen — the role check is what actually does. AdmissionTeam
+        // is included deliberately (not just SubAdmin): it's a distinct backend role from
+        // SubAdmin for real delegated-portal accounts (confirmed live), and /admission/resources
+        // already exists in the menu system for any admin who grants ContentAccessManagement to
+        // an admission account — without it here that account would 403 on the whole page.
         [HttpGet]
-        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
         [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.View)]
         public async Task<ActionResult<IReadOnlyList<ResourceDto>>> List(
             [FromQuery] ResourceType? type,
@@ -92,8 +105,18 @@ namespace iucs.meettomanage.api.Controllers
             return File(stream, mimeType, $"{resource.Title}{Path.GetExtension(resource.FileUrl)}");
         }
 
+        /// <summary>Files a registered class recording into a Content and Resources folder by
+        /// reference (no copy), so it can be shared to many parents/batches like any other file.</summary>
+        [HttpPost("from-recording")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
+        [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Create)]
+        public async Task<ActionResult<ResourceDto>> AddFromRecording(AddRecordingResourceRequest request, CancellationToken cancellationToken)
+        {
+            return Ok(await _resourceService.CreateFromRecordingAsync(request, cancellationToken));
+        }
+
         [HttpPost]
-        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
         [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Create)]
         [RequestSizeLimit(MaxUploadBytes)]
         public async Task<ActionResult<ResourceDto>> Upload(
@@ -118,12 +141,94 @@ namespace iucs.meettomanage.api.Controllers
             return CreatedAtAction(nameof(List), null, resource);
         }
 
+        // ---- Large uploads (recordings): the browser sends parts straight to the bucket ----
+
+        /// <summary>Starts a multipart upload; the client then PUTs each part to a presigned URL.</summary>
+        [HttpPost("uploads")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
+        [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Create)]
+        public async Task<ActionResult<LargeUploadDto>> StartLargeUpload(StartLargeUploadRequest request, CancellationToken cancellationToken)
+        {
+            if (request.SizeBytes > MaxLargeUploadBytes)
+            {
+                return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "That file is larger than the 20 GB limit." });
+            }
+
+            var upload = await _directUploads.StartMultipartAsync(request.FileName, request.ContentType, cancellationToken);
+            return Ok(new LargeUploadDto
+            {
+                Key = upload.Key,
+                UploadId = upload.UploadId,
+                PartSizeBytes = upload.PartSizeBytes,
+                TotalParts = (int)Math.Ceiling(request.SizeBytes / (double)upload.PartSizeBytes),
+            });
+        }
+
+        [HttpPost("uploads/parts")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
+        [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Create)]
+        public ActionResult<IReadOnlyList<LargeUploadPartUrlDto>> LargeUploadPartUrls(LargeUploadPartsRequest request)
+        {
+            if (!StoredKeyPattern.IsMatch(request.Key) || request.PartNumbers.Any(n => n < 1 || n > 10000))
+            {
+                return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "Invalid upload reference." });
+            }
+
+            return Ok(_directUploads.GetPartUrls(request.Key, request.UploadId, request.PartNumbers)
+                .Select(p => new LargeUploadPartUrlDto { PartNumber = p.PartNumber, Url = p.Url }).ToList());
+        }
+
+        /// <summary>Stitches the uploaded parts together and creates the resource, exactly like a normal upload.</summary>
+        [HttpPost("uploads/complete")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
+        [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Create)]
+        public async Task<ActionResult<ResourceDto>> CompleteLargeUpload(CompleteLargeUploadRequest request, CancellationToken cancellationToken)
+        {
+            if (!StoredKeyPattern.IsMatch(request.Key))
+            {
+                return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "Invalid upload reference." });
+            }
+
+            var size = await _directUploads.CompleteMultipartAsync(
+                request.Key,
+                request.UploadId,
+                request.Parts.Select(p => new UploadedPart { PartNumber = p.PartNumber, ETag = p.ETag }).ToList(),
+                cancellationToken);
+            var mimeType = string.IsNullOrWhiteSpace(request.ContentType) ? null : request.ContentType;
+            var resource = await _resourceService.CreateAsync(request, request.Key, mimeType, size, cancellationToken);
+            return CreatedAtAction(nameof(List), null, resource);
+        }
+
+        [HttpPost("uploads/abort")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
+        [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Create)]
+        public async Task<IActionResult> AbortLargeUpload(AbortLargeUploadRequest request, CancellationToken cancellationToken)
+        {
+            if (!StoredKeyPattern.IsMatch(request.Key))
+            {
+                return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "Invalid upload reference." });
+            }
+
+            await _directUploads.AbortMultipartAsync(request.Key, request.UploadId, cancellationToken);
+            return NoContent();
+        }
+
         [HttpGet("{id:guid}/download")]
-        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
         [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.View)]
         public async Task<IActionResult> Download(Guid id, CancellationToken cancellationToken)
         {
             var resource = await _resourceService.GetForDownloadAsync(id, cancellationToken);
+
+            // A recording filed into Resources by reference points at the recording's own https
+            // URL, not a key in this app's storage — hand that URL back as JSON (the client
+            // fetches this with an auth header, which a cross-origin redirect would break).
+            if (Uri.TryCreate(resource.FileUrl, UriKind.Absolute, out var external)
+                && (external.Scheme == Uri.UriSchemeHttps || external.Scheme == Uri.UriSchemeHttp))
+            {
+                return Ok(new { externalUrl = external.ToString() });
+            }
+
             var stream = await _fileStorage.OpenReadAsync(resource.FileUrl, cancellationToken);
 
             if (stream is null)
@@ -135,8 +240,55 @@ namespace iucs.meettomanage.api.Controllers
             return File(stream, mimeType, $"{resource.Title}{Path.GetExtension(resource.FileUrl)}");
         }
 
+        /// <summary>
+        /// A short-lived direct link to view the file inline. Opening a big PDF by first pulling
+        /// every byte through this API into the browser left the new tab blank for as long as that
+        /// took (or forever on a slow link); a presigned storage URL streams straight from the
+        /// bucket. Null when the file isn't something a browser shows inline (Word, PowerPoint...)
+        /// — the client then falls back to /download.
+        /// </summary>
+        [HttpGet("{id:guid}/view-url")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
+        [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.View)]
+        public async Task<ActionResult<ResourceViewUrlDto>> ViewUrl(Guid id, CancellationToken cancellationToken)
+        {
+            var resource = await _resourceService.GetForDownloadAsync(id, cancellationToken);
+
+            if (Uri.TryCreate(resource.FileUrl, UriKind.Absolute, out var external)
+                && (external.Scheme == Uri.UriSchemeHttps || external.Scheme == Uri.UriSchemeHttp))
+            {
+                return Ok(new ResourceViewUrlDto { Url = external.ToString() });
+            }
+
+            var mime = resource.MimeType ?? string.Empty;
+            var inline = mime == "application/pdf" || mime.StartsWith("image/") || mime.StartsWith("video/")
+                || mime.StartsWith("audio/") || mime == "text/plain";
+            if (!inline)
+            {
+                return Ok(new ResourceViewUrlDto());
+            }
+
+            try
+            {
+                return Ok(new ResourceViewUrlDto { Url = _directUploads.GetReadUrl(resource.FileUrl, TimeSpan.FromHours(4), resource.MimeType) });
+            }
+            catch (NotSupportedException)
+            {
+                return Ok(new ResourceViewUrlDto());
+            }
+        }
+
+        [HttpDelete("{id:guid}")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
+        [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Delete)]
+        public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
+        {
+            await _resourceService.DeleteAsync(id, cancellationToken);
+            return NoContent();
+        }
+
         [HttpPut("{id:guid}")]
-        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
         [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Edit)]
         public async Task<ActionResult<ResourceDto>> Update(
             Guid id,
@@ -147,7 +299,7 @@ namespace iucs.meettomanage.api.Controllers
         }
 
         [HttpPost("{id:guid}/grants")]
-        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)}")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.AdmissionTeam)}")]
         [HasPermission(PermissionModule.ContentAccessManagement, PermissionAction.Edit)]
         public async Task<IActionResult> GrantAccess(
             Guid id,

@@ -1,8 +1,10 @@
+using System.Security.Claims;
 using System.Text;
 using iucs.meettomanage.api.Auth;
 using iucs.meettomanage.application.Dto.Reports;
 using iucs.meettomanage.application.Services;
 using iucs.meettomanage.domain.Enums;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace iucs.meettomanage.api.Controllers
@@ -24,6 +26,32 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<ActionResult<DashboardSummaryDto>> DashboardSummary(CancellationToken cancellationToken)
         {
             return Ok(await _reportsService.GetDashboardSummaryAsync(cancellationToken));
+        }
+
+        /// <summary>Month-wise numbers for the Admin/Founder dashboard: demos, conversions and
+        /// collections per admission counselor, with later installments under "Others".
+        /// Defaults to the current IST month.</summary>
+        [HttpGet("monthly-finance")]
+        [HasPermission(PermissionModule.ReportsAnalytics, PermissionAction.View)]
+        public async Task<ActionResult<MonthlyFinanceSummaryDto>> MonthlyFinance(
+            [FromQuery] int? year,
+            [FromQuery] int? month,
+            CancellationToken cancellationToken)
+        {
+            var nowIst = TimeZoneInfo.ConvertTimeFromUtc(
+                DateTime.UtcNow,
+                TimeZoneInfo.FindSystemTimeZoneById(application.Helper.DateTimeDisplay.DefaultTimeZoneId));
+            return Ok(await _reportsService.GetMonthlyFinanceSummaryAsync(year ?? nowIst.Year, month ?? nowIst.Month, cancellationToken));
+        }
+
+        /// <summary>The caller's own collections (an admission counselor's dashboard figure) --
+        /// only ever their own, so no module permission is needed beyond being signed in staff.</summary>
+        [HttpGet("my-collections")]
+        [Authorize(Roles = $"{nameof(UserRole.AdmissionTeam)},{nameof(UserRole.SubAdmin)},{nameof(UserRole.Admin)}")]
+        public async Task<ActionResult<MyCollectionsDto>> MyCollections(CancellationToken cancellationToken)
+        {
+            var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            return Ok(await _reportsService.GetMyCollectionsAsync(userId, cancellationToken));
         }
 
         /// <summary>CSV export: attendance | revenue | payouts | conversion.</summary>
@@ -57,20 +85,23 @@ namespace iucs.meettomanage.api.Controllers
     public class CommunicationsController : ControllerBase
     {
         private readonly IReportsService _reportsService;
-
         public CommunicationsController(IReportsService reportsService)
         {
             _reportsService = reportsService;
         }
 
-        /// <summary>Bulk email to all active parents, or scoped to one batch.</summary>
+        /// <summary>
+        /// Bulk email to all active parents, or scoped to one batch. Queued: this only records
+        /// the blast and its Pending recipients and answers at once; BulkEmailQueueBackgroundService
+        /// delivers them, and Bulk Email History shows progress.
+        /// </summary>
         [HttpPost("bulk-email")]
         [HasPermission(PermissionModule.Communication, PermissionAction.Create)]
         public async Task<ActionResult<BulkEmailResultDto>> BulkEmail(
             BulkEmailRequest request,
             CancellationToken cancellationToken)
         {
-            return Ok(await _reportsService.SendBulkEmailAsync(request, cancellationToken));
+            return Ok(await _reportsService.QueueBulkEmailAsync(UserId(), request, cancellationToken));
         }
 
         /// <summary>Live recipient count for the compose screen (same rule as the send).</summary>
@@ -82,5 +113,49 @@ namespace iucs.meettomanage.api.Controllers
         {
             return Ok(await _reportsService.PreviewBulkEmailAsync(batchId, cancellationToken));
         }
+
+        /// <summary>Past Bulk Email sends, newest first.</summary>
+        [HttpGet("bulk-email/history")]
+        [HasPermission(PermissionModule.Communication, PermissionAction.View)]
+        public async Task<ActionResult<IReadOnlyList<BulkEmailHistoryItemDto>>> BulkEmailHistory(CancellationToken cancellationToken)
+        {
+            return Ok(await _reportsService.GetBulkEmailHistoryAsync(cancellationToken));
+        }
+
+        /// <summary>One blast's recipients, delivery status and replies.</summary>
+        [HttpGet("bulk-email/history/{id:guid}")]
+        [HasPermission(PermissionModule.Communication, PermissionAction.View)]
+        public async Task<ActionResult<BulkEmailBlastDetailDto>> BulkEmailHistoryDetail(Guid id, CancellationToken cancellationToken)
+        {
+            return Ok(await _reportsService.GetBulkEmailBlastDetailAsync(id, cancellationToken));
+        }
+
+        /// <summary>
+        /// Every individual (non-Bulk-Email) email sent to a user, newest first -- "Bulk Email
+        /// History"'s other view. Optional <paramref name="type"/> narrows to one NotificationType.
+        /// </summary>
+        [HttpGet("email-history")]
+        [HasPermission(PermissionModule.Communication, PermissionAction.View)]
+        public async Task<ActionResult<IReadOnlyList<EmailHistoryItemDto>>> EmailHistory(
+            [FromQuery] NotificationType? type,
+            [FromQuery] int take = 500,
+            CancellationToken cancellationToken = default)
+        {
+            return Ok(await _reportsService.GetEmailHistoryAsync(type, take, cancellationToken));
+        }
+
+        /// <summary>A parent's reply to one Bulk Email they received.</summary>
+        [HttpPost("bulk-email/{recipientId:guid}/reply")]
+        [Authorize(Roles = nameof(UserRole.Parent))]
+        public async Task<IActionResult> ReplyToBulkEmail(
+            Guid recipientId,
+            ReplyToBulkEmailRequest request,
+            CancellationToken cancellationToken)
+        {
+            await _reportsService.ReplyToBulkEmailAsync(UserId(), recipientId, request, cancellationToken);
+            return NoContent();
+        }
+
+        private Guid UserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
     }
 }

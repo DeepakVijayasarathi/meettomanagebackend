@@ -58,7 +58,8 @@ builder.Services.AddApplication();
 builder.Services.AddScoped<ITokenService, JwtTokenService>();
 // Real SMTP delivery driven by the DB "email" integration config (Settings →
 // Integrations); logs and no-ops safely when that integration is off/unconfigured.
-builder.Services.AddScoped<IEmailSender, SmtpEmailSender>();
+builder.Services.AddScoped<SmtpEmailSender>();
+builder.Services.AddScoped<IEmailSender>(sp => sp.GetRequiredService<SmtpEmailSender>());
 // WhatsApp Business Cloud API delivery, driven by the DB "whatsapp" integration.
 builder.Services.AddScoped<IWhatsAppSender, WhatsAppSender>();
 // SMS delivery (MSG91/Twilio), driven by the DB "sms" integration.
@@ -67,7 +68,30 @@ builder.Services.AddScoped<ISmsSender, SmsSender>();
 // an upload made locally behaves identically to one made against the real deployment instead
 // of silently depending on which environment you're in. Configured via Storage:S3:* (real
 // credentials come from user-secrets locally, environment variables in prod — never committed).
-builder.Services.AddSingleton<IFileStorage, S3FileStorage>();
+//
+// Each client picks S3 or a folder on this server's disk (Storage:LocalPath -- must be a mounted
+// host folder, see LocalFileStorage) on Admin → Settings → File storage; the choice is kept in the
+// database and applies live (StorageProviderSwitch), with Storage:Provider as the starting value.
+// Both stores stay wired up so files are found wherever they are (RoutingFileStorage); existing
+// files are copied between them with that page's Sync buttons, or `storage-migrate` (see StorageMigration).
+builder.Services.AddSingleton<StorageSyncService>();
+builder.Services.AddSingleton<StorageProviderSwitch>();
+var s3Storage = S3FileStorage.IsConfigured(builder.Configuration) ? new S3FileStorage(builder.Configuration) : null;
+if (s3Storage is not null)
+{
+    builder.Services.AddSingleton(s3Storage);
+}
+
+// With S3 configured it doubles as the fallback for files not yet copied to this server.
+builder.Services.AddSingleton(sp => new LocalFileStorage(
+    sp.GetRequiredService<IWebHostEnvironment>(),
+    builder.Configuration,
+    sp.GetRequiredService<IHttpContextAccessor>(),
+    s3Storage));
+builder.Services.AddSingleton(sp => new RoutingFileStorage(
+    sp.GetRequiredService<StorageProviderSwitch>(), sp.GetRequiredService<LocalFileStorage>(), s3Storage));
+builder.Services.AddSingleton<IFileStorage>(sp => sp.GetRequiredService<RoutingFileStorage>());
+builder.Services.AddSingleton<IDirectUploadStorage>(sp => sp.GetRequiredService<RoutingFileStorage>());
 // Parses uploaded bulk-import spreadsheets (.csv/.xlsx) for Users/Students/Departments/
 // Courses/Package Plans/Quiz Questions — stateless, so singleton is fine.
 builder.Services.AddSingleton<IBulkFileReader, BulkFileReader>();
@@ -92,20 +116,33 @@ builder.Services.AddScoped<IPaymentGateway, iucs.meettomanage.api.Services.Payme
 builder.Services.AddHostedService<BillingBackgroundService>();
 // Session reminders, delayed-session alerts
 builder.Services.AddHostedService<SessionReminderBackgroundService>();
+builder.Services.AddHostedService<AbandonedClassCompletionBackgroundService>();
 // Automatic no-show detection: flags a session once its grace period elapses with one
 // side never having joined, instead of relying solely on a human clicking "Mark No-Show"
 builder.Services.AddHostedService<NoShowDetectionBackgroundService>();
+// Batch payment plan reminders: "payment after N sessions" / "payment due on a specific date"
+builder.Services.AddHostedService<PaymentPlanReminderBackgroundService>();
+// Catches a completed class that never received a recording — auto-record can start
+// with no error yet still fail later in the pipeline, which nothing else catches
+builder.Services.AddHostedService<RecordingReconciliationBackgroundService>();
 // CRM integration: lead webhooks, no-op until Integrations:CrmWebhookUrl is set
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ICrmNotifier, WebhookCrmNotifier>();
 // Automated reports: weekly KPI digest to admins
 builder.Services.AddHostedService<ReportsDigestBackgroundService>();
+builder.Services.AddHostedService<BulkEmailQueueBackgroundService>();
 // Progress reports: seeds an empty monthly draft per active child on the 1st
 builder.Services.AddHostedService<ProgressReportsBackgroundService>();
+builder.Services.AddHostedService<LeaveCancellationReportBackgroundService>();
 
 // Authentication: JWT bearer
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 builder.Services.Configure<MonitoringOptions>(builder.Configuration.GetSection(MonitoringOptions.SectionName));
+builder.Services.Configure<iucs.meettomanage.application.Helper.PinVaultOptions>(o =>
+{
+    o.Key = builder.Configuration["PinVault:Key"];
+    o.FallbackSecret = builder.Configuration["Jwt:SigningKey"];
+});
 var jwt = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
     ?? throw new InvalidOperationException("Missing 'Jwt' configuration section.");
 if (string.IsNullOrWhiteSpace(jwt.SigningKey) || Encoding.UTF8.GetByteCount(jwt.SigningKey) < 32)
@@ -157,6 +194,27 @@ builder.Services
             // call — the same shape of cost this check already paid for the status-only version.
             OnTokenValidated = async context =>
             {
+                // Jibri's recording-observer token (ClassroomHub-only, see
+                // CreateRecordingObserverHubToken) carries a throwaway subject that never
+                // resolves to a real User row -- the active-account check below would always
+                // fail it. It's short-lived and scoped to one sessionId claim that
+                // ClassroomHub.JoinSession itself verifies, so there's nothing further to
+                // refresh here.
+                if (context.Principal?.FindFirstValue("purpose") == "recording-observer")
+                {
+                    return;
+                }
+
+                // Same reasoning as the recording-observer bypass just above, for a Guest Link's
+                // ClassroomHub token (see CreateGuestClassroomHubToken / SessionService.
+                // GetGuestJoinAsync): a caretaker joining via a shared link has no real User row
+                // behind them either, and ClassroomHub.JoinSession does its own sessionId-scoped
+                // check for this purpose in place of the normal participant check.
+                if (context.Principal?.FindFirstValue("purpose") == "guest-classroom")
+                {
+                    return;
+                }
+
                 var userIdClaim = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
                 if (!Guid.TryParse(userIdClaim, out var userId))
                 {
@@ -165,11 +223,56 @@ builder.Services
                 }
 
                 var authService = context.HttpContext.RequestServices.GetRequiredService<IAuthService>();
-                var access = await authService.GetCurrentAccessAsync(userId);
+                iucs.meettomanage.application.Dto.Auth.CurrentAccessSnapshot? access;
+                try
+                {
+                    access = await authService.GetCurrentAccessAsync(userId, context.HttpContext.RequestAborted);
+                }
+                catch (Exception ex) when (!context.HttpContext.RequestAborted.IsCancellationRequested)
+                {
+                    // A DB hiccup here (slow query, exhausted connection pool under class-time
+                    // load) used to throw out of this handler, which JwtBearer turns into a 401 —
+                    // and the frontend treats any 401 as "session over": it clears the token and
+                    // hard-redirects to /login, tearing down a live class mid-lesson. Reported
+                    // live as "the LMS kept throwing me out" during an evening batch. The token
+                    // itself already passed signature + lifetime validation, so fall back to the
+                    // claims it was issued with for this one request; the next request that
+                    // reaches the DB re-applies any revocation as before.
+                    context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+                        .CreateLogger("JwtBearer")
+                        .LogWarning(ex, "Live access re-check failed for user {UserId}; using token claims for this request.", userId);
+                    return;
+                }
+
                 if (access is null || access.Status != UserStatus.Active)
                 {
                     context.Fail("This account is no longer active.");
                     return;
+                }
+
+                // A "view as parent" token also stands for the staff member looking: if they've
+                // since been deactivated or lost User Management view (or the account is no
+                // longer a parent), the session ends on its very next request -- same live
+                // re-check as above, applied to the person actually behind it.
+                var viewAsActorClaim = context.Principal?.FindFirstValue(iucs.meettomanage.application.Common.ViewAsParent.ActorClaimType);
+                if (viewAsActorClaim is not null)
+                {
+                    if (!Guid.TryParse(viewAsActorClaim, out var actorId) || access.Role != UserRole.Parent)
+                    {
+                        context.Fail("This view-as session is no longer valid.");
+                        return;
+                    }
+
+                    var actor = await authService.GetCurrentAccessAsync(actorId, context.HttpContext.RequestAborted);
+                    var actorAllowed = actor is not null
+                        && actor.Status == UserStatus.Active
+                        && (actor.Role == UserRole.Admin
+                            || actor.Permissions.Contains(iucs.meettomanage.application.Common.ViewAsParent.RequiredPermission));
+                    if (!actorAllowed)
+                    {
+                        context.Fail("You no longer have access to view this parent's account.");
+                        return;
+                    }
                 }
 
                 if (context.Principal!.Identity is ClaimsIdentity identity)
@@ -223,6 +326,17 @@ builder.Services.AddRateLimiter(options =>
             }));
     // Anti-spam on the public store "Enroll now" form — same shape as "login" but a
     // looser limit, since this is legitimate-traffic throttling, not brute-force defense.
+    // Anonymous /pay/{token} admission payment page: legitimate parents open it a handful of
+    // times, so this only needs to blunt token guessing and gateway-link spam.
+    options.AddPolicy("admission-payment", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+            }));
     options.AddPolicy("store-inquiry", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
@@ -241,6 +355,20 @@ builder.Services.AddRateLimiter(options =>
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+            }));
+    // Public demo join redirect: legitimate traffic can legitimately retry a handful of times
+    // (a parent reloading, or clicking their own link plus each invitee's from one household/
+    // IP), but booking ids aren't secret once a link exists, so this still caps blind GUID
+    // enumeration against the endpoint -- looser than "login"/"pin-reset" since there's no
+    // credential to brute-force here, just a link to guess.
+    options.AddPolicy("demo-join", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
                 Window = TimeSpan.FromMinutes(5),
                 QueueLimit = 0,
             }));
@@ -271,7 +399,13 @@ builder.Services.AddCors(options =>
     {
         policy.AllowAnyHeader()
             .WithMethods("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
-            .AllowCredentials();
+            .AllowCredentials()
+            // Local storage's part-upload endpoint answers each part with its ETag, which the
+            // browser's upload code must be able to read (S3 exposes it via the bucket's CORS).
+            .WithExposedHeaders("ETag")
+            // Browsers re-sent a preflight before nearly every API call; let them reuse it.
+            .SetPreflightMaxAge(TimeSpan.FromHours(2));
+
         if (allowAnyOrigin)
         {
             policy.SetIsOriginAllowed(_ => true);
@@ -282,7 +416,26 @@ builder.Services.AddCors(options =>
         }
     }));
 
+// Reported live as "APIs take 7 seconds": session lists were several MB of JSON. Compressing
+// JSON responses cuts them roughly tenfold on the wire.
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProvider>();
+    options.Providers.Add<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProvider>();
+});
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
+
 var app = builder.Build();
+
+// `dotnet iucs.meettomanage.api.dll storage-migrate --to local|s3`: copy uploaded files between S3
+// and the local folder, then exit without starting the web server (see StorageMigration).
+if (StorageMigration.IsRequested(args))
+{
+    Environment.ExitCode = await StorageMigration.RunAsync(args, app.Services, app.Configuration);
+    return;
+}
 
 // Must run before anything that reads Connection.RemoteIpAddress (the login rate
 // limiter below): the API is served through a TLS-terminating reverse proxy in
@@ -300,6 +453,7 @@ var forwardedHeadersOptions = new ForwardedHeadersOptions
 forwardedHeadersOptions.KnownNetworks.Clear();
 forwardedHeadersOptions.KnownProxies.Clear();
 app.UseForwardedHeaders(forwardedHeadersOptions);
+app.UseResponseCompression();
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
@@ -331,6 +485,8 @@ else
 app.UseCors();
 
 app.UseAuthentication();
+// "View as parent" sessions are look-only: refuse their writes/joins before authorization runs.
+app.UseMiddleware<ViewAsReadOnlyMiddleware>();
 app.UseAuthorization();
 app.UseRateLimiter();
 
@@ -340,6 +496,42 @@ app.MapHub<iucs.meettomanage.api.Hubs.MonitoringHub>("/hubs/monitoring");
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", timestampUtc = DateTime.UtcNow }));
 
+// Deliberately outside /api and unauthenticated -- the whole point of a short link is that
+// whoever receives it (a parent with no account, on any device) can just tap it. Redirects
+// straight to the real target (e.g. a personal Jitsi join URL with its own signed token)
+// rather than round-tripping through the SPA first.
+app.MapGet("/m/{slug}", async (
+    string slug,
+    iucs.meettomanage.application.Services.IShortLinkService shortLinks,
+    HttpContext context,
+    CancellationToken cancellationToken) =>
+{
+    // A share channel's own link-preview bot (WhatsApp/iMessage/email client fetching this URL
+    // the instant it's pasted, to build a preview card) or an intermediary proxy has no business
+    // caching this redirect -- the whole point of resolving through here on every click (rather
+    // than handing out the final target directly) is that it stays live no matter how long ago
+    // it was shared. Without an explicit no-store, a cached hop here would freeze whoever
+    // actually taps the link onto whatever was resolved at share time instead of click time.
+    context.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+    context.Response.Headers.Pragma = "no-cache";
+
+    var target = await shortLinks.ResolveAsync(slug, cancellationToken);
+    return target is null
+        ? Results.NotFound("This link has expired or doesn't exist.")
+        : Results.Redirect(target, permanent: false);
+});
+
 await DatabaseInitializer.InitializeAsync(app.Services, app.Configuration);
+
+// The S3-or-local choice saved on Admin → Settings → File storage.
+await app.Services.GetRequiredService<StorageProviderSwitch>().LoadAsync(app.Services);
+
+// Browser-direct (multipart) uploads need the bucket itself to allow the portal's origin. Done
+// whenever S3 is configured, so switching to it from the Settings page works straight away.
+if (s3Storage is not null)
+{
+    _ = Task.Run(() => s3Storage.EnsureBrowserUploadCorsAsync(
+        allowedOrigins, app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("BucketCors")));
+}
 
 app.Run();

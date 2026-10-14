@@ -53,6 +53,10 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at_utc");
 
+                    b.Property<int?>("DurationMinutesOverride")
+                        .HasColumnType("integer")
+                        .HasColumnName("duration_minutes_override");
+
                     b.Property<DateOnly?>("EndDate")
                         .HasColumnType("date")
                         .HasColumnName("end_date");
@@ -67,6 +71,24 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(150)")
                         .HasColumnName("name");
 
+                    b.Property<int?>("PaymentAfterSessionsCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("payment_after_sessions_count");
+
+                    b.Property<DateOnly?>("PaymentDueDate")
+                        .HasColumnType("date")
+                        .HasColumnName("payment_due_date");
+
+                    b.Property<string>("PaymentPlanType")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("payment_plan_type");
+
+                    b.Property<DateTime?>("PaymentReminderSentAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("payment_reminder_sent_at_utc");
+
                     b.Property<DateOnly?>("StartDate")
                         .HasColumnType("date")
                         .HasColumnName("start_date");
@@ -76,6 +98,11 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)")
                         .HasColumnName("status");
+
+                    b.Property<decimal?>("TeacherPayoutPerClass")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("teacher_payout_per_class");
 
                     b.Property<Guid>("TeacherProfileId")
                         .HasColumnType("uuid")
@@ -505,6 +532,111 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("holidays");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Academics.LeaveAllowance", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<int>("MonthlyAllowance")
+                        .HasColumnType("integer")
+                        .HasColumnName("monthly_allowance");
+
+                    b.Property<Guid?>("TeacherProfileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("teacher_profile_id");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_leave_allowances");
+
+                    b.HasIndex("TeacherProfileId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_leave_allowances_teacher_profile_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("leave_allowances");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Academics.LeaveCancellationReport", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<DateTime>("GeneratedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("generated_at_utc");
+
+                    b.Property<Guid?>("GeneratedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("generated_by");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<int>("Month")
+                        .HasColumnType("integer")
+                        .HasColumnName("month");
+
+                    b.Property<string>("PayloadJson")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("payload_json");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<int>("Year")
+                        .HasColumnType("integer")
+                        .HasColumnName("year");
+
+                    b.HasKey("Id")
+                        .HasName("pk_leave_cancellation_reports");
+
+                    b.HasIndex("Year", "Month")
+                        .IsUnique()
+                        .HasDatabaseName("ix_leave_cancellation_reports_year_month")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("leave_cancellation_reports");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Academics.LeaveRequest", b =>
                 {
                     b.Property<Guid>("Id")
@@ -527,6 +659,10 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Property<DateTime>("EndAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("end_at_utc");
+
+                    b.Property<bool>("IsClassWise")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_class_wise");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean")
@@ -582,6 +718,173 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("leave_requests");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Academics.LeaveRequestSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ClassSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("class_session_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid>("LeaveRequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("leave_request_id");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_leave_request_sessions");
+
+                    b.HasIndex("ClassSessionId")
+                        .HasDatabaseName("ix_leave_request_sessions_class_session_id");
+
+                    b.HasIndex("LeaveRequestId", "ClassSessionId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_leave_request_sessions_leave_request_id_class_session_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("leave_request_sessions");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Activities.WhiteboardActivityItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("display_order");
+
+                    b.Property<string>("Emoji")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("emoji");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<bool>("IsTarget")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_target");
+
+                    b.Property<string>("Label")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("label");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid>("WhiteboardActivityTemplateId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("whiteboard_activity_template_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_whiteboard_activity_items");
+
+                    b.HasIndex("WhiteboardActivityTemplateId")
+                        .HasDatabaseName("ix_whiteboard_activity_items_whiteboard_activity_template_id");
+
+                    b.ToTable("whiteboard_activity_items");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Activities.WhiteboardActivityTemplate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("CourseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("course_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<Guid>("DepartmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("department_id");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("display_order");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("mode");
+
+                    b.Property<string>("Prompt")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("prompt");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_whiteboard_activity_templates");
+
+                    b.HasIndex("CourseId")
+                        .HasDatabaseName("ix_whiteboard_activity_templates_course_id");
+
+                    b.HasIndex("DepartmentId")
+                        .HasDatabaseName("ix_whiteboard_activity_templates_department_id");
+
+                    b.ToTable("whiteboard_activity_templates");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Admission.DemoBooking", b =>
                 {
                     b.Property<Guid>("Id")
@@ -608,6 +911,10 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)")
                         .HasColumnName("conversion_status");
+
+                    b.Property<Guid?>("CourseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("course_id");
 
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone")
@@ -638,6 +945,10 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("is_deleted");
 
+                    b.Property<DateOnly?>("NextFollowUpOn")
+                        .HasColumnType("date")
+                        .HasColumnName("next_follow_up_on");
+
                     b.Property<string>("ParentEmail")
                         .IsRequired()
                         .HasMaxLength(256)
@@ -664,6 +975,19 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(1000)")
                         .HasColumnName("payment_link_url");
 
+                    b.Property<string>("PaymentToken")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("payment_token");
+
+                    b.Property<DateTime?>("PaymentVerifiedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("payment_verified_at_utc");
+
+                    b.Property<DateTime?>("TermsAcceptedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("terms_accepted_at_utc");
+
                     b.Property<DateTime?>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at_utc");
@@ -681,11 +1005,22 @@ namespace iucs.meettomanage.domain.Migrations
                     b.HasIndex("ConversionStatus")
                         .HasDatabaseName("ix_demo_bookings_conversion_status");
 
+                    b.HasIndex("CourseId")
+                        .HasDatabaseName("ix_demo_bookings_course_id");
+
                     b.HasIndex("DepartmentId")
                         .HasDatabaseName("ix_demo_bookings_department_id");
 
                     b.HasIndex("InvoiceId")
                         .HasDatabaseName("ix_demo_bookings_invoice_id");
+
+                    b.HasIndex("ParentEmail")
+                        .HasDatabaseName("ix_demo_bookings_parent_email");
+
+                    b.HasIndex("PaymentToken")
+                        .IsUnique()
+                        .HasDatabaseName("ix_demo_bookings_payment_token")
+                        .HasFilter("\"is_deleted\" = FALSE");
 
                     b.ToTable("demo_bookings");
                 });
@@ -833,6 +1168,89 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasDatabaseName("ix_demo_participants_demo_booking_id");
 
                     b.ToTable("demo_participants");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Admission.ParentFeedback", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("batch_id");
+
+                    b.Property<Guid?>("ChildId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("child_id");
+
+                    b.Property<string>("Comment")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("comment");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<Guid?>("DemoBookingId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("demo_booking_id");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("kind");
+
+                    b.Property<Guid>("ParentUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_user_id");
+
+                    b.Property<int>("Rating")
+                        .HasColumnType("integer")
+                        .HasColumnName("rating");
+
+                    b.Property<DateTime>("SubmittedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("submitted_at_utc");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_parent_feedbacks");
+
+                    b.HasIndex("ChildId")
+                        .HasDatabaseName("ix_parent_feedbacks_child_id");
+
+                    b.HasIndex("DemoBookingId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_parent_feedbacks_demo_booking_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("ParentUserId")
+                        .HasDatabaseName("ix_parent_feedbacks_parent_user_id");
+
+                    b.HasIndex("BatchId", "ChildId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_parent_feedbacks_batch_id_child_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("Kind", "SubmittedAtUtc")
+                        .HasDatabaseName("ix_parent_feedbacks_kind_submitted_at_utc");
+
+                    b.ToTable("parent_feedbacks");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Admission.StoreInquiry", b =>
@@ -991,6 +1409,80 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("audit_logs");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Auditing.DataDeletionLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("DataJson")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("data_json");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<Guid>("DeletedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deleted_by_user_id");
+
+                    b.Property<Guid>("DeletionBatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deletion_batch_id");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid>("RecordId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("record_id");
+
+                    b.Property<Guid>("RootEntityId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("root_entity_id");
+
+                    b.Property<string>("RootEntityType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("root_entity_type");
+
+                    b.Property<string>("TableName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("table_name");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_data_deletion_logs");
+
+                    b.HasIndex("DeletedByUserId")
+                        .HasDatabaseName("ix_data_deletion_logs_deleted_by_user_id");
+
+                    b.HasIndex("DeletionBatchId")
+                        .HasDatabaseName("ix_data_deletion_logs_deletion_batch_id");
+
+                    b.HasIndex("RootEntityType", "RootEntityId")
+                        .HasDatabaseName("ix_data_deletion_logs_root_entity_type_root_entity_id");
+
+                    b.HasIndex("TableName", "RecordId")
+                        .HasDatabaseName("ix_data_deletion_logs_table_name_record_id");
+
+                    b.ToTable("data_deletion_logs");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Billing.FeeSuspension", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1001,6 +1493,10 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Property<bool>("AutoRestored")
                         .HasColumnType("boolean")
                         .HasColumnName("auto_restored");
+
+                    b.Property<Guid?>("ChildId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("child_id");
 
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone")
@@ -1055,6 +1551,9 @@ namespace iucs.meettomanage.domain.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_fee_suspensions");
+
+                    b.HasIndex("ChildId")
+                        .HasDatabaseName("ix_fee_suspensions_child_id");
 
                     b.HasIndex("InvoiceId")
                         .HasDatabaseName("ix_fee_suspensions_invoice_id");
@@ -1435,6 +1934,9 @@ namespace iucs.meettomanage.domain.Migrations
                     b.HasIndex("PaymentAccountId")
                         .HasDatabaseName("ix_payment_transactions_payment_account_id");
 
+                    b.HasIndex("Status", "PaidAtUtc")
+                        .HasDatabaseName("ix_payment_transactions_status_paid_at_utc");
+
                     b.ToTable("payment_transactions");
                 });
 
@@ -1555,6 +2057,11 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("parent_profile_id");
 
+                    b.Property<decimal?>("PriceOverride")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("price_override");
+
                     b.Property<DateOnly>("StartDate")
                         .HasColumnType("date")
                         .HasColumnName("start_date");
@@ -1594,6 +2101,266 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasDatabaseName("ix_subscriptions_status_next_billing_at_utc");
 
                     b.ToTable("subscriptions");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Common.ShortLink", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by_user_id");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("expires_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Slug")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("slug");
+
+                    b.Property<string>("TargetUrl")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("target_url");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_short_links");
+
+                    b.HasIndex("Slug")
+                        .IsUnique()
+                        .HasDatabaseName("ix_short_links_slug")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("short_links");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.BulkEmailBlast", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("batch_id");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("body");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<int>("FailureCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("failure_count");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("scope");
+
+                    b.Property<DateTime>("SentAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sent_at_utc");
+
+                    b.Property<Guid>("SentByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("sent_by_user_id");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("subject");
+
+                    b.Property<int>("SuccessCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("success_count");
+
+                    b.Property<int>("TotalRecipients")
+                        .HasColumnType("integer")
+                        .HasColumnName("total_recipients");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_bulk_email_blasts");
+
+                    b.HasIndex("BatchId")
+                        .HasDatabaseName("ix_bulk_email_blasts_batch_id");
+
+                    b.HasIndex("SentByUserId")
+                        .HasDatabaseName("ix_bulk_email_blasts_sent_by_user_id");
+
+                    b.ToTable("bulk_email_blasts");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.BulkEmailRecipient", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("BulkEmailBlastId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("bulk_email_blast_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)")
+                        .HasColumnName("email");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("error_message");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid>("RecipientUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("recipient_user_id");
+
+                    b.Property<DateTime?>("SentAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sent_at_utc");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_bulk_email_recipients");
+
+                    b.HasIndex("BulkEmailBlastId")
+                        .HasDatabaseName("ix_bulk_email_recipients_bulk_email_blast_id");
+
+                    b.HasIndex("RecipientUserId")
+                        .HasDatabaseName("ix_bulk_email_recipients_recipient_user_id");
+
+                    b.HasIndex("Status", "CreatedAtUtc")
+                        .HasDatabaseName("ix_bulk_email_recipients_status_created_at_utc");
+
+                    b.ToTable("bulk_email_recipients");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.BulkEmailReply", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("BulkEmailRecipientId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("bulk_email_recipient_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("message");
+
+                    b.Property<Guid>("ParentUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_user_id");
+
+                    b.Property<DateTime>("RepliedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("replied_at_utc");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_bulk_email_replies");
+
+                    b.HasIndex("BulkEmailRecipientId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_bulk_email_replies_bulk_email_recipient_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("ParentUserId")
+                        .HasDatabaseName("ix_bulk_email_replies_parent_user_id");
+
+                    b.ToTable("bulk_email_replies");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.ChatEscalation", b =>
@@ -1666,6 +2433,9 @@ namespace iucs.meettomanage.domain.Migrations
 
                     b.HasIndex("UserId")
                         .HasDatabaseName("ix_chat_escalations_user_id");
+
+                    b.HasIndex("Status", "CreatedAtUtc")
+                        .HasDatabaseName("ix_chat_escalations_status_created_at_utc");
 
                     b.ToTable("chat_escalations");
                 });
@@ -1895,6 +2665,10 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("text")
                         .HasColumnName("body");
 
+                    b.Property<Guid?>("BulkEmailRecipientId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("bulk_email_recipient_id");
+
                     b.Property<string>("Channel")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -1940,6 +2714,11 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("subject");
 
+                    b.Property<string>("TemplateKey")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("template_key");
+
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -1952,6 +2731,12 @@ namespace iucs.meettomanage.domain.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_notifications");
+
+                    b.HasIndex("BulkEmailRecipientId")
+                        .HasDatabaseName("ix_notifications_bulk_email_recipient_id");
+
+                    b.HasIndex("RecipientUserId", "CreatedAtUtc")
+                        .HasDatabaseName("ix_notifications_recipient_user_id_created_at_utc");
 
                     b.HasIndex("RecipientUserId", "Status")
                         .HasDatabaseName("ix_notifications_recipient_user_id_status");
@@ -2027,6 +2812,151 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasFilter("\"is_deleted\" = FALSE");
 
                     b.ToTable("progress_reports");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.SupportTicket", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<bool>("AwaitingStaffReply")
+                        .HasColumnType("boolean")
+                        .HasColumnName("awaiting_staff_reply");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("category");
+
+                    b.Property<Guid?>("ChildId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("child_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<DateTime>("LastActivityAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_activity_at_utc");
+
+                    b.Property<Guid>("ParentUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_user_id");
+
+                    b.Property<DateTime?>("ResolvedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("resolved_at_utc");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("subject");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_support_tickets");
+
+                    b.HasIndex("ChildId")
+                        .HasDatabaseName("ix_support_tickets_child_id");
+
+                    b.HasIndex("ParentUserId", "LastActivityAtUtc")
+                        .HasDatabaseName("ix_support_tickets_parent_user_id_last_activity_at_utc");
+
+                    b.HasIndex("Status", "LastActivityAtUtc")
+                        .HasDatabaseName("ix_support_tickets_status_last_activity_at_utc");
+
+                    b.ToTable("support_tickets");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.SupportTicketMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AuthorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("author_user_id");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("body");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<bool>("IsStaff")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_staff");
+
+                    b.Property<Guid>("SupportTicketId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("support_ticket_id");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_support_ticket_messages");
+
+                    b.HasIndex("AuthorUserId")
+                        .HasDatabaseName("ix_support_ticket_messages_author_user_id");
+
+                    b.HasIndex("SupportTicketId", "CreatedAtUtc")
+                        .HasDatabaseName("ix_support_ticket_messages_support_ticket_id_created_at_utc");
+
+                    b.ToTable("support_ticket_messages");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Integrations.Integration", b =>
@@ -2474,6 +3404,93 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("payouts");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Payouts.PayoutChange", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<decimal>("AmountAfter")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("amount_after");
+
+                    b.Property<decimal>("AmountBefore")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("amount_before");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("description");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid?>("PayoutId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("payout_id");
+
+                    b.Property<Guid?>("PayoutItemId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("payout_item_id");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("reason");
+
+                    b.Property<Guid?>("StaffPayoutId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("staff_payout_id");
+
+                    b.Property<decimal>("TotalAfter")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("total_after");
+
+                    b.Property<decimal>("TotalBefore")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("total_before");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_payout_changes");
+
+                    b.HasIndex("PayoutId")
+                        .HasDatabaseName("ix_payout_changes_payout_id");
+
+                    b.HasIndex("StaffPayoutId")
+                        .HasDatabaseName("ix_payout_changes_staff_payout_id");
+
+                    b.ToTable("payout_changes");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Payouts.PayoutItem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2486,6 +3503,11 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("numeric(12,2)")
                         .HasColumnName("amount");
 
+                    b.Property<decimal?>("AmountBeforeReview")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("amount_before_review");
+
                     b.Property<Guid?>("ClassSessionId")
                         .HasColumnType("uuid")
                         .HasColumnName("class_session_id");
@@ -2497,6 +3519,10 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Property<DateTime?>("DeletedAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at_utc");
+
+                    b.Property<int?>("DeliveredMinutes")
+                        .HasColumnType("integer")
+                        .HasColumnName("delivered_minutes");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean")
@@ -2514,6 +3540,23 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Property<bool>("RequiresReview")
                         .HasColumnType("boolean")
                         .HasColumnName("requires_review");
+
+                    b.Property<string>("ReviewDecision")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("review_decision");
+
+                    b.Property<DateTime?>("ReviewedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reviewed_at_utc");
+
+                    b.Property<Guid?>("ReviewedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reviewed_by_user_id");
+
+                    b.Property<int?>("ScheduledMinutes")
+                        .HasColumnType("integer")
+                        .HasColumnName("scheduled_minutes");
 
                     b.Property<string>("Type")
                         .IsRequired()
@@ -2599,6 +3642,167 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasFilter("\"is_deleted\" = FALSE");
 
                     b.ToTable("payout_rates");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Payouts.StaffCompensationSetting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Basis")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("basis");
+
+                    b.Property<decimal?>("CollectionPercentage")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("collection_percentage");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<DateOnly>("EffectiveFrom")
+                        .HasColumnType("date")
+                        .HasColumnName("effective_from");
+
+                    b.Property<decimal?>("FixedMonthlyAmount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("fixed_monthly_amount");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_staff_compensation_settings");
+
+                    b.HasIndex("UserId", "EffectiveFrom")
+                        .IsUnique()
+                        .HasDatabaseName("ix_staff_compensation_settings_user_id_effective_from")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("staff_compensation_settings");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Payouts.StaffPayout", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("amount");
+
+                    b.Property<decimal?>("AppliedFixedAmount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("applied_fixed_amount");
+
+                    b.Property<decimal?>("AppliedPercentage")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("applied_percentage");
+
+                    b.Property<string>("Basis")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("basis");
+
+                    b.Property<decimal?>("CollectionAmountRaw")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("collection_amount_raw");
+
+                    b.Property<decimal?>("CollectionAmountRounded")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("collection_amount_rounded");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<DateTime?>("PaidAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("paid_at_utc");
+
+                    b.Property<int>("PeriodMonth")
+                        .HasColumnType("integer")
+                        .HasColumnName("period_month");
+
+                    b.Property<int>("PeriodYear")
+                        .HasColumnType("integer")
+                        .HasColumnName("period_year");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_staff_payouts");
+
+                    b.HasIndex("UserId", "PeriodYear", "PeriodMonth")
+                        .IsUnique()
+                        .HasDatabaseName("ix_staff_payouts_user_id_period_year_period_month")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("staff_payouts");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Quizzes.QuizQuestion", b =>
@@ -2754,6 +3958,10 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(1000)")
                         .HasColumnName("file_url");
 
+                    b.Property<Guid?>("FolderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("folder_id");
+
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean")
                         .HasColumnName("is_deleted");
@@ -2795,6 +4003,9 @@ namespace iucs.meettomanage.domain.Migrations
 
                     b.HasIndex("CourseId")
                         .HasDatabaseName("ix_resources_course_id");
+
+                    b.HasIndex("FolderId")
+                        .HasDatabaseName("ix_resources_folder_id");
 
                     b.ToTable("resources");
                 });
@@ -2897,6 +4108,159 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("resource_batch_visibilities");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Resources.ResourceFolder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("description");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("name");
+
+                    b.Property<Guid?>("ParentFolderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_folder_id");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_resource_folders");
+
+                    b.HasIndex("ParentFolderId")
+                        .HasDatabaseName("ix_resource_folders_parent_folder_id");
+
+                    b.ToTable("resource_folders");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Resources.ResourceFolderAccess", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<Guid>("FolderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("folder_id");
+
+                    b.Property<Guid?>("GrantedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("granted_by");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid>("ParentProfileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_profile_id");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_resource_folder_accesses");
+
+                    b.HasIndex("ParentProfileId")
+                        .HasDatabaseName("ix_resource_folder_accesses_parent_profile_id");
+
+                    b.HasIndex("FolderId", "ParentProfileId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_resource_folder_accesses_folder_id_parent_profile_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("resource_folder_accesses");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Resources.ResourceFolderBatchAccess", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("BatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("batch_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<Guid>("FolderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("folder_id");
+
+                    b.Property<Guid?>("GrantedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("granted_by");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_resource_folder_batch_accesses");
+
+                    b.HasIndex("BatchId")
+                        .HasDatabaseName("ix_resource_folder_batch_accesses_batch_id");
+
+                    b.HasIndex("FolderId", "BatchId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_resource_folder_batch_accesses_folder_id_batch_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("resource_folder_batch_accesses");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.ClassSession", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2925,6 +4289,10 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("carried_forward_from_session_id");
 
+                    b.Property<int>("CarryForwardCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("carry_forward_count");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at_utc");
@@ -2945,6 +4313,14 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)")
                         .HasColumnName("meeting_room_id");
+
+                    b.Property<DateTime?>("OrphanedDemoAlertSentAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("orphaned_demo_alert_sent_at_utc");
+
+                    b.Property<DateTime?>("RecordingMissingAlertSentAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("recording_missing_alert_sent_at_utc");
 
                     b.Property<Guid?>("RescheduledFromSessionId")
                         .HasColumnType("uuid")
@@ -2990,11 +4366,11 @@ namespace iucs.meettomanage.domain.Migrations
                     b.HasKey("Id")
                         .HasName("pk_class_sessions");
 
-                    b.HasIndex("BatchId")
-                        .HasDatabaseName("ix_class_sessions_batch_id");
-
                     b.HasIndex("CarriedForwardFromSessionId")
                         .HasDatabaseName("ix_class_sessions_carried_forward_from_session_id");
+
+                    b.HasIndex("MeetingRoomId")
+                        .HasDatabaseName("ix_class_sessions_meeting_room_id");
 
                     b.HasIndex("RescheduledFromSessionId")
                         .HasDatabaseName("ix_class_sessions_rescheduled_from_session_id");
@@ -3005,10 +4381,110 @@ namespace iucs.meettomanage.domain.Migrations
                     b.HasIndex("Status")
                         .HasDatabaseName("ix_class_sessions_status");
 
-                    b.HasIndex("TeacherProfileId")
-                        .HasDatabaseName("ix_class_sessions_teacher_profile_id");
+                    b.HasIndex("BatchId", "ScheduledStartAtUtc")
+                        .IsUnique()
+                        .HasDatabaseName("ix_class_sessions_batch_id_scheduled_start_at_utc")
+                        .HasFilter("is_deleted = false AND batch_id IS NOT NULL AND status <> 'Cancelled'");
+
+                    b.HasIndex("Status", "ScheduledStartAtUtc")
+                        .HasDatabaseName("ix_class_sessions_status_scheduled_start_at_utc");
+
+                    b.HasIndex("TeacherProfileId", "ScheduledStartAtUtc")
+                        .HasDatabaseName("ix_class_sessions_teacher_profile_id_scheduled_start_at_utc");
+
+                    b.HasIndex("TeacherProfileId", "Status")
+                        .HasDatabaseName("ix_class_sessions_teacher_profile_id_status");
 
                     b.ToTable("class_sessions");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.ClassSessionEventLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("ChildId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("child_id");
+
+                    b.Property<Guid>("ClassSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("class_session_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<string>("Detail")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("detail");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("event_type");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<bool>("IsExpected")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_expected");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at_utc");
+
+                    b.Property<string>("ParticipantName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("participant_name");
+
+                    b.Property<string>("ParticipantType")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("participant_type");
+
+                    b.Property<Guid?>("TeacherProfileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("teacher_profile_id");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_class_session_event_logs");
+
+                    b.HasIndex("ChildId")
+                        .HasDatabaseName("ix_class_session_event_logs_child_id");
+
+                    b.HasIndex("ClassSessionId")
+                        .HasDatabaseName("ix_class_session_event_logs_class_session_id");
+
+                    b.HasIndex("EventType")
+                        .HasDatabaseName("ix_class_session_event_logs_event_type");
+
+                    b.HasIndex("OccurredAtUtc")
+                        .HasDatabaseName("ix_class_session_event_logs_occurred_at_utc");
+
+                    b.HasIndex("TeacherProfileId")
+                        .HasDatabaseName("ix_class_session_event_logs_teacher_profile_id");
+
+                    b.ToTable("class_session_event_logs");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.EngagementEvent", b =>
@@ -3068,6 +4544,52 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasDatabaseName("ix_engagement_events_class_session_id");
 
                     b.ToTable("engagement_events");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.PersonalRoomRecording", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<int?>("DurationSeconds")
+                        .HasColumnType("integer")
+                        .HasColumnName("duration_seconds");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid>("OwnerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_id");
+
+                    b.Property<string>("StorageUrl")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("storage_url");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_personal_room_recordings");
+
+                    b.HasIndex("OwnerId")
+                        .HasDatabaseName("ix_personal_room_recordings_owner_id");
+
+                    b.ToTable("personal_room_recordings");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.SessionAttendance", b =>
@@ -3148,6 +4670,54 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasFilter("\"teacher_profile_id\" IS NOT NULL AND \"is_deleted\" = FALSE");
 
                     b.ToTable("session_attendances");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.SessionPresentation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ClassSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("class_session_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("OriginalFileName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)")
+                        .HasColumnName("original_file_name");
+
+                    b.Property<string>("StorageUrl")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("storage_url");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_session_presentations");
+
+                    b.HasIndex("ClassSessionId")
+                        .HasDatabaseName("ix_session_presentations_class_session_id");
+
+                    b.ToTable("session_presentations");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.SessionRecording", b =>
@@ -3481,6 +5051,107 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("children");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Users.ChildSchedulePreference", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Allergies")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("allergies");
+
+                    b.Property<Guid>("ChildId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("child_id");
+
+                    b.Property<Guid?>("CourseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("course_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("DayTimesJson")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("day_times_json");
+
+                    b.Property<int>("DaysPerWeek")
+                        .HasColumnType("integer")
+                        .HasColumnName("days_per_week");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("notes");
+
+                    b.Property<string>("PreferredDays")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("preferred_days");
+
+                    b.Property<DateOnly?>("PreferredStartDate")
+                        .HasColumnType("date")
+                        .HasColumnName("preferred_start_date");
+
+                    b.Property<string>("PriorExperience")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("prior_experience");
+
+                    b.Property<string>("SchoolName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("school_name");
+
+                    b.Property<DateTime>("SubmittedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("submitted_at_utc");
+
+                    b.Property<string>("TimeZoneId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("time_zone_id");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_child_schedule_preferences");
+
+                    b.HasIndex("ChildId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_child_schedule_preferences_child_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("CourseId")
+                        .HasDatabaseName("ix_child_schedule_preferences_course_id");
+
+                    b.ToTable("child_schedule_preferences");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Users.ParentProfile", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3513,6 +5184,10 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("payment_account_id");
 
+                    b.Property<DateTime?>("TermsAcceptedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("terms_accepted_at_utc");
+
                     b.Property<DateTime?>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at_utc");
@@ -3533,6 +5208,70 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasFilter("\"is_deleted\" = FALSE");
 
                     b.ToTable("parent_profiles");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Users.PermissionModuleDefinition", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text")
+                        .HasColumnName("description");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<bool>("IsSystem")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_system");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("key");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("label");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_permission_module_definitions");
+
+                    b.HasIndex("Key")
+                        .IsUnique()
+                        .HasDatabaseName("ix_permission_module_definitions_key")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("permission_module_definitions");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Users.PinResetToken", b =>
@@ -3703,8 +5442,7 @@ namespace iucs.meettomanage.domain.Migrations
 
                     b.Property<string>("Module")
                         .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
+                        .HasColumnType("text")
                         .HasColumnName("module");
 
                     b.Property<Guid>("RoleDefinitionId")
@@ -3728,6 +5466,86 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasFilter("\"is_deleted\" = FALSE");
 
                     b.ToTable("role_permissions");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Users.StaffLeaveRequest", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date")
+                        .HasColumnName("end_date");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("reason");
+
+                    b.Property<string>("ReviewNote")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("review_note");
+
+                    b.Property<DateTime?>("ReviewedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reviewed_at_utc");
+
+                    b.Property<Guid?>("ReviewedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reviewed_by_user_id");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date")
+                        .HasColumnName("start_date");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_staff_leave_requests");
+
+                    b.HasIndex("Status", "StartDate")
+                        .HasDatabaseName("ix_staff_leave_requests_status_start_date");
+
+                    b.HasIndex("UserId", "StartDate")
+                        .HasDatabaseName("ix_staff_leave_requests_user_id_start_date");
+
+                    b.ToTable("staff_leave_requests");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Users.SubAdminPermission", b =>
@@ -3775,8 +5593,7 @@ namespace iucs.meettomanage.domain.Migrations
 
                     b.Property<string>("Module")
                         .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)")
+                        .HasColumnType("text")
                         .HasColumnName("module");
 
                     b.Property<DateTime?>("UpdatedAtUtc")
@@ -3923,6 +5740,11 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
                         .HasColumnName("phone");
+
+                    b.Property<string>("PinEncrypted")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("pin_encrypted");
 
                     b.Property<string>("PinHash")
                         .IsRequired()
@@ -4080,6 +5902,17 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("ParentProfile");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Academics.LeaveAllowance", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.TeacherProfile", "TeacherProfile")
+                        .WithMany()
+                        .HasForeignKey("TeacherProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_leave_allowances_teacher_profiles_teacher_profile_id");
+
+                    b.Navigation("TeacherProfile");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Academics.LeaveRequest", b =>
                 {
                     b.HasOne("iucs.meettomanage.domain.Entities.Users.TeacherProfile", "TeacherProfile")
@@ -4092,6 +5925,59 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("TeacherProfile");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Academics.LeaveRequestSession", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Sessions.ClassSession", "ClassSession")
+                        .WithMany()
+                        .HasForeignKey("ClassSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_leave_request_sessions_class_sessions_class_session_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Academics.LeaveRequest", "LeaveRequest")
+                        .WithMany("Sessions")
+                        .HasForeignKey("LeaveRequestId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_leave_request_sessions_leave_requests_leave_request_id");
+
+                    b.Navigation("ClassSession");
+
+                    b.Navigation("LeaveRequest");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Activities.WhiteboardActivityItem", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Activities.WhiteboardActivityTemplate", "WhiteboardActivityTemplate")
+                        .WithMany("Items")
+                        .HasForeignKey("WhiteboardActivityTemplateId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_whiteboard_activity_items_whiteboard_activity_templates_white");
+
+                    b.Navigation("WhiteboardActivityTemplate");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Activities.WhiteboardActivityTemplate", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Academics.Course", "Course")
+                        .WithMany()
+                        .HasForeignKey("CourseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_whiteboard_activity_templates_courses_course_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Academics.Department", "Department")
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_whiteboard_activity_templates_departments_department_id");
+
+                    b.Navigation("Course");
+
+                    b.Navigation("Department");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Admission.DemoBooking", b =>
                 {
                     b.HasOne("iucs.meettomanage.domain.Entities.Sessions.ClassSession", "ClassSession")
@@ -4099,6 +5985,12 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasForeignKey("ClassSessionId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_demo_bookings_class_sessions_class_session_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Academics.Course", "Course")
+                        .WithMany()
+                        .HasForeignKey("CourseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_demo_bookings_courses_course_id");
 
                     b.HasOne("iucs.meettomanage.domain.Entities.Academics.Department", "Department")
                         .WithMany()
@@ -4113,6 +6005,8 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasConstraintName("fk_demo_bookings_invoices_invoice_id");
 
                     b.Navigation("ClassSession");
+
+                    b.Navigation("Course");
 
                     b.Navigation("Department");
 
@@ -4160,6 +6054,42 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("DemoBooking");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Admission.ParentFeedback", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Academics.Batch", "Batch")
+                        .WithMany()
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_parent_feedbacks_batches_batch_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.Child", "Child")
+                        .WithMany()
+                        .HasForeignKey("ChildId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_parent_feedbacks_children_child_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Admission.DemoBooking", "DemoBooking")
+                        .WithMany()
+                        .HasForeignKey("DemoBookingId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_parent_feedbacks_demo_bookings_demo_booking_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "ParentUser")
+                        .WithMany()
+                        .HasForeignKey("ParentUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_parent_feedbacks_users_parent_user_id");
+
+                    b.Navigation("Batch");
+
+                    b.Navigation("Child");
+
+                    b.Navigation("DemoBooking");
+
+                    b.Navigation("ParentUser");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Admission.StoreInquiry", b =>
                 {
                     b.HasOne("iucs.meettomanage.domain.Entities.Billing.PackagePlan", "PackagePlan")
@@ -4174,6 +6104,12 @@ namespace iucs.meettomanage.domain.Migrations
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Billing.FeeSuspension", b =>
                 {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.Child", "Child")
+                        .WithMany()
+                        .HasForeignKey("ChildId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_fee_suspensions_children_child_id");
+
                     b.HasOne("iucs.meettomanage.domain.Entities.Billing.Invoice", "Invoice")
                         .WithMany()
                         .HasForeignKey("InvoiceId")
@@ -4186,6 +6122,8 @@ namespace iucs.meettomanage.domain.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_fee_suspensions_parent_profiles_parent_profile_id");
+
+                    b.Navigation("Child");
 
                     b.Navigation("Invoice");
 
@@ -4332,6 +6270,68 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("ParentProfile");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.BulkEmailBlast", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Academics.Batch", "Batch")
+                        .WithMany()
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_bulk_email_blasts_batches_batch_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "SentByUser")
+                        .WithMany()
+                        .HasForeignKey("SentByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_bulk_email_blasts_users_sent_by_user_id");
+
+                    b.Navigation("Batch");
+
+                    b.Navigation("SentByUser");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.BulkEmailRecipient", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Communication.BulkEmailBlast", "BulkEmailBlast")
+                        .WithMany("Recipients")
+                        .HasForeignKey("BulkEmailBlastId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_bulk_email_recipients_bulk_email_blasts_bulk_email_blast_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "RecipientUser")
+                        .WithMany()
+                        .HasForeignKey("RecipientUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_bulk_email_recipients_users_recipient_user_id");
+
+                    b.Navigation("BulkEmailBlast");
+
+                    b.Navigation("RecipientUser");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.BulkEmailReply", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Communication.BulkEmailRecipient", "BulkEmailRecipient")
+                        .WithOne("Reply")
+                        .HasForeignKey("iucs.meettomanage.domain.Entities.Communication.BulkEmailReply", "BulkEmailRecipientId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_bulk_email_replies_bulk_email_recipients_bulk_email_recipie");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "ParentUser")
+                        .WithMany()
+                        .HasForeignKey("ParentUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_bulk_email_replies_users_parent_user_id");
+
+                    b.Navigation("BulkEmailRecipient");
+
+                    b.Navigation("ParentUser");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.ChatEscalation", b =>
                 {
                     b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "ResolvedByUser")
@@ -4374,12 +6374,20 @@ namespace iucs.meettomanage.domain.Migrations
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.Notification", b =>
                 {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Communication.BulkEmailRecipient", "BulkEmailRecipient")
+                        .WithMany()
+                        .HasForeignKey("BulkEmailRecipientId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_notifications_bulk_email_recipients_bulk_email_recipient_id");
+
                     b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "RecipientUser")
                         .WithMany()
                         .HasForeignKey("RecipientUserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_notifications_users_recipient_user_id");
+
+                    b.Navigation("BulkEmailRecipient");
 
                     b.Navigation("RecipientUser");
                 });
@@ -4394,6 +6402,47 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasConstraintName("fk_progress_reports_children_child_id");
 
                     b.Navigation("Child");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.SupportTicket", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.Child", "Child")
+                        .WithMany()
+                        .HasForeignKey("ChildId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_support_tickets_children_child_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "ParentUser")
+                        .WithMany()
+                        .HasForeignKey("ParentUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_support_tickets_users_parent_user_id");
+
+                    b.Navigation("Child");
+
+                    b.Navigation("ParentUser");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.SupportTicketMessage", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "AuthorUser")
+                        .WithMany()
+                        .HasForeignKey("AuthorUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_support_ticket_messages_users_author_user_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Communication.SupportTicket", "SupportTicket")
+                        .WithMany("Messages")
+                        .HasForeignKey("SupportTicketId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_support_ticket_messages_support_tickets_support_ticket_id");
+
+                    b.Navigation("AuthorUser");
+
+                    b.Navigation("SupportTicket");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Notes.FloatingNote", b =>
@@ -4418,6 +6467,25 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasConstraintName("fk_payouts_teacher_profiles_teacher_profile_id");
 
                     b.Navigation("TeacherProfile");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Payouts.PayoutChange", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Payouts.Payout", "Payout")
+                        .WithMany()
+                        .HasForeignKey("PayoutId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_payout_changes_payouts_payout_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Payouts.StaffPayout", "StaffPayout")
+                        .WithMany()
+                        .HasForeignKey("StaffPayoutId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_payout_changes_staff_payouts_staff_payout_id");
+
+                    b.Navigation("Payout");
+
+                    b.Navigation("StaffPayout");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Payouts.PayoutItem", b =>
@@ -4449,6 +6517,30 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasConstraintName("fk_payout_rates_teacher_profiles_teacher_profile_id");
 
                     b.Navigation("TeacherProfile");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Payouts.StaffCompensationSetting", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_staff_compensation_settings_users_user_id");
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Payouts.StaffPayout", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_staff_payouts_users_user_id");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Quizzes.QuizQuestion", b =>
@@ -4497,9 +6589,17 @@ namespace iucs.meettomanage.domain.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_resources_courses_course_id");
 
+                    b.HasOne("iucs.meettomanage.domain.Entities.Resources.ResourceFolder", "Folder")
+                        .WithMany()
+                        .HasForeignKey("FolderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_resources_resource_folders_folder_id");
+
                     b.Navigation("Batch");
 
                     b.Navigation("Course");
+
+                    b.Navigation("Folder");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Resources.ResourceAccess", b =>
@@ -4544,6 +6644,59 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("Resource");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Resources.ResourceFolder", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Resources.ResourceFolder", "ParentFolder")
+                        .WithMany()
+                        .HasForeignKey("ParentFolderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_resource_folders_resource_folders_parent_folder_id");
+
+                    b.Navigation("ParentFolder");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Resources.ResourceFolderAccess", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Resources.ResourceFolder", "Folder")
+                        .WithMany()
+                        .HasForeignKey("FolderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_resource_folder_accesses_resource_folders_folder_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.ParentProfile", "ParentProfile")
+                        .WithMany()
+                        .HasForeignKey("ParentProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_resource_folder_accesses_parent_profiles_parent_profile_id");
+
+                    b.Navigation("Folder");
+
+                    b.Navigation("ParentProfile");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Resources.ResourceFolderBatchAccess", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Academics.Batch", "Batch")
+                        .WithMany()
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_resource_folder_batch_accesses_batches_batch_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Resources.ResourceFolder", "Folder")
+                        .WithMany()
+                        .HasForeignKey("FolderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_resource_folder_batch_accesses_resource_folders_folder_id");
+
+                    b.Navigation("Batch");
+
+                    b.Navigation("Folder");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.ClassSession", b =>
                 {
                     b.HasOne("iucs.meettomanage.domain.Entities.Academics.Batch", "Batch")
@@ -4580,6 +6733,34 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("TeacherProfile");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.ClassSessionEventLog", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.Child", "Child")
+                        .WithMany()
+                        .HasForeignKey("ChildId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_class_session_event_logs_children_child_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Sessions.ClassSession", "ClassSession")
+                        .WithMany()
+                        .HasForeignKey("ClassSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_class_session_event_logs_class_sessions_class_session_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.TeacherProfile", "TeacherProfile")
+                        .WithMany()
+                        .HasForeignKey("TeacherProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_class_session_event_logs_teacher_profiles_teacher_profile_id");
+
+                    b.Navigation("Child");
+
+                    b.Navigation("ClassSession");
+
+                    b.Navigation("TeacherProfile");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.EngagementEvent", b =>
                 {
                     b.HasOne("iucs.meettomanage.domain.Entities.Users.Child", "Child")
@@ -4598,6 +6779,18 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("Child");
 
                     b.Navigation("ClassSession");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.PersonalRoomRecording", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "Owner")
+                        .WithMany()
+                        .HasForeignKey("OwnerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_personal_room_recordings_users_owner_id");
+
+                    b.Navigation("Owner");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.SessionAttendance", b =>
@@ -4626,6 +6819,18 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("ClassSession");
 
                     b.Navigation("TeacherProfile");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.SessionPresentation", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Sessions.ClassSession", "ClassSession")
+                        .WithMany()
+                        .HasForeignKey("ClassSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_session_presentations_class_sessions_class_session_id");
+
+                    b.Navigation("ClassSession");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.SessionRecording", b =>
@@ -4683,6 +6888,26 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("ParentProfile");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Users.ChildSchedulePreference", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.Child", "Child")
+                        .WithMany()
+                        .HasForeignKey("ChildId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_child_schedule_preferences_children_child_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Academics.Course", "Course")
+                        .WithMany()
+                        .HasForeignKey("CourseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_child_schedule_preferences_courses_course_id");
+
+                    b.Navigation("Child");
+
+                    b.Navigation("Course");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Users.ParentProfile", b =>
                 {
                     b.HasOne("iucs.meettomanage.domain.Entities.Billing.PaymentAccount", "PaymentAccount")
@@ -4725,6 +6950,18 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasConstraintName("fk_role_permissions_role_definitions_role_definition_id");
 
                     b.Navigation("RoleDefinition");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Users.StaffLeaveRequest", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_staff_leave_requests_users_user_id");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Users.SubAdminPermission", b =>
@@ -4775,6 +7012,16 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("Enrollments");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Academics.LeaveRequest", b =>
+                {
+                    b.Navigation("Sessions");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Activities.WhiteboardActivityTemplate", b =>
+                {
+                    b.Navigation("Items");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Admission.DemoBooking", b =>
                 {
                     b.Navigation("Participants");
@@ -4783,6 +7030,21 @@ namespace iucs.meettomanage.domain.Migrations
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Billing.Invoice", b =>
                 {
                     b.Navigation("Transactions");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.BulkEmailBlast", b =>
+                {
+                    b.Navigation("Recipients");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.BulkEmailRecipient", b =>
+                {
+                    b.Navigation("Reply");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.SupportTicket", b =>
+                {
+                    b.Navigation("Messages");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Payouts.Payout", b =>

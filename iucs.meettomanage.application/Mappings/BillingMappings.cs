@@ -2,6 +2,7 @@ using iucs.meettomanage.application.Dto.Billing;
 using iucs.meettomanage.application.Dto.Resources;
 using iucs.meettomanage.domain.Entities.Billing;
 using iucs.meettomanage.domain.Entities.Resources;
+using iucs.meettomanage.domain.Entities.Users;
 
 namespace iucs.meettomanage.application.Mappings
 {
@@ -35,10 +36,10 @@ namespace iucs.meettomanage.application.Mappings
                 InvoiceNumber = invoice.InvoiceNumber,
                 ParentProfileId = invoice.ParentProfileId,
                 ChildId = invoice.ChildId,
-                ChildName = invoice.Child is null ? null : $"{invoice.Child.FirstName} {invoice.Child.LastName}".Trim(),
+                ChildName = ResolveStudentName(invoice),
                 CourseId = invoice.CourseId,
                 CourseName = invoice.Course?.Name ?? invoice.Subscription?.PackagePlan?.Course?.Name,
-                ParentName = invoice.ParentProfile?.User is null ? null : $"{invoice.ParentProfile.User.FirstName} {invoice.ParentProfile.User.LastName}",
+                ParentName = invoice.ParentProfile?.User is null ? null : $"{invoice.ParentProfile.User.FirstName} {invoice.ParentProfile.User.LastName}".Trim(),
                 ParentEmail = invoice.ParentProfile?.User?.Email,
                 DepartmentId = invoice.DepartmentId,
                 DepartmentName = invoice.Department?.Name ?? string.Empty,
@@ -50,6 +51,35 @@ namespace iucs.meettomanage.application.Mappings
                 IssuedAtUtc = invoice.IssuedAtUtc,
                 PaidAtUtc = invoice.PaidAtUtc,
             };
+        }
+
+        /// <summary>
+        /// Display-only student name. Many invoices (family-level / manually created / admission)
+        /// carry no ChildId, which left the All Invoices list blank. Falls back to the
+        /// subscription's child, then to the parent's own children (joined when there are
+        /// several). ChildId itself is untouched, so suspension/billing logic is unaffected.
+        /// </summary>
+        private static string? ResolveStudentName(Invoice invoice)
+        {
+            static string Full(Child c) => $"{c.FirstName} {c.LastName}".Trim();
+
+            if (invoice.Child is { } child)
+            {
+                return Full(child);
+            }
+
+            if (invoice.Subscription?.Child is { } subscriptionChild)
+            {
+                return Full(subscriptionChild);
+            }
+
+            var siblings = invoice.ParentProfile?.Children;
+            if (siblings is { Count: > 0 })
+            {
+                return string.Join(", ", siblings.OrderBy(c => c.FirstName).Select(Full));
+            }
+
+            return null;
         }
 
         public static ResourceDto ToDto(this Resource resource)
@@ -64,6 +94,7 @@ namespace iucs.meettomanage.application.Mappings
                 CourseId = resource.CourseId,
                 BatchId = resource.BatchId,
                 BatchName = resource.Batch?.Name,
+                FolderId = resource.FolderId,
                 IsDownloadable = resource.IsDownloadable,
                 Description = resource.Description,
                 CreatedAtUtc = resource.CreatedAtUtc,

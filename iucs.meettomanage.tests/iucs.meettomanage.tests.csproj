@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\iucs.meettomanage.application\iucs.meettomanage.application.csproj" />
+    <ProjectReference Include="../iucs.meettomanage.api/iucs.meettomanage.api.csproj" />
   </ItemGroup>
 
 </Project>

@@ -47,14 +47,20 @@ namespace iucs.meettomanage.application.Mappings
                 CourseId = batch.CourseId,
                 CourseName = batch.Course?.Name ?? string.Empty,
                 CourseDurationMinutes = batch.Course?.DurationMinutes ?? 0,
+                DurationMinutesOverride = batch.DurationMinutesOverride,
+                EffectiveDurationMinutes = batch.DurationMinutesOverride ?? batch.Course?.DurationMinutes ?? 0,
                 TeacherProfileId = batch.TeacherProfileId,
-                TeacherName = batch.TeacherProfile?.User is { } u ? $"{u.FirstName} {u.LastName}" : string.Empty,
+                TeacherName = batch.TeacherProfile?.User is { } u ? $"{u.FirstName} {u.LastName}".Trim() : string.Empty,
                 Name = batch.Name,
                 Capacity = batch.Capacity,
                 EnrolledCount = enrolledCount,
                 Status = batch.Status,
                 StartDate = batch.StartDate,
                 EndDate = batch.EndDate,
+                PaymentPlanType = batch.PaymentPlanType,
+                PaymentAfterSessionsCount = batch.PaymentAfterSessionsCount,
+                PaymentDueDate = batch.PaymentDueDate,
+                TeacherPayoutPerClass = batch.TeacherPayoutPerClass,
             };
         }
 
@@ -68,10 +74,15 @@ namespace iucs.meettomanage.application.Mappings
                 AcademicLevel = enrollment.Child.AcademicLevel,
                 Status = enrollment.Status,
                 EnrolledAtUtc = enrollment.CreatedAtUtc,
+                ParentTimeZoneId = enrollment.Child.ParentProfile?.User?.TimeZoneId,
             };
         }
 
-        public static ClassSessionDto ToDto(this ClassSession session)
+        public static ClassSessionDto ToDto(
+            this ClassSession session,
+            DateTime? activeRecordingExpiresAtUtc = null,
+            bool hasRecording = false,
+            string? demoChildName = null)
         {
             return new ClassSessionDto
             {
@@ -79,7 +90,7 @@ namespace iucs.meettomanage.application.Mappings
                 BatchId = session.BatchId,
                 BatchName = session.Batch?.Name,
                 TeacherProfileId = session.TeacherProfileId,
-                TeacherName = session.TeacherProfile?.User is { } u ? $"{u.FirstName} {u.LastName}" : string.Empty,
+                TeacherName = session.TeacherProfile?.User is { } u ? $"{u.FirstName} {u.LastName}".Trim() : string.Empty,
                 Type = session.Type,
                 Status = session.Status,
                 ScheduledStartAtUtc = session.ScheduledStartAtUtc,
@@ -88,6 +99,9 @@ namespace iucs.meettomanage.application.Mappings
                 RescheduledFromSessionId = session.RescheduledFromSessionId,
                 CancellationReason = session.CancellationReason,
                 Summary = session.Summary,
+                HasRecording = hasRecording,
+                RecordingExpiresAtUtc = activeRecordingExpiresAtUtc,
+                DemoChildName = demoChildName,
             };
         }
     }

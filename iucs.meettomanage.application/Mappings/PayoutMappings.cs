@@ -27,7 +27,7 @@ namespace iucs.meettomanage.application.Mappings
             {
                 Id = payout.Id,
                 TeacherProfileId = payout.TeacherProfileId,
-                TeacherName = $"{payout.TeacherProfile.User.FirstName} {payout.TeacherProfile.User.LastName}",
+                TeacherName = $"{payout.TeacherProfile.User.FirstName} {payout.TeacherProfile.User.LastName}".Trim(),
                 PeriodYear = payout.PeriodYear,
                 PeriodMonth = payout.PeriodMonth,
                 Status = payout.Status,
@@ -47,6 +47,10 @@ namespace iucs.meettomanage.application.Mappings
                         Note = i.Note,
                         CreatedAtUtc = i.CreatedAtUtc,
                         RequiresReview = i.RequiresReview,
+                        ScheduledMinutes = i.ScheduledMinutes,
+                        DeliveredMinutes = i.DeliveredMinutes,
+                        ReviewDecision = i.ReviewDecision,
+                        OriginalAmount = i.AmountBeforeReview is { } original && original != i.Amount ? original : null,
                     })
                     .ToList(),
             };

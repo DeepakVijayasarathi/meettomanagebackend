@@ -1,10 +1,13 @@
 using iucs.meettomanage.domain.Entities.Common;
-using iucs.meettomanage.domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace iucs.meettomanage.domain.Entities.Users
 {
-    /// <summary>Module-level grants a <see cref="RoleDefinition"/> carries; mirrors <see cref="SubAdminPermission"/>.</summary>
+    /// <summary>
+    /// Module-level grants a <see cref="RoleDefinition"/> carries; mirrors <see cref="SubAdminPermission"/>.
+    /// Module is a <see cref="PermissionModuleDefinition.Key"/> — either a built-in
+    /// <see cref="Enums.PermissionModule"/> enum name or an Admin-defined custom module.
+    /// </summary>
     [Index(nameof(RoleDefinitionId), nameof(Module), IsUnique = true)]
     public class RolePermission : AuditEntity
     {
@@ -12,7 +15,7 @@ namespace iucs.meettomanage.domain.Entities.Users
 
         public RoleDefinition RoleDefinition { get; set; } = null!;
 
-        public PermissionModule Module { get; set; }
+        public string Module { get; set; } = null!;
 
         public bool CanView { get; set; }
 

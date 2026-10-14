@@ -67,6 +67,22 @@ namespace iucs.meettomanage.application.Common
                     """,
                     "FirstName", "Email", "TemporaryPin"),
 
+                New("parent-enrollment-welcome", "Parent Welcome (After Enrollment)",
+                    "Sent automatically when the admission counsellor verifies the payment and clicks Enroll: portal link, registered email, PIN and what to do next.",
+                    NotificationType.General, "Welcome to {{OrgName}} - your login details",
+                    """
+                    <p>Hello {{FirstName}},</p>
+                    <p>Welcome to {{OrgName}}! Your admission is confirmed and your parent account is ready.</p>
+                    <table style="width:100%;background:#F9FAFB;border-radius:6px;margin:16px 0;">
+                      <tr><td style="padding:12px 16px;color:#6B7280;">Portal</td><td style="padding:12px 16px;font-weight:600;"><a href="{{LoginUrl}}">{{PortalUrl}}</a></td></tr>
+                      <tr><td style="padding:12px 16px;color:#6B7280;">Registered email</td><td style="padding:12px 16px;font-weight:600;">{{Email}}</td></tr>
+                      <tr><td style="padding:12px 16px;color:#6B7280;">PIN</td><td style="padding:12px 16px;font-weight:600;">{{TemporaryPin}}</td></tr>
+                    </table>
+                    <p><strong>Next step:</strong> after you log in, please fill in your child's details. Our team will review them and then set up your child's class schedule.</p>
+                    <p style="font-size:13px;color:#6B7280;">Having trouble logging in? Choose "Forgot your PIN" on the login page - a link to set a new PIN will be sent to this same email address.</p>
+                    """,
+                    "FirstName", "Email", "TemporaryPin", "PortalUrl", "LoginUrl"),
+
                 New("pin-reset", "Self-Service PIN Reset",
                     "Sent when someone requests a PIN reset from the login page's \"Forgot your PIN\" link.",
                     NotificationType.General, "Reset your {{OrgName}} PIN",
@@ -77,6 +93,99 @@ namespace iucs.meettomanage.application.Common
                     <p style="font-size:12px;color:#6b7280;">This link expires in {{ExpiryMinutes}} minutes and can only be used once. If you didn't request this, you can ignore this email — your PIN stays unchanged.</p>
                     """,
                     "FirstName", "Email", "ResetUrl", "ExpiryMinutes"),
+
+                New("parent-feedback-received", "Parent Feedback Received (Admin / Admission)",
+                    "Sent to Admins and the Admission team when a parent rates the demo class or a completed course.",
+                    NotificationType.General, "{{Stars}} from {{ParentName}} about {{Occasion}}",
+                    """
+                    <p><strong>{{ParentName}}</strong> rated {{Occasion}} for <strong>{{ChildName}}</strong>: <strong>{{Stars}}</strong>.</p>
+                    <p>&ldquo;{{Comment}}&rdquo;</p>
+                    <p style="font-size:12px;color:#6b7280;">Every parent rating is listed under Parent Feedback in your portal.</p>
+                    """,
+                    "Occasion", "ParentName", "ChildName", "Stars", "Comment"),
+
+                New("staff-leave-submitted", "Staff Leave Application (Admin / Founder)",
+                    "Sent to Admin and the Founder when an admin-team member (RM, Coordinator, Management, Admission) applies for leave.",
+                    NotificationType.General, "Leave application: {{StaffName}} ({{Dates}})",
+                    """
+                    <p><strong>{{StaffName}}</strong> has applied for leave on <strong>{{Dates}}</strong>.</p>
+                    <p><strong>Reason:</strong> &ldquo;{{Reason}}&rdquo;</p>
+                    <p><a href="{{ReviewUrl}}" style="display:inline-block;padding:10px 18px;background:#4F46E5;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600;">Review leave</a></p>
+                    """,
+                    "StaffName", "Dates", "Reason", "ReviewUrl"),
+
+                New("staff-leave-reviewed", "Staff Leave Decision (Staff)",
+                    "Sent to the admin-team member when their leave application is approved or not approved.",
+                    NotificationType.LeaveStatusUpdate, "Your leave for {{Dates}} was {{Status}}",
+                    """
+                    <p>Hi {{FirstName}},</p>
+                    <p>Your leave for <strong>{{Dates}}</strong> was <strong>{{Status}}</strong>.</p>
+                    <p>{{ReviewNote}}</p>
+                    """,
+                    "FirstName", "Dates", "Status", "ReviewNote"),
+
+                New("class-cancelled-by-parent", "Class Cancelled by Parent (Teacher)",
+                    "Sent to the teacher when a parent cancels an upcoming class from the parent portal (no admin approval needed): a family's own class is cancelled with a make-up scheduled; in a group class only their child is marked absent.",
+                    NotificationType.General, "{{Headline}}: {{ClassName}} on {{StartLocal}}",
+                    """
+                    <p>Hi {{TeacherFirstName}},</p>
+                    <p>The parent <strong>{{ParentName}}</strong> has cancelled the class for <strong>{{ChildName}}</strong>:</p>
+                    <p style="font-weight:600;">{{ClassName}} &ndash; {{StartLocal}}</p>
+                    <p><strong>Reason given by the parent:</strong> &ldquo;{{Reason}}&rdquo;</p>
+                    <p>{{Outcome}}</p>
+                    """,
+                    "Headline", "TeacherFirstName", "ParentName", "ChildName", "ClassName", "StartLocal", "Reason", "Outcome"),
+
+                New("short-class-payout-approval", "Short Class — Payout Approval Needed (Admin / Management)",
+                    "Sent to Admin and Management when a class ends before its scheduled duration (or with no teacher attendance recorded); the payout waits in Payout Approvals.",
+                    NotificationType.General, "Payout approval needed: {{TeacherName}}'s class ran {{ShortfallMinutes}} min short",
+                    """
+                    <p>A class ended before its scheduled duration and needs a payout decision.</p>
+                    <table style="border-collapse:collapse;font-size:14px;">
+                      <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">Teacher</td><td style="padding:4px 0;"><strong>{{TeacherName}}</strong></td></tr>
+                      <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">Batch / class</td><td style="padding:4px 0;">{{ClassName}}</td></tr>
+                      <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">Student(s)</td><td style="padding:4px 0;">{{Students}}</td></tr>
+                      <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">Scheduled time</td><td style="padding:4px 0;">{{ScheduledTime}}</td></tr>
+                      <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">Scheduled duration</td><td style="padding:4px 0;">{{ScheduledMinutes}} min</td></tr>
+                      <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">Actual duration</td><td style="padding:4px 0;">{{ActualMinutes}} min</td></tr>
+                      <tr><td style="padding:4px 12px 4px 0;color:#6b7280;">Shortfall</td><td style="padding:4px 0;"><strong>{{ShortfallMinutes}} min</strong></td></tr>
+                    </table>
+                    <p>Approve it for full payout, a partial payout, or no payout.</p>
+                    <p><a href="{{ApprovalsUrl}}" style="display:inline-block;padding:10px 18px;background:#4F46E5;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600;">Review in Payout Approvals</a></p>
+                    """,
+                    "TeacherName", "ClassName", "Students", "ScheduledTime", "ScheduledMinutes", "ActualMinutes", "ShortfallMinutes", "ApprovalsUrl"),
+
+                New("support-ticket-raised", "Support Ticket Raised (Relationship Manager / Admin)",
+                    "Sent to Relationship Managers and Admins when a parent raises a new support ticket from the portal.",
+                    NotificationType.General, "New ticket {{Reference}} from {{ParentName}}: {{Subject}}",
+                    """
+                    <p><strong>{{ParentName}}</strong> raised a new support ticket (<strong>{{Reference}}</strong>, {{Category}}).</p>
+                    <p style="font-weight:600;">{{Subject}}</p>
+                    <p>&ldquo;{{Message}}&rdquo;</p>
+                    <p><a href="{{TicketUrl}}" style="display:inline-block;padding:10px 18px;background:#4F46E5;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600;">Open ticket</a></p>
+                    """,
+                    "Reference", "ParentName", "Category", "Subject", "Message", "TicketUrl"),
+
+                New("support-ticket-parent-replied", "Support Ticket Parent Reply (Relationship Manager / Admin)",
+                    "Sent to Relationship Managers and Admins when a parent adds a message to an existing support ticket.",
+                    NotificationType.General, "{{ParentName}} replied on ticket {{Reference}}",
+                    """
+                    <p><strong>{{ParentName}}</strong> replied on ticket <strong>{{Reference}}</strong> &ndash; {{Subject}}:</p>
+                    <p>&ldquo;{{Message}}&rdquo;</p>
+                    <p><a href="{{TicketUrl}}" style="display:inline-block;padding:10px 18px;background:#4F46E5;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600;">Open ticket</a></p>
+                    """,
+                    "Reference", "ParentName", "Subject", "Message", "TicketUrl"),
+
+                New("support-ticket-updated", "Support Ticket Update (Parent)",
+                    "Sent to the parent when the team replies on their support ticket or changes its status.",
+                    NotificationType.General, "Update on your ticket {{Reference}}: {{Subject}}",
+                    """
+                    <p>There's an update on your support ticket <strong>{{Reference}}</strong> &ndash; {{Subject}}.</p>
+                    <p>{{Update}}</p>
+                    <p>Status: <strong>{{Status}}</strong></p>
+                    <p><a href="{{TicketUrl}}" style="display:inline-block;padding:10px 18px;background:#4F46E5;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600;">View ticket</a></p>
+                    """,
+                    "Reference", "Subject", "Update", "Status", "TicketUrl"),
 
                 New("class-scheduled", "Class Scheduled (Teacher)",
                     "Sent to the teacher when a new session is scheduled for them.",
@@ -99,6 +208,21 @@ namespace iucs.meettomanage.application.Common
                     """,
                     "ChildName", "WhenLocal", "JoinUrl"),
 
+                // Caught live: the teacher a demo is auto-assigned (or explicitly booked) to
+                // never got any email at all -- they'd only find out by checking their dashboard,
+                // and had no join link of their own even then. Uses the same fixed room (and
+                // therefore the same JoinUrl-worthy link) the parent's demo-confirmed email gets.
+                New("demo-scheduled-teacher", "Demo Class Scheduled (Teacher)",
+                    "Sent to the assigned teacher when a demo class is booked, with their join link for the parent's fixed meeting room.",
+                    NotificationType.BookingConfirmation, "You have a demo class scheduled",
+                    """
+                    <p>A demo class for <strong>{{ChildName}}</strong> (parent: {{ParentName}}) is scheduled for you:</p>
+                    <p style="font-weight:600;">{{WhenLocal}}</p>
+                    <p><a href="{{JoinUrl}}" style="display:inline-block;padding:10px 18px;background:#4F46E5;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600;">Join Demo Class</a></p>
+                    <p style="font-size:12px;color:#6b7280;">This is your permanent meeting link — the same one the parent received, and the same one in your Teacher Portal.</p>
+                    """,
+                    "ChildName", "ParentName", "WhenLocal", "JoinUrl"),
+
                 // Caught live: overriding a demo's assigned teacher (e.g. the original one calls
                 // in sick) had no notification path at all -- the newly-assigned teacher would
                 // only find out by checking their dashboard, and the displaced teacher would keep
@@ -110,8 +234,9 @@ namespace iucs.meettomanage.application.Common
                     <p>You've been assigned to a demo class for <strong>{{ChildName}}</strong>:</p>
                     <p style="font-weight:600;">{{StartAtLocal}} &ndash; {{EndAtLocal}}</p>
                     <p>{{Reason}}</p>
+                    <p><a href="{{JoinUrl}}" style="display:inline-block;padding:10px 18px;background:#4F46E5;color:#ffffff;border-radius:8px;text-decoration:none;font-weight:600;">Join Demo Class</a></p>
                     """,
-                    "ChildName", "StartAtLocal", "EndAtLocal", "Reason"),
+                    "ChildName", "StartAtLocal", "EndAtLocal", "Reason", "JoinUrl"),
 
                 New("demo-teacher-unassigned", "Demo Teacher Unassigned (Override)",
                     "Sent to the teacher when they are manually removed from a demo they were assigned to.",
@@ -158,6 +283,41 @@ namespace iucs.meettomanage.application.Common
                     """,
                     "StartAtLocal"),
 
+                New("noshow-chain-stalled-alert", "No-Show Chain Stalled (Admin)",
+                    "Sent to Admins once an unresolved no-show has auto-rescheduled itself the maximum number of times — the chain has stopped and needs a manual decision.",
+                    NotificationType.NoShowAlert, "A class has been rescheduling itself for weeks — needs a decision",
+                    """
+                    <p>The class originally scheduled at <strong>{{StartAtLocal}}</strong> has now been marked a no-show
+                    <strong>{{CarryForwardCount}}</strong> times in a row, each time auto-rescheduling one week later.</p>
+                    <p>To stop it silently repeating indefinitely, it has <strong>not</strong> been rescheduled again this time.
+                    Please check whether this is a genuine lead/class that needs to be manually re-booked, or a stale
+                    booking that should be cancelled.</p>
+                    """,
+                    "StartAtLocal", "CarryForwardCount"),
+
+                New("demo-orphaned-noshow-alert", "Demo Session Has No Student Booked (Admin)",
+                    "Sent to Admins when a Demo session's grace period elapses with no DemoBooking linked to it at all — nobody was ever going to attend, so it is left as-is rather than being auto-flagged a no-show.",
+                    NotificationType.NoShowAlert, "A demo class has no student booked into it",
+                    """
+                    <p>The demo session scheduled at <strong>{{StartAtLocal}}</strong> has no lead/booking linked to it,
+                    so no student was ever going to attend.</p>
+                    <p>It has <strong>not</strong> been marked a no-show or carried forward, since nobody was expected to
+                    show up. Please check the calendar and Close, Mark Holiday, or Reschedule it as appropriate.</p>
+                    """,
+                    "StartAtLocal"),
+
+                New("recording-missing-alert", "Recording Missing After Class (Admin)",
+                    "Sent to Admins when a completed class never received a recording — auto-record can start with no error yet still fail later in the pipeline (upload, finalize), which nothing else catches.",
+                    NotificationType.NoShowAlert, "No recording ever arrived for a completed class",
+                    """
+                    <p>The class with <strong>{{TeacherName}}</strong> scheduled at <strong>{{StartAtLocal}}</strong>
+                    completed, but no recording was ever registered for it.</p>
+                    <p>This usually means recording started but failed somewhere in the pipeline (upload,
+                    processing) rather than never starting at all — worth checking with the teacher whether they
+                    have a local copy, and letting the parent know it isn't available if not.</p>
+                    """,
+                    "TeacherName", "StartAtLocal"),
+
                 New("class-summary", "Class Summary (Parent)",
                     "Sent to the parent after the teacher writes a class summary for a completed session.",
                     NotificationType.PerformanceSummary, "Class summary — {{SessionDate}}",
@@ -181,23 +341,26 @@ namespace iucs.meettomanage.application.Common
                     NotificationType.PayoutStatement, "Your payout statement for {{Period}}",
                     """
                     <p>Hi {{TeacherFirstName}},</p>
-                    <p>Your payout for <strong>{{Period}}</strong> has been finalized.</p>
-                    <pre style="background:#F9FAFB;border-radius:6px;padding:16px;white-space:pre-wrap;font-family:inherit;">{{LinesText}}</pre>
-                    <p style="font-weight:600;">Total: {{Total}}</p>
+                    <p>Your payout for <strong>{{Period}}</strong> has been finalized. Here is the full breakdown.</p>
+                    {{BreakdownHtml}}
+                    <p style="color:#6B7280;font-size:12px;margin-top:24px;">If anything here looks wrong, please contact the admin team before the payment is processed.</p>
                     """,
-                    "TeacherFirstName", "Period", "LinesText", "Total"),
+                    "TeacherFirstName", "Period", "BreakdownHtml", "Total"),
 
                 New("salary-slip", "Salary Slip (Paid)",
                     "Sent to the teacher when their finalized payout is marked as paid.",
                     NotificationType.PayoutStatement, "Salary slip — {{Period}} (paid)",
                     """
                     <p>Hi {{TeacherFirstName}},</p>
-                    <p>Here is your salary slip for <strong>{{Period}}</strong>:</p>
-                    <pre style="background:#F9FAFB;border-radius:6px;padding:16px;white-space:pre-wrap;font-family:inherit;">{{SlipBody}}</pre>
-                    <p style="font-weight:600;">Net paid: {{Total}}</p>
-                    <p style="color:#6B7280;font-size:12px;">This is a system-generated salary slip. Please contact the admin team for any discrepancy.</p>
+                    <p>Your salary for <strong>{{Period}}</strong> has been paid on <strong>{{PaidOn}}</strong>.</p>
+                    <p style="margin:20px 0;padding:16px;background:#ECFDF5;border-radius:8px;text-align:center;">
+                      <span style="display:block;color:#047857;font-size:12px;">Net paid</span>
+                      <span style="display:block;color:#065F46;font-size:24px;font-weight:700;">{{Total}}</span>
+                    </p>
+                    {{BreakdownHtml}}
+                    <p style="color:#6B7280;font-size:12px;margin-top:24px;">This is a system-generated salary slip. Please contact the admin team for any discrepancy.</p>
                     """,
-                    "TeacherFirstName", "Period", "SlipBody", "Total"),
+                    "TeacherFirstName", "Period", "PaidOn", "BreakdownHtml", "Total"),
 
                 New("batch-assignment", "Child Assigned to Batch",
                     "Sent to the parent when their child is assigned to a batch.",
@@ -228,13 +391,26 @@ namespace iucs.meettomanage.application.Common
                     "TeacherName", "Window"),
 
                 New("leave-notify-parent", "Teacher on Leave (Parent)",
-                    "Sent to affected parents when their child's teacher's leave is approved.",
-                    NotificationType.LeaveStatusUpdate, "Class update: {{TeacherName}} is on leave",
+                    "Sent to affected parents when their child's teacher's leave cancels one or more of their child's classes — names the exact class(es)/time(s), not just the leave's overall date range, so a parent who already got the 1-hour class reminder isn't left wondering whether today's specific class is the one that's off.",
+                    NotificationType.LeaveStatusUpdate, "Class cancelled: {{TeacherName}} is on leave",
                     """
-                    <p>Your child's teacher <strong>{{TeacherName}}</strong> is on approved leave {{Window}}.</p>
-                    <p>Any affected classes will be rescheduled — the new slots will appear on your schedule.</p>
+                    <p>Your child's teacher <strong>{{TeacherName}}</strong> is on approved leave.</p>
+                    <p>{{Count}} been cancelled:</p>
+                    <ul>{{SessionsList}}</ul>
+                    <p>This is not an automatic reschedule — our team will reach out to arrange a make-up class.</p>
                     """,
-                    "TeacherName", "Window"),
+                    "TeacherName", "Count", "SessionsList"),
+
+                New("demo-cancelled-teacher-leave", "Demo Cancelled — Teacher on Leave (Parent/Lead)",
+                    "Sent directly to a demo's parent/lead when the assigned teacher's leave cancels their scheduled demo class — previously only internal admission staff were told, with no automated email to the family at all, leaving them with only the earlier 1-hour reminder and no idea it was cancelled.",
+                    NotificationType.LeaveStatusUpdate, "Your demo class has been cancelled",
+                    """
+                    <p>Hi {{ParentName}},</p>
+                    <p>We're sorry — {{ChildName}}'s demo class scheduled for <strong>{{StartLocal}}</strong> has been
+                    cancelled because the teacher, {{TeacherName}}, is on leave.</p>
+                    <p>Our team will reach out shortly to reschedule it for a convenient time.</p>
+                    """,
+                    "ParentName", "ChildName", "TeacherName", "StartLocal"),
 
                 New("leave-submitted-admin-alert", "Leave Application Submitted (Admin)",
                     "Sent to Admins when a teacher submits a new leave application.",
@@ -288,6 +464,24 @@ namespace iucs.meettomanage.application.Common
                     <p>Use Pay Now on your dashboard to settle it and keep classes uninterrupted.</p>
                     """,
                     "InvoiceNumber", "DueDate", "Outstanding", "Currency"),
+
+                New("payment-plan-reminder-sessions", "Payment Reminder (Batch Session Plan)",
+                    "Sent to the parent once a batch's \"payment after N sessions\" plan reaches its session count.",
+                    NotificationType.PaymentReminder, "Payment due — {{BatchName}} has completed {{SessionCount}} session(s)",
+                    """
+                    <p>{{BatchName}} has now completed <strong>{{SessionCount}}</strong> session(s), the point at which payment for this batch is due.</p>
+                    <p>Please arrange payment at your earliest convenience to keep classes uninterrupted.</p>
+                    """,
+                    "BatchName", "SessionCount"),
+
+                New("payment-plan-reminder-date", "Payment Reminder (Batch Due Date Plan)",
+                    "Sent to the parent once a batch's \"payment due on a specific date\" plan reaches its due date.",
+                    NotificationType.PaymentReminder, "Payment due — {{BatchName}}",
+                    """
+                    <p>Payment for {{BatchName}} was due on <strong>{{DueDate}}</strong>.</p>
+                    <p>Please arrange payment at your earliest convenience to keep classes uninterrupted.</p>
+                    """,
+                    "BatchName", "DueDate"),
 
                 New("payment-received-admin", "Payment Received (Admin Alert)",
                     "Sent to Admins whenever a payment settles against an invoice (manual or gateway).",

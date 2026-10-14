@@ -12,7 +12,7 @@ namespace iucs.meettomanage.api.Services
     /// resources survive a redeploy without depending on a correctly-mapped Docker volume,
     /// which local disk storage requires and which is easy to misconfigure.
     /// </summary>
-    public class S3FileStorage : IFileStorage
+    public class S3FileStorage : IFileStorage, IDirectUploadStorage
     {
         // Same allowlist as LocalFileStorage — learning-resource types only, deliberately
         // excluding executables and script/markup types that could be served back with a
@@ -26,6 +26,11 @@ namespace iucs.meettomanage.api.Services
 
         private readonly IAmazonS3 _client;
         private readonly string _bucket;
+
+        /// <summary>True when every Storage:S3:* value is set (endpoint, keys, bucket).</summary>
+        public static bool IsConfigured(IConfiguration configuration) =>
+            new[] { "Endpoint", "AccessKey", "SecretKey", "BucketName" }
+                .All(k => !string.IsNullOrWhiteSpace(configuration[$"Storage:S3:{k}"]));
 
         public S3FileStorage(IConfiguration configuration)
         {
@@ -85,17 +90,251 @@ namespace iucs.meettomanage.api.Services
             await content.CopyToAsync(buffered, cancellationToken);
             buffered.Position = 0;
 
-            await _client.PutObjectAsync(
-                new PutObjectRequest
+            try
+            {
+                await _client.PutObjectAsync(
+                    new PutObjectRequest
+                    {
+                        BucketName = _bucket,
+                        Key = key,
+                        InputStream = buffered,
+                        AutoCloseStream = false,
+                    },
+                    cancellationToken);
+            }
+            catch (AmazonServiceException ex)
+            {
+                // Wraps auth/bucket/network failures from the S3-compatible endpoint --
+                // otherwise these surface as an opaque 500 with no indication that the
+                // problem is storage configuration (credentials, bucket, endpoint) rather
+                // than the upload itself. See ExternalServiceException's summary.
+                throw new ExternalServiceException(
+                    $"Could not upload to object storage ({ex.StatusCode}): {ex.Message}. " +
+                    "Check the Storage:S3 configuration (endpoint, credentials, bucket).");
+            }
+
+            return new StoredFile { RelativePath = key, SizeBytes = buffered.Length };
+        }
+
+        // ---- IDirectUploadStorage: browser-to-bucket multipart upload and presigned playback ----
+
+        /// <summary>64 MB parts: a multi-GB recording is a few dozen requests, and S3's 10,000-part cap
+        /// still allows 640 GB. (S3's own minimum is 5 MB for every part but the last.)</summary>
+        private const long PartSizeBytes = 64L * 1024 * 1024;
+
+        public async Task<DirectUploadSession> StartMultipartAsync(
+            string originalFileName, string? contentType, CancellationToken cancellationToken = default)
+        {
+            var extension = Path.GetExtension(originalFileName);
+            if (string.IsNullOrEmpty(extension) || !AllowedExtensions.Contains(extension))
+            {
+                throw new DomainValidationException(
+                    $"File type '{extension}' is not allowed. Supported types: " +
+                    string.Join(", ", AllowedExtensions.OrderBy(e => e)) + ".");
+            }
+
+            var key = $"{Guid.NewGuid():N}{extension.ToLowerInvariant()}";
+            try
+            {
+                var response = await _client.InitiateMultipartUploadAsync(
+                    new InitiateMultipartUploadRequest
+                    {
+                        BucketName = _bucket,
+                        Key = key,
+                        ContentType = string.IsNullOrWhiteSpace(contentType) ? null : contentType,
+                    },
+                    cancellationToken);
+                return new DirectUploadSession { Key = key, UploadId = response.UploadId, PartSizeBytes = PartSizeBytes };
+            }
+            catch (AmazonServiceException ex)
+            {
+                throw StorageFailure("start the upload", ex);
+            }
+        }
+
+        public IReadOnlyList<PresignedPart> GetPartUrls(string key, string uploadId, IEnumerable<int> partNumbers)
+        {
+            return partNumbers.Distinct().Select(n => new PresignedPart
+            {
+                PartNumber = n,
+                Url = _client.GetPreSignedURL(new GetPreSignedUrlRequest
                 {
                     BucketName = _bucket,
                     Key = key,
-                    InputStream = buffered,
-                    AutoCloseStream = false,
-                },
-                cancellationToken);
+                    Verb = HttpVerb.PUT,
+                    UploadId = uploadId,
+                    PartNumber = n,
+                    // Long enough for a slow connection to push one 64 MB part.
+                    Expires = DateTime.UtcNow.AddHours(2),
+                }),
+            }).ToList();
+        }
 
-            return new StoredFile { RelativePath = key, SizeBytes = buffered.Length };
+        public async Task<long> CompleteMultipartAsync(
+            string key, string uploadId, IReadOnlyList<UploadedPart> parts, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                await _client.CompleteMultipartUploadAsync(
+                    new CompleteMultipartUploadRequest
+                    {
+                        BucketName = _bucket,
+                        Key = key,
+                        UploadId = uploadId,
+                        PartETags = parts.OrderBy(p => p.PartNumber).Select(p => new PartETag(p.PartNumber, p.ETag)).ToList(),
+                    },
+                    cancellationToken);
+                var head = await _client.GetObjectMetadataAsync(_bucket, key, cancellationToken);
+                return head.ContentLength;
+            }
+            catch (AmazonServiceException ex)
+            {
+                throw StorageFailure("finish the upload", ex);
+            }
+        }
+
+        public async Task AbortMultipartAsync(string key, string uploadId, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                await _client.AbortMultipartUploadAsync(
+                    new AbortMultipartUploadRequest { BucketName = _bucket, Key = key, UploadId = uploadId },
+                    cancellationToken);
+            }
+            catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // already gone -- nothing to clean up
+            }
+            catch (AmazonServiceException ex)
+            {
+                throw StorageFailure("cancel the upload", ex);
+            }
+        }
+
+        /// <summary>
+        /// Large uploads (over ~90 MB) go from the browser straight to the bucket with presigned
+        /// PUTs, which the browser only allows if the BUCKET itself answers CORS for the portal's
+        /// origin. Without it every part fails at the network level and the UI just says "The
+        /// upload connection failed." Applied at startup so a fresh bucket works out of the box;
+        /// idempotent, and best-effort (a key without the permission only logs a warning).
+        /// </summary>
+        public async Task EnsureBrowserUploadCorsAsync(IReadOnlyCollection<string> allowedOrigins, ILogger logger)
+        {
+            if (allowedOrigins.Count == 0)
+            {
+                return;
+            }
+
+            try
+            {
+                // PutBucketCors replaces the whole configuration, so keep whatever rules the bucket
+                // already has and only add ours (skipped when an equivalent rule is already there).
+                var rules = new List<CORSRule>();
+                try
+                {
+                    rules.AddRange((await _client.GetCORSConfigurationAsync(_bucket)).Configuration.Rules);
+                }
+                catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    // no CORS configuration yet
+                }
+
+                var alreadyCovered = rules.Any(r =>
+                    r.AllowedMethods.Contains("PUT")
+                    && r.ExposeHeaders.Any(h => h.Equals("ETag", StringComparison.OrdinalIgnoreCase))
+                    && (r.AllowedOrigins.Contains("*") || allowedOrigins.All(o => r.AllowedOrigins.Contains(o))));
+                if (alreadyCovered)
+                {
+                    return;
+                }
+
+                rules.Add(new CORSRule
+                {
+                    AllowedOrigins = allowedOrigins.ToList(),
+                    AllowedMethods = ["GET", "PUT", "HEAD"],
+                    AllowedHeaders = ["*"],
+                    // The browser must read each part's ETag back to complete the upload.
+                    ExposeHeaders = ["ETag"],
+                    MaxAgeSeconds = 3000,
+                });
+                await _client.PutCORSConfigurationAsync(new PutCORSConfigurationRequest
+                {
+                    BucketName = _bucket,
+                    Configuration = new CORSConfiguration { Rules = rules },
+                });
+                logger.LogInformation("Bucket CORS applied for browser uploads ({Origins}).", string.Join(", ", allowedOrigins));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex,
+                    "Could not set the bucket's CORS rules — uploads over 90 MB will fail until the bucket allows PUT/GET from {Origins} and exposes ETag.",
+                    string.Join(", ", allowedOrigins));
+            }
+        }
+
+        public string GetReadUrl(string key, TimeSpan validFor, string? contentType)
+        {
+            var request = new GetPreSignedUrlRequest
+            {
+                BucketName = _bucket,
+                Key = key,
+                Verb = HttpVerb.GET,
+                Expires = DateTime.UtcNow.Add(validFor),
+            };
+            // "inline" so the browser plays it rather than saving it.
+            request.ResponseHeaderOverrides.ContentDisposition = "inline";
+            if (!string.IsNullOrWhiteSpace(contentType))
+            {
+                request.ResponseHeaderOverrides.ContentType = contentType;
+            }
+
+            return _client.GetPreSignedURL(request);
+        }
+
+        private static ExternalServiceException StorageFailure(string action, AmazonServiceException ex) =>
+            new($"Could not {action} in object storage ({ex.StatusCode}): {ex.Message}. " +
+                "Check the Storage:S3 configuration (endpoint, credentials, bucket).");
+
+        /// <summary>Every object in the bucket with its size (for StorageMigration).</summary>
+        public async Task<List<(string Key, long Size)>> ListAllAsync(CancellationToken cancellationToken = default)
+        {
+            var all = new List<(string Key, long Size)>();
+            var request = new ListObjectsV2Request { BucketName = _bucket };
+            ListObjectsV2Response response;
+            do
+            {
+                response = await _client.ListObjectsV2Async(request, cancellationToken);
+                all.AddRange((response.S3Objects ?? []).Select(o => (o.Key, o.Size ?? 0L)));
+                request.ContinuationToken = response.NextContinuationToken;
+            }
+            while (response.IsTruncated == true);
+
+            return all;
+        }
+
+        /// <summary>Whether the object is in the bucket; null when S3 can't be reached to tell.</summary>
+        public async Task<bool?> ExistsAsync(string key, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                await _client.GetObjectMetadataAsync(_bucket, key, cancellationToken);
+                return true;
+            }
+            catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                return false;
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                return null; // service error, timeout or no network
+            }
+        }
+
+        /// <summary>Uploads a file under an exact key (the local -> S3 migration keeps keys unchanged).</summary>
+        public async Task SaveAsync(string key, Stream content, CancellationToken cancellationToken = default)
+        {
+            using var transfer = new Amazon.S3.Transfer.TransferUtility(_client);
+            await transfer.UploadAsync(content, _bucket, key, cancellationToken);
         }
 
         public async Task<Stream?> OpenReadAsync(string relativePath, CancellationToken cancellationToken = default)
@@ -108,6 +347,12 @@ namespace iucs.meettomanage.api.Services
             catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
                 return null;
+            }
+            catch (AmazonServiceException ex)
+            {
+                throw new ExternalServiceException(
+                    $"Could not read from object storage ({ex.StatusCode}): {ex.Message}. " +
+                    "Check the Storage:S3 configuration (endpoint, credentials, bucket).");
             }
         }
     }

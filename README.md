@@ -1,6 +1,6 @@
 # Meet to Manage Backend
 
-.NET 9 Web API for the Meet to Manage LMS & Virtual Classroom platform.
+.NET 9 Web API for the Meet to Manage LMS & Virtual Classroom platform (internal project/namespace names remain `iucs.meettomanage.*` — see note below).
 
 ## Solution structure
 
@@ -27,14 +27,12 @@ dotnet run --project iucs.meettomanage.api --launch-profile http
 Health check: `GET http://localhost:5288/health`. OpenAPI (dev only): `GET /openapi/v1.json`.
 
 Development admin login (seeded, dev only — override via the `Seed` section):
-`admin@meettomanage.cloud` / `Admin@12345`.
+`admin@readernest.com` / `Admin@12345`.
 
-The frontend targets this API through `VITE_API_BASE_URL` in its
-`.env.development`; remove that variable to run the UI in demo mode with mock
-data.
+The frontend (`the-reader-nest-frontend`) targets this API through
+`VITE_API_BASE_URL` in its `.env.development`; remove that variable to run the
+UI in demo mode with mock data.
 
-Connection string `ConnectionStrings:ReaderNestDb` (key name kept as-is —
-renaming it would require also updating the deployed environment's connection
-string env var) lives in
+Connection string `ConnectionStrings:ReaderNestDb` lives in
 `appsettings.Development.json` for local dev — use user secrets or environment
 variables for real credentials, never commit them.

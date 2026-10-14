@@ -14,6 +14,9 @@ namespace iucs.meettomanage.domain.Entities.Admission
     /// account yet; the conversion funnel is tracked to Enrolled/NotInterested.
     /// </summary>
     [Index(nameof(ConversionStatus))]
+    // Parent portal / enrollment / feedback look a parent's demos up by their email.
+    [Index(nameof(ParentEmail))]
+    [Index(nameof(PaymentToken), IsUnique = true)]
     public class DemoBooking : AuditEntity
     {
         public Guid? ClassSessionId { get; set; }
@@ -40,8 +43,15 @@ namespace iucs.meettomanage.domain.Entities.Admission
 
         public ConversionStatus ConversionStatus { get; set; } = ConversionStatus.DemoScheduled;
 
+        /// <summary>Most recently logged follow-up note's text — a quick-glance snapshot; the
+        /// full dated/attributed history lives in the audit trail (see DemoBookingService's
+        /// GetFollowUpNotesAsync/FollowUpAuditEntityName).</summary>
         [MaxLength(2000)]
         public string? FollowUpNotes { get; set; }
+
+        /// <summary>Next time this lead should be followed up with, as set on the most recent
+        /// follow-up note — powers the Leads table's "Next: …" column and reminders.</summary>
+        public DateOnly? NextFollowUpOn { get; set; }
 
         /// <summary>Payment link shared with the parent; payment status is read from the linked invoice.</summary>
         [MaxLength(1000)]
@@ -50,6 +60,26 @@ namespace iucs.meettomanage.domain.Entities.Admission
         public Guid? InvoiceId { get; set; }
 
         public Invoice? Invoice { get; set; }
+
+        /// <summary>Course the counsellor's payment link is for (portal admission flow).</summary>
+        public Guid? CourseId { get; set; }
+
+        public Course? Course { get; set; }
+
+        /// <summary>
+        /// Unguessable token behind the parent-facing payment page (/pay/{token}). Set only for
+        /// bookings that went through the portal admission flow; its presence is also what tells
+        /// the billing side to park a fully-paid lead in PaymentReceived (awaiting the counsellor's
+        /// verification) instead of the older manual-admission path's straight-to-Enrolled.
+        /// </summary>
+        [MaxLength(64)]
+        public string? PaymentToken { get; set; }
+
+        /// <summary>When the parent accepted the Terms &amp; Conditions on the payment page.</summary>
+        public DateTime? TermsAcceptedAtUtc { get; set; }
+
+        /// <summary>When the counsellor verified the payment and clicked Enroll.</summary>
+        public DateTime? PaymentVerifiedAtUtc { get; set; }
 
         /// <summary>
         /// Join-based attendance capture for the primary parent (PDF's "System Marks

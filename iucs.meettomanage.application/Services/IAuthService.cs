@@ -10,6 +10,20 @@ namespace iucs.meettomanage.application.Services
         Task<LoginResponse> GetCurrentUserAsync(Guid userId, CancellationToken cancellationToken = default);
 
         /// <summary>
+        /// Starts a read-only "view as parent" session (see <see cref="Common.ViewAsParent"/>):
+        /// returns a short-lived token that opens the parent's portal as them. Parent accounts
+        /// only; audit-logged under <paramref name="actorUserId"/>. The caller's permission to do
+        /// this is checked by the controller.
+        /// </summary>
+        Task<LoginResponse> StartViewAsParentAsync(Guid actorUserId, Guid parentUserId, CancellationToken cancellationToken = default);
+
+        /// <summary>/auth/me for a view-as session: same read-only token, same original expiry.</summary>
+        Task<LoginResponse> GetViewAsCurrentUserAsync(Guid parentUserId, Guid actorUserId, DateTime expiresAtUtc, CancellationToken cancellationToken = default);
+
+        /// <summary>Records that the staff member closed their view-as session.</summary>
+        Task EndViewAsParentAsync(Guid parentUserId, CancellationToken cancellationToken = default);
+
+        /// <summary>
         /// The account's current role/status/permissions, read fresh from the database —
         /// deliberately not from anything baked into a JWT at login. Backs the per-request
         /// re-check in Program.cs's OnTokenValidated: a permission or role change (or a
@@ -19,12 +33,15 @@ namespace iucs.meettomanage.application.Services
         Task<CurrentAccessSnapshot?> GetCurrentAccessAsync(Guid userId, CancellationToken cancellationToken = default);
 
         /// <summary>
-        /// Emails a one-time reset link if the address has an account; always completes the
-        /// same way either way (no signal to the caller about whether the address exists).
+        /// Emails a one-time reset link if the address/mobile number has an account.
+        /// Throws <see cref="Common.Exceptions.NotFoundException"/> when it doesn't.
         /// </summary>
         Task RequestPinResetAsync(ForgotPinRequest request, CancellationToken cancellationToken = default);
 
         /// <summary>Redeems a reset-link token: sets the new PIN and burns the token.</summary>
         Task ResetPinAsync(ResetPinRequest request, CancellationToken cancellationToken = default);
+
+        /// <summary>The signed-in user sets a new PIN after confirming their current one (any role, Admin included).</summary>
+        Task ChangePinAsync(Guid userId, ChangePinRequest request, CancellationToken cancellationToken = default);
     }
 }

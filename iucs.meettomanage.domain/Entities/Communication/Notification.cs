@@ -11,6 +11,7 @@ namespace iucs.meettomanage.domain.Entities.Communication
     /// payout statements and bulk mail. High-volume and system-generated, so BaseEntity.
     /// </summary>
     [Index(nameof(RecipientUserId), nameof(Status))]
+    [Index(nameof(RecipientUserId), nameof(CreatedAtUtc))]
     public class Notification : BaseEntity
     {
         public Guid RecipientUserId { get; set; }
@@ -28,11 +29,30 @@ namespace iucs.meettomanage.domain.Entities.Communication
 
         public NotificationStatus Status { get; set; } = NotificationStatus.Pending;
 
+        /// <summary>
+        /// The EmailTemplateSeedData key this was rendered from (e.g. "batch-assignment",
+        /// "leave-submitted-admin-alert"), null for hand-built emails (SendEmailAsync/bulk
+        /// mail). Type alone is too coarse to route a click to the right page — a third of
+        /// templates share NotificationType.General but are about very different things
+        /// (batch assignment, leave submitted, KPI digest, access requests...); this is the
+        /// stable, non-interpolated signal the frontend bell/notifications list keys its
+        /// per-notification navigation off instead of parsing the templated Subject text.
+        /// </summary>
+        [MaxLength(100)]
+        public string? TemplateKey { get; set; }
+
         public DateTime? SentAtUtc { get; set; }
 
         public DateTime? ReadAtUtc { get; set; }
 
         /// <summary>Optional structured payload (e.g. sessionId, invoiceId) as JSON.</summary>
         public string? MetadataJson { get; set; }
+
+        /// <summary>Set when this notification is one recipient's copy of a Bulk Email
+        /// (TemplateKey "bulk-email") — lets the parent-facing feed offer a reply box
+        /// and route it to the right <see cref="BulkEmailRecipient"/>.</summary>
+        public Guid? BulkEmailRecipientId { get; set; }
+
+        public BulkEmailRecipient? BulkEmailRecipient { get; set; }
     }
 }

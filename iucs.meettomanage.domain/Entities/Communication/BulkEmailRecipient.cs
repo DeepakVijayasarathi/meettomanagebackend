@@ -1,0 +1,38 @@
+using System.ComponentModel.DataAnnotations;
+using iucs.meettomanage.domain.Entities.Common;
+using iucs.meettomanage.domain.Entities.Users;
+using iucs.meettomanage.domain.Enums;
+using Microsoft.EntityFrameworkCore;
+
+namespace iucs.meettomanage.domain.Entities.Communication
+{
+    /// <summary>One recipient of one <see cref="BulkEmailBlast"/> and their delivery outcome.
+    /// Status reuses <see cref="NotificationStatus"/>'s Sent/Failed so it matches the same
+    /// vocabulary the underlying <see cref="Notification"/> row was written with.</summary>
+    [Index(nameof(BulkEmailBlastId))]
+    // The queue worker polls "pending, oldest first" every few seconds; without this that is a
+    // full scan + sort of every recipient ever sent, growing with each blast.
+    [Index(nameof(Status), nameof(CreatedAtUtc))]
+    public class BulkEmailRecipient : BaseEntity
+    {
+        public Guid BulkEmailBlastId { get; set; }
+
+        public BulkEmailBlast BulkEmailBlast { get; set; } = null!;
+
+        public Guid RecipientUserId { get; set; }
+
+        public User RecipientUser { get; set; } = null!;
+
+        [MaxLength(320)]
+        public string Email { get; set; } = null!;
+
+        public NotificationStatus Status { get; set; }
+
+        [MaxLength(500)]
+        public string? ErrorMessage { get; set; }
+
+        public DateTime? SentAtUtc { get; set; }
+
+        public BulkEmailReply? Reply { get; set; }
+    }
+}

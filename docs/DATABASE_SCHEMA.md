@@ -1,4 +1,4 @@
-# Meet to Manage — Database Schema Design (Sprint 0)
+# Reader Nest — Database Schema Design (Sprint 0)
 
 EF Core 9 code-first model over PostgreSQL. All entities live in
 `iucs.meettomanage.domain/Entities/<area>` and derive from one of two abstractions in

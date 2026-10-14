@@ -1,4 +1,5 @@
 using iucs.meettomanage.application.Dto.Reports;
+using iucs.meettomanage.domain.Enums;
 
 namespace iucs.meettomanage.application.Services
 {
@@ -7,14 +8,51 @@ namespace iucs.meettomanage.application.Services
         /// <summary>Admin BI dashboard aggregates: students, revenue, conversion, occupancy, utilization.</summary>
         Task<DashboardSummaryDto> GetDashboardSummaryAsync(CancellationToken cancellationToken = default);
 
+        /// <summary>One staff member's own collections this and last month (IST), never the whole team's.</summary>
+        Task<MyCollectionsDto> GetMyCollectionsAsync(Guid userId, CancellationToken cancellationToken = default);
+
+        /// <summary>One IST calendar month's demos, conversions and collections, per counselor plus "Others".</summary>
+        Task<MonthlyFinanceSummaryDto> GetMonthlyFinanceSummaryAsync(int year, int month, CancellationToken cancellationToken = default);
+
         /// <summary>CSV exports for the centralized reports (attendance | revenue | payouts | conversion).</summary>
         Task<string> ExportCsvAsync(string report, CancellationToken cancellationToken = default);
 
-        /// <summary>Bulk email to all active parents, or to the parents of one batch.</summary>
-        Task<BulkEmailResultDto> SendBulkEmailAsync(BulkEmailRequest request, CancellationToken cancellationToken = default);
+        /// <summary>Bulk email to all active parents, or to the parents of one batch. Persists a
+        /// BulkEmailBlast plus one BulkEmailRecipient row per recipient for the History view.</summary>
+        Task<BulkEmailResultDto> SendBulkEmailAsync(
+            Guid sentByUserId, BulkEmailRequest request, CancellationToken cancellationToken = default);
+
+        /// <summary>Queues the blast (Pending recipient rows) and returns immediately; delivery is
+        /// done by ProcessPendingBulkEmailAsync.</summary>
+        Task<BulkEmailResultDto> QueueBulkEmailAsync(
+            Guid sentByUserId, BulkEmailRequest request, CancellationToken cancellationToken = default);
+
+        /// <summary>Delivers all Pending bulk-email recipients; returns how many were attempted.</summary>
+        Task<int> ProcessPendingBulkEmailAsync(CancellationToken cancellationToken = default);
 
         /// <summary>Recipient count for the compose screen, resolved by the same rule the send uses.</summary>
         Task<BulkEmailResultDto> PreviewBulkEmailAsync(Guid? batchId, CancellationToken cancellationToken = default);
+
+        /// <summary>Past Bulk Email sends, newest first, for the admin History list.</summary>
+        Task<IReadOnlyList<BulkEmailHistoryItemDto>> GetBulkEmailHistoryAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>One blast's full recipient list with delivery status and replies.</summary>
+        Task<BulkEmailBlastDetailDto> GetBulkEmailBlastDetailAsync(Guid blastId, CancellationToken cancellationToken = default);
+
+        /// <summary>A parent replies to one Bulk Email they received; fails if they already have,
+        /// or the recipient row doesn't belong to them.</summary>
+        Task ReplyToBulkEmailAsync(
+            Guid parentUserId, Guid bulkEmailRecipientId, ReplyToBulkEmailRequest request, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Every individual (non-Bulk-Email) email ever sent, newest first -- the "Bulk Email
+        /// History" screen's other view, for when staff want to see everything else that went
+        /// out rather than just Bulk Email sends. Optional <paramref name="type"/> narrows to one
+        /// NotificationType; omitted returns every type. Capped at <paramref name="take"/> so a
+        /// deployment with years of reminders/confirmations can't return an unbounded table.
+        /// </summary>
+        Task<IReadOnlyList<EmailHistoryItemDto>> GetEmailHistoryAsync(
+            NotificationType? type, int take, CancellationToken cancellationToken = default);
 
         /// <summary>Teacher performance view: sessions delivered, no-shows, attendance, summaries.</summary>
         Task<IReadOnlyList<TeacherPerformanceDto>> GetTeacherPerformanceAsync(CancellationToken cancellationToken = default);

@@ -27,5 +27,16 @@ namespace iucs.meettomanage.api.Services
                 return Guid.TryParse(idClaim, out var userId) ? userId : null;
             }
         }
+
+        public Guid? ViewAsActorUserId
+        {
+            get
+            {
+                var actorClaim = _httpContextAccessor.HttpContext?.User
+                    .FindFirstValue(iucs.meettomanage.application.Common.ViewAsParent.ActorClaimType);
+
+                return Guid.TryParse(actorClaim, out var actorId) ? actorId : null;
+            }
+        }
     }
 }

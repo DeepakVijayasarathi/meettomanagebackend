@@ -121,7 +121,7 @@ namespace iucs.meettomanage.api.Services
                                 // Route to the department's payment account (dual-gateway requirement);
                                 // plans without a course default to Phonics
                                 DepartmentId = subscription.PackagePlan.Course?.DepartmentId ?? WellKnownDepartments.Phonics,
-                                Amount = subscription.PackagePlan.Price,
+                                Amount = subscription.PriceOverride ?? subscription.PackagePlan.Price,
                                 DueDate = DateOnly.FromDateTime(now.AddDays(7)),
                             },
                             cancellationToken,
@@ -131,6 +131,7 @@ namespace iucs.meettomanage.api.Services
 
                     subscription.NextBillingAtUtc = subscription.PackagePlan.BillingCycle switch
                     {
+                        BillingCycle.Biweekly => subscription.NextBillingAtUtc!.Value.AddDays(14),
                         BillingCycle.Monthly => subscription.NextBillingAtUtc!.Value.AddMonths(1),
                         BillingCycle.Quarterly => subscription.NextBillingAtUtc!.Value.AddMonths(3),
                         BillingCycle.Yearly => subscription.NextBillingAtUtc!.Value.AddYears(1),
@@ -157,9 +158,13 @@ namespace iucs.meettomanage.api.Services
             // would have; UpdatedBy is deliberately left alone because this sweep is a system
             // action with no acting user, which is exactly what the interceptor records too.
             var today = DateOnly.FromDateTime(now);
+            // Admission payment-link invoices of leads that are not enrolled yet never age into
+            // Overdue (see AdmissionInvoices) -- otherwise an unpaid link could suspend a sibling.
+            var admissionExempt = await AdmissionInvoices.ExemptFromOverdueHandlingAsync(unitOfWork, cancellationToken);
             var overdueCount = await unitOfWork.Repository<Invoice>().ExecuteUpdateAsync(
                 i => (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.PartiallyPaid)
-                     && i.DueDate < today,
+                     && i.DueDate < today
+                     && !admissionExempt.Contains(i.Id),
                 setters => setters
                     .SetProperty(i => i.Status, InvoiceStatus.Overdue)
                     .SetProperty(i => i.UpdatedAtUtc, now),
@@ -190,77 +195,133 @@ namespace iucs.meettomanage.api.Services
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             }
 
-            // Account suspension: any parent left with an overdue invoice and no active
-            // suspension gets one; the parent portal blocks sessions/content while Active
+            // Suspension: any (parent, child) pair left with an invoice overdue by at least the
+            // configured grace period (Settings → Notifications, BillingSettings) and no active
+            // suspension gets one. Grouped by child, not just parent -- an invoice tied to one
+            // child (ChildId set) only ever blocks that child; a family-level invoice (ChildId
+            // null, e.g. a manually-created one not tied to a subscription) blocks every child
+            // on the account. See FeeSuspension's own doc comment.
             var suspendedCount = 0;
-            var overdueParents = await unitOfWork.Repository<Invoice>().Query()
-                .Where(i => i.Status == InvoiceStatus.Overdue)
-                .Select(i => new { i.ParentProfileId, i.Id, i.InvoiceNumber })
-                .ToListAsync(cancellationToken);
-
-            // One query for every already-suspended parent, instead of an ExistsAsync per
-            // overdue parent — that loop scaled its round trips with the size of the overdue
-            // book, which is exactly the population that grows when collections are going badly.
-            var overdueParentIds = overdueParents.Select(o => o.ParentProfileId).Distinct().ToList();
-            var alreadySuspendedParentIds = (await unitOfWork.Repository<FeeSuspension>().Query()
-                    .Where(s => s.Status == SuspensionStatus.Active
-                                && overdueParentIds.Contains(s.ParentProfileId))
-                    .Select(s => s.ParentProfileId)
-                    .ToListAsync(cancellationToken))
-                .ToHashSet();
-
-            // Caught live: NotificationType.FeeSuspension existed in the enum with zero templates
-            // using it -- a parent's access got cut off here with no warning or explanation at
-            // all; they'd only find out by trying to access something and being blocked.
-            var newlySuspended = new List<(Guid ParentProfileId, string InvoiceNumber)>();
-            foreach (var group in overdueParents.GroupBy(o => o.ParentProfileId))
+            if (await BillingSettings.IsSuspensionEnabledAsync(unitOfWork, cancellationToken))
             {
-                if (alreadySuspendedParentIds.Contains(group.Key))
+                var graceDays = await BillingSettings.GetSuspensionGraceDaysAsync(unitOfWork, cancellationToken);
+                var suspensionCutoff = today.AddDays(-graceDays);
+                var overdueInvoices = await unitOfWork.Repository<Invoice>().Query()
+                    .Where(i => i.Status == InvoiceStatus.Overdue && i.DueDate <= suspensionCutoff
+                                && !admissionExempt.Contains(i.Id))
+                    .Select(i => new { i.ParentProfileId, i.ChildId, i.Id, i.InvoiceNumber })
+                    .ToListAsync(cancellationToken);
+
+                // Client rule: never suspend while the child still has a paid class to come -- only
+                // once the classes already paid for are used up (PaidClasses). Those invoices are
+                // left out of the sweep, and a suspension already standing on one is lifted.
+                var withClassesLeft = await PaidClasses.WithClassesLeftAsync(
+                    unitOfWork, overdueInvoices.Select(o => o.Id).ToList(), cancellationToken);
+                if (withClassesLeft.Count > 0)
                 {
-                    continue;
+                    var standing = await unitOfWork.Repository<FeeSuspension>().TrackedQuery()
+                        .Where(s => s.Status == SuspensionStatus.Active && s.InvoiceId != null && withClassesLeft.Contains(s.InvoiceId.Value))
+                        .ToListAsync(cancellationToken);
+                    foreach (var suspension in standing)
+                    {
+                        suspension.Status = SuspensionStatus.Lifted;
+                        suspension.LiftedAtUtc = now;
+                        // AutoRestored marks this as the system's lift, not an admin waiver, so the
+                        // invoice can be suspended again once the paid classes are used up.
+                        suspension.AutoRestored = true;
+                    }
+                    if (standing.Count > 0)
+                    {
+                        await unitOfWork.SaveChangesAsync(cancellationToken);
+                    }
+                    overdueInvoices = overdueInvoices.Where(o => !withClassesLeft.Contains(o.Id)).ToList();
                 }
 
-                var first = group.First();
-                await unitOfWork.Repository<FeeSuspension>().AddAsync(
-                    new FeeSuspension
-                    {
-                        ParentProfileId = group.Key,
-                        InvoiceId = first.Id,
-                        Reason = "Automatic suspension: invoice overdue.",
-                        SuspendedAtUtc = now,
-                    },
-                    cancellationToken);
-                newlySuspended.Add((group.Key, first.InvoiceNumber));
-                suspendedCount++;
-            }
+                // One query for every already-suspended parent, instead of an ExistsAsync per
+                // overdue (parent, child) pair — that loop scaled its round trips with the size of
+                // the overdue book, which is exactly the population that grows when collections are
+                // going badly. Loaded once per parent and matched in memory below since a single
+                // parent can appear in several groups (one per child).
+                //
+                // Also pulls Lifted suspensions tied to one of THESE overdue invoices, not just
+                // Active ones. Bug fixed 2026-09-16: an admin manually lifting a suspension
+                // (BillingService.LiftSuspensionAsync) doesn't touch the underlying invoice, so
+                // without this the very next hourly cycle saw the same still-overdue invoice as
+                // "uncovered" and silently re-suspended the account the admin just restored,
+                // repeating every hour until the invoice was actually paid off.
+                var overdueParentIds = overdueInvoices.Select(o => o.ParentProfileId).Distinct().ToList();
+                var overdueInvoiceIds = overdueInvoices.Select(o => o.Id).Distinct().ToList();
+                var existingSuspensions = await unitOfWork.Repository<FeeSuspension>().Query()
+                    .Where(s => overdueParentIds.Contains(s.ParentProfileId)
+                        && (s.Status == SuspensionStatus.Active
+                            || (s.Status == SuspensionStatus.Lifted && s.InvoiceId != null && overdueInvoiceIds.Contains(s.InvoiceId.Value))))
+                    .Select(s => new { s.ParentProfileId, s.ChildId, s.Status, s.InvoiceId, s.AutoRestored })
+                    .ToListAsync(cancellationToken);
 
-            if (suspendedCount > 0)
-            {
-                await unitOfWork.SaveChangesAsync(cancellationToken);
-
-                var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
-                var suspendedParentIds = newlySuspended.Select(s => s.ParentProfileId).ToList();
-                var suspendedParentUsers = await unitOfWork.Repository<ParentProfile>().Query()
-                    .Where(p => suspendedParentIds.Contains(p.Id))
-                    .Select(p => new { p.Id, p.User })
-                    .ToDictionaryAsync(p => p.Id, p => p.User, cancellationToken);
-                foreach (var (parentProfileId, invoiceNumber) in newlySuspended)
+                // Caught live: NotificationType.FeeSuspension existed in the enum with zero templates
+                // using it -- a parent's access got cut off here with no warning or explanation at
+                // all; they'd only find out by trying to access something and being blocked.
+                var newlySuspended = new List<(Guid ParentProfileId, string InvoiceNumber)>();
+                foreach (var group in overdueInvoices.GroupBy(o => new { o.ParentProfileId, o.ChildId }))
                 {
-                    if (!suspendedParentUsers.TryGetValue(parentProfileId, out var user))
+                    var first = group.First();
+
+                    // An account-wide (ChildId null) suspension already covers this pair regardless
+                    // of which child it's for; a same-child suspension only covers an exact match.
+                    // A Lifted suspension only counts as covering it when it was for this exact
+                    // invoice -- an admin restore shouldn't waive a *different*, newer overdue bill.
+                    // Only an admin's lift waives it; a system lift (paid classes were left) doesn't.
+                    var alreadyCovered = existingSuspensions.Any(s =>
+                        s.ParentProfileId == group.Key.ParentProfileId
+                        && (s.ChildId == null || s.ChildId == group.Key.ChildId)
+                        && (s.Status == SuspensionStatus.Active || (s.InvoiceId == first.Id && !s.AutoRestored)));
+                    if (alreadyCovered)
                     {
                         continue;
                     }
 
-                    try
+                    await unitOfWork.Repository<FeeSuspension>().AddAsync(
+                        new FeeSuspension
+                        {
+                            ParentProfileId = group.Key.ParentProfileId,
+                            ChildId = group.Key.ChildId,
+                            InvoiceId = first.Id,
+                            Reason = "Automatic suspension: invoice overdue.",
+                            SuspendedAtUtc = now,
+                        },
+                        cancellationToken);
+                    newlySuspended.Add((group.Key.ParentProfileId, first.InvoiceNumber));
+                    suspendedCount++;
+                }
+
+                if (suspendedCount > 0)
+                {
+                    await unitOfWork.SaveChangesAsync(cancellationToken);
+
+                    var notifications = scope.ServiceProvider.GetRequiredService<INotificationService>();
+                    var suspendedParentIds = newlySuspended.Select(s => s.ParentProfileId).ToList();
+                    var suspendedParentUsers = await unitOfWork.Repository<ParentProfile>().Query()
+                        .Where(p => suspendedParentIds.Contains(p.Id))
+                        .Select(p => new { p.Id, p.User })
+                        .ToDictionaryAsync(p => p.Id, p => p.User, cancellationToken);
+                    foreach (var (parentProfileId, invoiceNumber) in newlySuspended)
                     {
-                        await notifications.SendTemplatedEmailAsync(
-                            user.Id, user.Email, NotificationType.FeeSuspension, "fee-suspended-parent",
-                            new Dictionary<string, string> { ["InvoiceNumber"] = invoiceNumber },
-                            cancellationToken);
-                    }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
-                    {
-                        _logger.LogWarning(ex, "Fee suspension notice failed for parent {ParentProfileId}; continuing with the rest of the batch.", parentProfileId);
+                        if (!suspendedParentUsers.TryGetValue(parentProfileId, out var user))
+                        {
+                            continue;
+                        }
+
+                        try
+                        {
+                            await notifications.SendTemplatedEmailAsync(
+                                user.Id, user.Email, NotificationType.FeeSuspension, "fee-suspended-parent",
+                                new Dictionary<string, string> { ["InvoiceNumber"] = invoiceNumber },
+                                cancellationToken);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            _logger.LogWarning(ex, "Fee suspension notice failed for parent {ParentProfileId}; continuing with the rest of the batch.", parentProfileId);
+                        }
                     }
                 }
             }
@@ -356,12 +417,15 @@ namespace iucs.meettomanage.api.Services
             }
 
             var notifications = services.GetRequiredService<INotificationService>();
-            var reminderWindow = today.AddDays(3);
+            var reminderDays = await BillingSettings.GetReminderDaysBeforeDueAsync(unitOfWork, cancellationToken);
+            var reminderWindow = today.AddDays(reminderDays);
 
+            var admissionExempt = await AdmissionInvoices.ExemptFromOverdueHandlingAsync(unitOfWork, cancellationToken);
             var dueInvoices = await unitOfWork.Repository<Invoice>().Query()
                 .Include(i => i.ParentProfile).ThenInclude(p => p.User)
                 .Where(i => (i.Status == InvoiceStatus.Pending || i.Status == InvoiceStatus.PartiallyPaid || i.Status == InvoiceStatus.Overdue)
-                            && i.DueDate <= reminderWindow)
+                            && i.DueDate <= reminderWindow
+                            && !admissionExempt.Contains(i.Id))
                 .ToListAsync(cancellationToken);
 
             foreach (var invoice in dueInvoices)
