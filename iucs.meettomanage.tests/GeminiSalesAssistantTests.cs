@@ -5,6 +5,8 @@ using iucs.meettomanage.api.Services;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.application.Common.Options;
 using iucs.meettomanage.application.Dto.Marketing;
+using iucs.meettomanage.application.Services;
+using iucs.meettomanage.domain.Enums;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -31,7 +33,8 @@ public class GeminiSalesAssistantTests
 
         var reply = await assistant.ReplyAsync(Conversation);
 
-        Assert.Equal("About ₹4,000 a month.", reply);
+        Assert.Equal("About ₹4,000 a month.", reply.Reply);
+        Assert.Null(reply.BookedName);
         var sent = Assert.Single(handler.Requests);
         Assert.Contains("/models/primary:generateContent", sent.Url);
         Assert.Equal("test-key", sent.ApiKey);
@@ -49,7 +52,7 @@ public class GeminiSalesAssistantTests
         var handler = new FakeHandler((status, "{}"), (HttpStatusCode.OK, OkBody));
         var assistant = Create(handler, new GeminiOptions { ApiKey = "k", Model = "primary", FallbackModel = "fallback" });
 
-        Assert.Equal("About ₹4,000 a month.", await assistant.ReplyAsync(Conversation));
+        Assert.Equal("About ₹4,000 a month.", (await assistant.ReplyAsync(Conversation)).Reply);
         Assert.Contains("/models/fallback:", handler.Requests[1].Url);
     }
 
@@ -79,11 +82,96 @@ public class GeminiSalesAssistantTests
         var handler = new FakeHandler((HttpStatusCode.OK, """{"candidates":[{"finishReason":"SAFETY"}]}"""));
         var assistant = Create(handler, new GeminiOptions { ApiKey = "k" });
 
-        Assert.Contains("info@infinityuniquers.com", await assistant.ReplyAsync(Conversation));
+        Assert.Contains("info@infinityuniquers.com", (await assistant.ReplyAsync(Conversation)).Reply);
     }
 
-    private static GeminiSalesAssistant Create(FakeHandler handler, GeminiOptions options) =>
-        new(new FakeHttpClientFactory(handler), Microsoft.Extensions.Options.Options.Create(options), NullLogger<GeminiSalesAssistant>.Instance);
+    private static string FunctionCallBody(string args) => $$$"""
+        {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"book_demo","id":"call_1","args":{{{args}}}},"thoughtSignature":"sig"}]}}]}
+        """;
+
+    private const string ValidArgs = """{"full_name":"Priya Kapoor","phone":"+91 98765 43210","email":"priya@brightstep.in","organization":"Bright Step Academy","notes":"Phonics academy, 120 students"}""";
+
+    private const string BookedBody = """
+        {"candidates":[{"content":{"role":"model","parts":[{"text":"All set, Priya! The team will WhatsApp you within a day."}]}}]}
+        """;
+
+    [Fact]
+    public async Task Confirmed_booking_is_saved_and_the_model_words_the_reply()
+    {
+        var handler = new FakeHandler((HttpStatusCode.OK, FunctionCallBody(ValidArgs)), (HttpStatusCode.OK, BookedBody));
+        var demos = new FakeDemoRequests();
+        var assistant = Create(handler, new GeminiOptions { ApiKey = "k", Model = "primary", FallbackModel = "fallback" }, demos);
+
+        var reply = await assistant.ReplyAsync(Conversation);
+
+        Assert.Equal("Priya Kapoor", reply.BookedName);
+        Assert.StartsWith("All set, Priya!", reply.Reply);
+        var saved = Assert.Single(demos.Created);
+        Assert.Equal(("Priya Kapoor", "+91 98765 43210", "priya@brightstep.in", "Bright Step Academy"), (saved.FullName, saved.Phone, saved.WorkEmail, saved.AcademyName));
+        Assert.Contains("Phonics academy, 120 students", saved.Message);
+
+        // The follow-up call echoes the model's call (with its signature) and answers it by id.
+        using var followUp = JsonDocument.Parse(handler.Requests[1].Body);
+        var contents = followUp.RootElement.GetProperty("contents").EnumerateArray().ToList();
+        Assert.Equal("sig", contents[^2].GetProperty("parts")[0].GetProperty("thoughtSignature").GetString());
+        var functionResponse = contents[^1].GetProperty("parts")[0].GetProperty("functionResponse");
+        Assert.Equal("call_1", functionResponse.GetProperty("id").GetString());
+        Assert.True(functionResponse.GetProperty("response").GetProperty("booked").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("""{"full_name":"Priya","phone":"+91 98765 43210","email":"priya-at-gmail"}""", "email")]
+    [InlineData("""{"full_name":"Priya","phone":"12","email":"priya@example.com"}""", "phone")]
+    [InlineData("""{"full_name":"","phone":"+91 98765 43210","email":"priya@example.com"}""", "name")]
+    public async Task Invalid_details_are_not_booked_and_go_back_to_the_model(string args, string problem)
+    {
+        var handler = new FakeHandler((HttpStatusCode.OK, FunctionCallBody(args)), (HttpStatusCode.OK, BookedBody));
+        var demos = new FakeDemoRequests();
+        var assistant = Create(handler, new GeminiOptions { ApiKey = "k" }, demos);
+
+        var reply = await assistant.ReplyAsync(Conversation);
+
+        Assert.Null(reply.BookedName);
+        Assert.Empty(demos.Created);
+        using var followUp = JsonDocument.Parse(handler.Requests[1].Body);
+        var result = followUp.RootElement.GetProperty("contents").EnumerateArray().Last().GetProperty("parts")[0].GetProperty("functionResponse").GetProperty("response");
+        Assert.False(result.GetProperty("booked").GetBoolean());
+        Assert.Contains(problem, result.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task A_second_book_call_in_one_turn_does_not_book_twice()
+    {
+        var handler = new FakeHandler((HttpStatusCode.OK, FunctionCallBody(ValidArgs)), (HttpStatusCode.OK, FunctionCallBody(ValidArgs)), (HttpStatusCode.OK, BookedBody));
+        var demos = new FakeDemoRequests();
+        var assistant = Create(handler, new GeminiOptions { ApiKey = "k" }, demos);
+
+        var reply = await assistant.ReplyAsync(Conversation);
+
+        Assert.Single(demos.Created);
+        Assert.Equal("Priya Kapoor", reply.BookedName);
+        Assert.Equal(3, handler.Requests.Count);
+    }
+
+    private static GeminiSalesAssistant Create(FakeHandler handler, GeminiOptions options, FakeDemoRequests? demos = null) =>
+        new(new FakeHttpClientFactory(handler), demos ?? new FakeDemoRequests(), Microsoft.Extensions.Options.Options.Create(options), NullLogger<GeminiSalesAssistant>.Instance);
+
+    private sealed class FakeDemoRequests : IPlatformDemoRequestService
+    {
+        public List<CreatePlatformDemoRequestRequest> Created { get; } = new();
+
+        public Task<PlatformDemoRequestDto> CreateAsync(CreatePlatformDemoRequestRequest request, CancellationToken cancellationToken = default)
+        {
+            Created.Add(request);
+            return Task.FromResult(new PlatformDemoRequestDto { Id = Guid.NewGuid(), FullName = request.FullName, WorkEmail = request.WorkEmail, Phone = request.Phone, AcademyName = request.AcademyName });
+        }
+
+        public Task<IReadOnlyList<PlatformDemoRequestDto>> ListAsync(StoreInquiryStatus? status, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<PlatformDemoRequestDto> UpdateStatusAsync(Guid id, UpdatePlatformDemoRequestStatusRequest request, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+    }
 
     private sealed class FakeHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory
     {

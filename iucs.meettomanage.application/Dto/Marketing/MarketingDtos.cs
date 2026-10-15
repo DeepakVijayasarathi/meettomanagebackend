@@ -175,5 +175,8 @@ namespace iucs.meettomanage.application.Dto.Marketing
     public class SalesChatResponse
     {
         public string Reply { get; set; } = null!;
+
+        /// <summary>Set when the assistant booked a platform demo during this turn — the visitor's name, so the site can confirm it.</summary>
+        public string? BookedName { get; set; }
     }
 }

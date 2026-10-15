@@ -13,11 +13,15 @@ namespace iucs.meettomanage.application.Common.Options
 
         public string ApiKey { get; set; } = string.Empty;
 
-        /// <summary>Gemini model id, e.g. "gemini-flash-latest" (Google's rolling alias for its current Flash model).</summary>
-        public string Model { get; set; } = "gemini-flash-latest";
+        /// <summary>
+        /// Gemini model id. Defaults to Google's rolling Flash-Lite alias: in testing (Oct 2026) it
+        /// answered in ~2s while the full Flash alias often took 10-45s or hit "high demand" 503s —
+        /// too slow for a live chat. The full model stays on as the fallback.
+        /// </summary>
+        public string Model { get; set; } = "gemini-flash-lite-latest";
 
         /// <summary>Tried once when <see cref="Model"/> is overloaded or rate-limited (503/429/500), so a
         /// demand spike on Google's side doesn't leave a visitor without an answer. Blank disables it.</summary>
-        public string FallbackModel { get; set; } = "gemini-flash-lite-latest";
+        public string FallbackModel { get; set; } = "gemini-flash-latest";
     }
 }

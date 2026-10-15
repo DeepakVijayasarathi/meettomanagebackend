@@ -37,13 +37,15 @@ namespace iucs.meettomanage.api.Controllers
             return CreatedAtAction(nameof(RequestDemo), new { id = created.Id }, created);
         }
 
-        /// <summary>The marketing site's chat assistant (Gemini). Anonymous, so rate-limited per IP.</summary>
+        /// <summary>
+        /// The marketing site's chat assistant (Gemini). It can also book a platform demo into the
+        /// same queue as <see cref="RequestDemo"/>. Anonymous, so rate-limited per IP.
+        /// </summary>
         [HttpPost("chat")]
         [EnableRateLimiting("marketing-chat")]
         public async Task<ActionResult<SalesChatResponse>> Chat(SalesChatRequest request, CancellationToken cancellationToken)
         {
-            var reply = await _salesAssistant.ReplyAsync(request.Messages, cancellationToken);
-            return Ok(new SalesChatResponse { Reply = reply });
+            return Ok(await _salesAssistant.ReplyAsync(request.Messages, cancellationToken));
         }
     }
 
