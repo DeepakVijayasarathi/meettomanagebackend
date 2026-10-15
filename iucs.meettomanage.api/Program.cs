@@ -64,6 +64,10 @@ builder.Services.AddScoped<IEmailSender>(sp => sp.GetRequiredService<SmtpEmailSe
 builder.Services.AddScoped<IWhatsAppSender, WhatsAppSender>();
 // SMS delivery (MSG91/Twilio), driven by the DB "sms" integration.
 builder.Services.AddScoped<ISmsSender, SmsSender>();
+// Marketing-site chat assistant (Gemini). Key from Gemini:ApiKey — user-secrets locally,
+// Gemini__ApiKey env var in prod, never committed.
+builder.Services.AddHttpClient(nameof(GeminiSalesAssistant), client => client.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddScoped<ISalesAssistant, GeminiSalesAssistant>();
 // S3-compatible object storage (Hetzner Object Storage) everywhere — dev and prod both, so
 // an upload made locally behaves identically to one made against the real deployment instead
 // of silently depending on which environment you're in. Configured via Storage:S3:* (real
@@ -138,6 +142,7 @@ builder.Services.AddHostedService<LeaveCancellationReportBackgroundService>();
 // Authentication: JWT bearer
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 builder.Services.Configure<MonitoringOptions>(builder.Configuration.GetSection(MonitoringOptions.SectionName));
+builder.Services.Configure<GeminiOptions>(builder.Configuration.GetSection(GeminiOptions.SectionName));
 builder.Services.Configure<iucs.meettomanage.application.Helper.PinVaultOptions>(o =>
 {
     o.Key = builder.Configuration["PinVault:Key"];
@@ -335,6 +340,17 @@ builder.Services.AddRateLimiter(options =>
             {
                 PermitLimit = 30,
                 Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+            }));
+    // Public marketing chat: every message is a paid model call, so this caps one visitor's
+    // spend while still allowing a real back-and-forth conversation.
+    options.AddPolicy("marketing-chat", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(10),
                 QueueLimit = 0,
             }));
     options.AddPolicy("store-inquiry", httpContext =>

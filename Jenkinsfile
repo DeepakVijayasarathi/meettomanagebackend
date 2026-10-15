@@ -94,12 +94,24 @@ pipeline {
                 // withCredentials binds each secret to a short-lived env var for just this
                 // shell step; Jenkins also masks their values out of the console log
                 // automatically. Nothing here is ever written to disk or to the image.
+                script {
+                // Marketing-site chat assistant (Gemini) is optional: withCredentials fails the
+                // build on a missing credential id, and by this stage the old container is
+                // already gone -- so a missing key must never take the whole API down. Without
+                // it the API runs normally and the site's chat falls back to WhatsApp/email.
+                def optionalCredentials = []
+                try {
+                    withCredentials([string(credentialsId: 'meettomanage-gemini-api-key', variable: 'GEMINI_PROBE')]) {}
+                    optionalCredentials << string(credentialsId: 'meettomanage-gemini-api-key', variable: 'GEMINI_API_KEY')
+                } catch (err) {
+                    echo "WARNING: Jenkins credential 'meettomanage-gemini-api-key' not found -- deploying with the website chat assistant disabled."
+                }
                 withCredentials([
                     string(credentialsId: 'readernest-db-password',    variable: 'DB_PASS'),
                     string(credentialsId: 'readernest-jwt-signing-key', variable: 'JWT_SIGNING_KEY'),
                     string(credentialsId: 'readernest-s3-access-key',  variable: 'S3_ACCESS_KEY'),
                     string(credentialsId: 'readernest-s3-secret-key',  variable: 'S3_SECRET_KEY'),
-                ]) {
+                ] + optionalCredentials) {
                     sh """
                         docker run -d \
                           --name ${CONTAINER_NAME} \
@@ -116,9 +128,11 @@ pipeline {
                           -e Storage__S3__BucketName="${STORAGE_S3_BUCKET_NAME}" \
                           -e Storage__Provider="${STORAGE_PROVIDER}" \
                           -e Storage__LocalPath=/app/uploads \
+                          -e Gemini__ApiKey="\${GEMINI_API_KEY:-}" \
                           -v ${STORAGE_LOCAL_HOST_PATH}:/app/uploads \
                           ${IMAGE_NAME}:latest
                     """
+                }
                 }
             }
         }

@@ -1,4 +1,5 @@
 using iucs.meettomanage.api.Auth;
+using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Marketing;
 using iucs.meettomanage.application.Services;
 using iucs.meettomanage.domain.Enums;
@@ -18,10 +19,12 @@ namespace iucs.meettomanage.api.Controllers
     public class MarketingController : ControllerBase
     {
         private readonly IPlatformDemoRequestService _platformDemoRequestService;
+        private readonly ISalesAssistant _salesAssistant;
 
-        public MarketingController(IPlatformDemoRequestService platformDemoRequestService)
+        public MarketingController(IPlatformDemoRequestService platformDemoRequestService, ISalesAssistant salesAssistant)
         {
             _platformDemoRequestService = platformDemoRequestService;
+            _salesAssistant = salesAssistant;
         }
 
         [HttpPost("demo-requests")]
@@ -32,6 +35,15 @@ namespace iucs.meettomanage.api.Controllers
         {
             var created = await _platformDemoRequestService.CreateAsync(request, cancellationToken);
             return CreatedAtAction(nameof(RequestDemo), new { id = created.Id }, created);
+        }
+
+        /// <summary>The marketing site's chat assistant (Gemini). Anonymous, so rate-limited per IP.</summary>
+        [HttpPost("chat")]
+        [EnableRateLimiting("marketing-chat")]
+        public async Task<ActionResult<SalesChatResponse>> Chat(SalesChatRequest request, CancellationToken cancellationToken)
+        {
+            var reply = await _salesAssistant.ReplyAsync(request.Messages, cancellationToken);
+            return Ok(new SalesChatResponse { Reply = reply });
         }
     }
 

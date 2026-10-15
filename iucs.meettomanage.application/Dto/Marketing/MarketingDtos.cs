@@ -147,4 +147,33 @@ namespace iucs.meettomanage.application.Dto.Marketing
 
         public DateTime PublishedAtUtc { get; set; }
     }
+
+    /// <summary>One message in the marketing chat — "user" (the visitor) or "assistant".</summary>
+    public class SalesChatTurn
+    {
+        [Required]
+        [RegularExpression("^(user|assistant)$")]
+        public string Role { get; set; } = null!;
+
+        [Required]
+        [MaxLength(1000)]
+        public string Text { get; set; } = null!;
+    }
+
+    /// <summary>
+    /// Public — no login required. The whole conversation so far (the server keeps no chat
+    /// state), capped so one visitor can't run up an unbounded model bill per request.
+    /// </summary>
+    public class SalesChatRequest
+    {
+        [Required]
+        [MinLength(1)]
+        [MaxLength(20)]
+        public List<SalesChatTurn> Messages { get; set; } = new();
+    }
+
+    public class SalesChatResponse
+    {
+        public string Reply { get; set; } = null!;
+    }
 }
