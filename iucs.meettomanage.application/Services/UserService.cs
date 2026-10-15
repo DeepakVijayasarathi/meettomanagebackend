@@ -68,7 +68,9 @@ namespace iucs.meettomanage.application.Services
             page = Math.Max(page, 1);
             pageSize = Math.Clamp(pageSize, 1, 100);
 
-            var query = _unitOfWork.Repository<User>().Query().Include(u => u.TeacherProfile).ThenInclude(t => t!.Department).AsQueryable();
+            var query = _unitOfWork.Repository<User>().Query().Include(u => u.TeacherProfile).ThenInclude(t => t!.Department)
+                .Where(u => u.Role != UserRole.Marketing)
+                .AsQueryable();
 
             if (role.HasValue)
             {
@@ -156,6 +158,11 @@ namespace iucs.meettomanage.application.Services
                 .Include(u => u.TeacherProfile).ThenInclude(t => t!.Department)
                 .FirstOrDefaultAsync(u => u.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), id);
+            // Marketing-site accounts belong to the platform owner, not the academy -- invisible here.
+            if (user.Role == UserRole.Marketing)
+            {
+                throw new NotFoundException(nameof(User), id);
+            }
 
             return user.ToDto();
         }
@@ -183,9 +190,9 @@ namespace iucs.meettomanage.application.Services
 
         public async Task<UserDto> CreateAsync(CreateUserRequest request, CancellationToken cancellationToken = default)
         {
-            if (request.Role == UserRole.Admin)
+            if (request.Role == UserRole.Admin || request.Role == UserRole.Marketing)
             {
-                throw new DomainValidationException("Admin accounts cannot be created through this endpoint.");
+                throw new DomainValidationException($"{request.Role} accounts cannot be created through this endpoint.");
             }
 
             if (request.RoleDefinitionId.HasValue && request.Role != UserRole.SubAdmin)
@@ -297,6 +304,11 @@ namespace iucs.meettomanage.application.Services
                 .Include(u => u.TeacherProfile).ThenInclude(t => t!.Department)
                 .FirstOrDefaultAsync(u => u.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), id);
+            // Marketing-site accounts belong to the platform owner, not the academy -- invisible here.
+            if (user.Role == UserRole.Marketing)
+            {
+                throw new NotFoundException(nameof(User), id);
+            }
 
             user.FirstName = request.FirstName.Trim();
             user.LastName = request.LastName?.Trim() ?? string.Empty;
@@ -335,6 +347,11 @@ namespace iucs.meettomanage.application.Services
         {
             var user = await _unitOfWork.Repository<User>().GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), id);
+            // Marketing-site accounts belong to the platform owner, not the academy -- invisible here.
+            if (user.Role == UserRole.Marketing)
+            {
+                throw new NotFoundException(nameof(User), id);
+            }
 
             // Same blanket rule as ChangeRoleAsync/CreateAsync: Admin accounts are untouchable
             // through this generic action. Without it, anyone holding UserManagement:Edit — a
@@ -391,8 +408,13 @@ namespace iucs.meettomanage.application.Services
         {
             var user = await _unitOfWork.Repository<User>().GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), id);
+            // Marketing-site accounts belong to the platform owner, not the academy -- invisible here.
+            if (user.Role == UserRole.Marketing)
+            {
+                throw new NotFoundException(nameof(User), id);
+            }
 
-            if (user.Role == UserRole.Admin || newRole == UserRole.Admin)
+            if (user.Role == UserRole.Admin || newRole == UserRole.Admin || newRole == UserRole.Marketing)
             {
                 throw new DomainValidationException("Admin accounts can't be reassigned through this action.");
             }
@@ -496,6 +518,11 @@ namespace iucs.meettomanage.application.Services
 
             var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), userId);
+            // Marketing-site accounts belong to the platform owner, not the academy -- invisible here.
+            if (user.Role == UserRole.Marketing)
+            {
+                throw new NotFoundException(nameof(User), userId);
+            }
 
             if (user.Role != UserRole.SubAdmin)
             {
@@ -621,6 +648,11 @@ namespace iucs.meettomanage.application.Services
         {
             var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), userId);
+            // Marketing-site accounts belong to the platform owner, not the academy -- invisible here.
+            if (user.Role == UserRole.Marketing)
+            {
+                throw new NotFoundException(nameof(User), userId);
+            }
 
             // Gate on the channel's integration being switched on (is_enabled). Do this
             // before regenerating the PIN so a disabled channel changes nothing.
@@ -729,6 +761,11 @@ namespace iucs.meettomanage.application.Services
         {
             var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), userId);
+            // Marketing-site accounts belong to the platform owner, not the academy -- invisible here.
+            if (user.Role == UserRole.Marketing)
+            {
+                throw new NotFoundException(nameof(User), userId);
+            }
 
             // Same rule as ResetPinAsync: a PIN is the whole credential (email + PIN), so an Admin
             // account's is never shown through this action.
@@ -760,6 +797,11 @@ namespace iucs.meettomanage.application.Services
         {
             var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), userId);
+            // Marketing-site accounts belong to the platform owner, not the academy -- invisible here.
+            if (user.Role == UserRole.Marketing)
+            {
+                throw new NotFoundException(nameof(User), userId);
+            }
 
             // Every account — Admin included — authenticates with email+PIN alone (see
             // AuthService.LoginAsync), so the PIN this method hands back in the HTTP response
@@ -832,6 +874,11 @@ namespace iucs.meettomanage.application.Services
             var repository = _unitOfWork.Repository<User>();
             var user = await repository.GetByIdAsync(id, cancellationToken)
                 ?? throw new NotFoundException(nameof(User), id);
+            // Marketing-site accounts belong to the platform owner, not the academy -- invisible here.
+            if (user.Role == UserRole.Marketing)
+            {
+                throw new NotFoundException(nameof(User), id);
+            }
 
             if (user.Role == UserRole.Admin)
             {

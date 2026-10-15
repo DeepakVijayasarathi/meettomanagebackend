@@ -106,6 +106,15 @@ pipeline {
                 } catch (err) {
                     echo "WARNING: Jenkins credential 'meettomanage-gemini-api-key' not found -- deploying with the website chat assistant disabled."
                 }
+                // Marketing console login (Marketing role, /marketing/login): a username/password
+                // credential -- username = email, password = 4-digit PIN. Optional for the same
+                // reason; the account is created once on first start and then keeps its own PIN.
+                try {
+                    withCredentials([usernamePassword(credentialsId: 'meettomanage-marketing-login', usernameVariable: 'MKT_PROBE_U', passwordVariable: 'MKT_PROBE_P')]) {}
+                    optionalCredentials << usernamePassword(credentialsId: 'meettomanage-marketing-login', usernameVariable: 'MARKETING_EMAIL', passwordVariable: 'MARKETING_PIN')
+                } catch (err) {
+                    echo "WARNING: Jenkins credential 'meettomanage-marketing-login' not found -- no marketing console account will be created."
+                }
                 withCredentials([
                     string(credentialsId: 'readernest-db-password',    variable: 'DB_PASS'),
                     string(credentialsId: 'readernest-jwt-signing-key', variable: 'JWT_SIGNING_KEY'),
@@ -129,6 +138,8 @@ pipeline {
                           -e Storage__Provider="${STORAGE_PROVIDER}" \
                           -e Storage__LocalPath=/app/uploads \
                           -e Gemini__ApiKey="\${GEMINI_API_KEY:-}" \
+                          -e Seed__MarketingEmail="\${MARKETING_EMAIL:-}" \
+                          -e Seed__MarketingPin="\${MARKETING_PIN:-}" \
                           -v ${STORAGE_LOCAL_HOST_PATH}:/app/uploads \
                           ${IMAGE_NAME}:latest
                     """

@@ -12160,6 +12160,56 @@ namespace iucs.meettomanage.tests
             Assert.Empty(await _db.Context.ResourceFolders.ToListAsync());
         }
 
+        /// <summary>
+        /// Marketing-site settings (seo.*, analytics.*) belong to the marketing console: the
+        /// academy's Settings screen neither lists nor can write them, and the console can write
+        /// nothing else.
+        /// </summary>
+        [Fact]
+        public async Task MarketingSettings_AreSplitFromAcademySettings()
+        {
+            var settings = new SettingsService(_db.UnitOfWork, _auditLog);
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => settings.UpsertAsync(
+                [new UpdateSettingRequest { Key = "seo.home.title", Value = "Hijacked", Category = SettingCategory.Seo, IsPublic = true }]));
+            await Assert.ThrowsAsync<DomainValidationException>(() => settings.UpsertMarketingAsync(
+                [new UpdateSettingRequest { Key = "brand.name", Value = "Hijacked", Category = SettingCategory.Branding }]));
+
+            await settings.UpsertMarketingAsync(
+                [new UpdateSettingRequest { Key = "analytics.gaMeasurementId", Value = "G-TEST123", IsPublic = false }]);
+            await settings.UpsertAsync(
+                [new UpdateSettingRequest { Key = "brand.name", Value = "Academy", Category = SettingCategory.Branding, IsPublic = true }]);
+
+            Assert.DoesNotContain(await settings.GetAllAsync(), s => s.Key.StartsWith("analytics."));
+            var marketing = await settings.GetMarketingAsync();
+            Assert.Single(marketing);
+            Assert.Equal("analytics.gaMeasurementId", marketing[0].Key);
+            // Stored public regardless of what the request said: the public site has to read it.
+            Assert.Contains(await settings.GetPublicAsync(), s => s.Key == "analytics.gaMeasurementId" && s.Value == "G-TEST123");
+        }
+
+        /// <summary>
+        /// Marketing-console accounts are the platform owner's, so the academy's user management
+        /// can't list, open, reset or delete them, and can't create or convert anyone into one.
+        /// </summary>
+        [Fact]
+        public async Task MarketingUsers_AreInvisibleToAcademyUserManagement()
+        {
+            var users = CreateUserService();
+            var marketer = await _db.SeedUserAsync($"mkt-{Guid.NewGuid():N}@test.com", "x", UserRole.Marketing);
+            var teacher = await _db.SeedUserAsync($"t-{Guid.NewGuid():N}@test.com", "x", UserRole.Teacher);
+
+            var all = await users.ListAsync(null, null, 1, 100);
+            Assert.DoesNotContain(all.Items, u => u.Id == marketer.Id);
+            Assert.Contains(all.Items, u => u.Id == teacher.Id);
+            Assert.Empty((await users.ListAsync(UserRole.Marketing, null, 1, 100)).Items);
+
+            await Assert.ThrowsAsync<NotFoundException>(() => users.GetAsync(marketer.Id));
+            await Assert.ThrowsAsync<NotFoundException>(() => users.ResetPinAsync(marketer.Id));
+            await Assert.ThrowsAsync<NotFoundException>(() => users.SetStatusAsync(marketer.Id, UserStatus.Inactive));
+            await Assert.ThrowsAsync<DomainValidationException>(() => users.ChangeRoleAsync(teacher.Id, UserRole.Marketing));
+        }
+
         public void Dispose() => _db.Dispose();
     }
 }

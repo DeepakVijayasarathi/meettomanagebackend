@@ -24,9 +24,40 @@ namespace iucs.meettomanage.application.Services
             _auditLog = auditLog;
         }
 
+        /// <summary>
+        /// Marketing-site settings belong to the platform owner's marketing console
+        /// (MarketingSettingsController), not the academy's Settings screen: kept out of
+        /// <see cref="GetAllAsync"/> and refused by <see cref="UpsertAsync"/>, so an academy
+        /// Admin can neither see nor overwrite them. They stay public for the site itself.
+        /// </summary>
+        public static bool IsMarketingKey(string key) =>
+            key.StartsWith("seo.", StringComparison.OrdinalIgnoreCase)
+            || key.StartsWith("analytics.", StringComparison.OrdinalIgnoreCase);
+
+        public async Task<IReadOnlyList<SettingDto>> GetMarketingAsync(CancellationToken cancellationToken = default)
+        {
+            var settings = await _unitOfWork.Repository<AppSetting>().Query()
+                .Where(s => s.Key.StartsWith("seo.") || s.Key.StartsWith("analytics."))
+                .OrderBy(s => s.Key)
+                .ToListAsync(cancellationToken);
+
+            return settings.Select(ToDto).ToList();
+        }
+
+        public Task<IReadOnlyList<SettingDto>> UpsertAsync(
+            IReadOnlyList<UpdateSettingRequest> updates,
+            CancellationToken cancellationToken = default) =>
+            UpsertCoreAsync(updates, marketingScope: false, cancellationToken);
+
+        public Task<IReadOnlyList<SettingDto>> UpsertMarketingAsync(
+            IReadOnlyList<UpdateSettingRequest> updates,
+            CancellationToken cancellationToken = default) =>
+            UpsertCoreAsync(updates, marketingScope: true, cancellationToken);
+
         public async Task<IReadOnlyList<SettingDto>> GetAllAsync(CancellationToken cancellationToken = default)
         {
             var settings = await _unitOfWork.Repository<AppSetting>().Query()
+                .Where(s => !s.Key.StartsWith("seo.") && !s.Key.StartsWith("analytics."))
                 .OrderBy(s => s.Category).ThenBy(s => s.Key)
                 .ToListAsync(cancellationToken);
 
@@ -43,9 +74,10 @@ namespace iucs.meettomanage.application.Services
             return settings.Select(ToDto).ToList();
         }
 
-        public async Task<IReadOnlyList<SettingDto>> UpsertAsync(
+        private async Task<IReadOnlyList<SettingDto>> UpsertCoreAsync(
             IReadOnlyList<UpdateSettingRequest> updates,
-            CancellationToken cancellationToken = default)
+            bool marketingScope,
+            CancellationToken cancellationToken)
         {
             if (updates.Count == 0)
             {
@@ -72,6 +104,13 @@ namespace iucs.meettomanage.application.Services
                 {
                     throw new DomainValidationException(
                         $"Setting key '{key[..Math.Min(key.Length, 32)]}…' exceeds {MaxKeyLength} characters.");
+                }
+
+                if (IsMarketingKey(key) != marketingScope)
+                {
+                    throw new DomainValidationException(marketingScope
+                        ? $"'{key}' isn't a marketing-site setting."
+                        : "SEO and analytics settings are managed from the marketing console.");
                 }
 
                 // Switching storage takes effect live and has checks of its own (StorageController).
@@ -118,8 +157,10 @@ namespace iucs.meettomanage.application.Services
                         {
                             Key = key,
                             Value = update.Value,
-                            Category = update.Category,
-                            IsPublic = update.IsPublic,
+                            Category = marketingScope
+                                ? (key.StartsWith("seo.", StringComparison.OrdinalIgnoreCase) ? SettingCategory.Seo : SettingCategory.Analytics)
+                                : update.Category,
+                            IsPublic = marketingScope || update.IsPublic,
                         },
                         cancellationToken);
                 }

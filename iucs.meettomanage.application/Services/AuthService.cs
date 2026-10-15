@@ -355,6 +355,7 @@ namespace iucs.meettomanage.application.Services
                 UserRole.Parent => "/parent",
                 UserRole.AdmissionTeam => "/admission",
                 UserRole.SubAdmin => "/subadmin",
+                UserRole.Marketing => "/marketing",
                 _ => "/login",
             };
         }

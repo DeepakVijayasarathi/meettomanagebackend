@@ -34,6 +34,7 @@ namespace iucs.meettomanage.api.Data
             }
 
             await SeedAdminAsync(scope.ServiceProvider, context, configuration);
+            await SeedMarketingUserAsync(scope.ServiceProvider, context, configuration);
             await EnsureAdminPinAsync(scope.ServiceProvider, context, configuration);
             await SeedDepartmentsAsync(context);
             await SeedPaymentAccountsAsync(context);
@@ -53,7 +54,6 @@ namespace iucs.meettomanage.api.Data
             await EnsureAdminQuizBankMenuAsync(context);
             await EnsureAdminActivityBankMenuAsync(context);
             await EnsureAdminServerMonitoringMenuAsync(context);
-            await EnsureAdminMarketingMenuAsync(context);
             await EnsureClassSessionLogsMenuAsync(context);
             await EnsureItAdminMenuAsync(context);
             await EnsureExecutiveMenuAsync(context);
@@ -219,6 +219,44 @@ namespace iucs.meettomanage.api.Data
             }
         }
 
+        /// <summary>
+        /// The marketing console's login (Marketing role) — created from deployment config, never
+        /// in-app, so the academy's own admins can't create, see or reset it. Insert-once by email;
+        /// after that the account changes its own PIN from the console. No config = no account.
+        /// </summary>
+        private static async Task SeedMarketingUserAsync(
+            IServiceProvider services,
+            MeetToManageDbContext context,
+            IConfiguration configuration)
+        {
+            var email = configuration["Seed:MarketingEmail"]?.Trim().ToLowerInvariant();
+            var pin = configuration["Seed:MarketingPin"]?.Trim();
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(pin))
+            {
+                return;
+            }
+
+            if (!System.Text.RegularExpressions.Regex.IsMatch(pin, @"^\d{4}$"))
+            {
+                throw new InvalidOperationException("Seed:MarketingPin must be exactly 4 digits.");
+            }
+
+            if (await context.Users.AnyAsync(u => u.Email == email))
+            {
+                return;
+            }
+
+            var hasher = services.GetRequiredService<IPasswordHasher>();
+            context.Users.Add(new User
+            {
+                Email = email,
+                PinHash = hasher.Hash(pin),
+                FirstName = configuration["Seed:MarketingFirstName"] ?? "Marketing",
+                LastName = configuration["Seed:MarketingLastName"] ?? "Team",
+                Role = UserRole.Marketing,
+            });
+        }
+
         private static async Task SeedAdminAsync(
             IServiceProvider services,
             MeetToManageDbContext context,
@@ -376,6 +414,10 @@ namespace iucs.meettomanage.api.Data
             setting(SettingCategory.Seo, "seo.getStarted.description", "Running an academy? See how Meet to Manage's live classroom, scheduling, admissions and billing work together — request a platform demo.", true),
             setting(SettingCategory.Seo, "seo.blog.title", "Blog — Meet to Manage", true),
             setting(SettingCategory.Seo, "seo.blog.description", "Practical notes on running a modern academy: admissions, billing automation, scheduling and more.", true),
+            // Website analytics tag IDs, loaded by the public marketing pages only. Blank = off.
+            setting(SettingCategory.Analytics, "analytics.gaMeasurementId", "", true),
+            setting(SettingCategory.Analytics, "analytics.gtmContainerId", "", true),
+            setting(SettingCategory.Analytics, "analytics.metaPixelId", "", true),
         ];
 
         /// <summary>
@@ -390,7 +432,7 @@ namespace iucs.meettomanage.api.Data
                 new() { Category = category, Key = key, Value = value, IsPublic = isPublic };
 
             var existingKeys = await context.AppSettings
-                .Where(s => s.Key.StartsWith("seo."))
+                .Where(s => s.Key.StartsWith("seo.") || s.Key.StartsWith("analytics."))
                 .Select(s => s.Key)
                 .ToListAsync();
 
@@ -424,8 +466,14 @@ namespace iucs.meettomanage.api.Data
                 (PermissionModule.SystemMonitoring, "Server Monitoring"),
                 (PermissionModule.ClassSessionLogs, "Class Session Logs"),
                 (PermissionModule.SupportTickets, "Support Tickets"),
-                (PermissionModule.Marketing, "Marketing"),
             ];
+
+            // Marketing was briefly seeded here; it's no longer grantable — the marketing console is
+            // gated on the Marketing role, not a module — so drop its row from Roles & Permissions.
+            var retiredMarketing = await context.PermissionModuleDefinitions
+                .Where(m => m.IsSystem && m.Key == nameof(PermissionModule.Marketing))
+                .ToListAsync();
+            context.PermissionModuleDefinitions.RemoveRange(retiredMarketing);
 
             var existingKeys = await context.PermissionModuleDefinitions
                 .Select(m => m.Key)
@@ -722,7 +770,9 @@ namespace iucs.meettomanage.api.Data
             // page (FounderDashboard) 2026-09-22 — the sidebar item is retired the same way as any
             // other dropped screen; the route itself still redirects (see App.tsx) for anyone with
             // the old link bookmarked.
-            var retiredPaths = new[] { "/coordinator/scheduling", "/teacher/live/s-1", "/executive/overview" };
+            // "/admin/demo-requests" and "/admin/blog-posts" moved to the separate marketing console
+            // (/marketing, Marketing role only) — marketing-site admin isn't the academy's business.
+            var retiredPaths = new[] { "/coordinator/scheduling", "/teacher/live/s-1", "/executive/overview", "/admin/demo-requests", "/admin/blog-posts" };
             var stale = await context.MenuItems.Where(m => retiredPaths.Contains(m.Path)).ToListAsync();
             if (stale.Count > 0)
             {
@@ -1611,53 +1661,6 @@ namespace iucs.meettomanage.api.Data
                     IsActive = true,
                 });
             }
-        }
-
-        /// <summary>
-        /// Inserts the Admin "Marketing" section (Demo Requests, Blog Posts) into a database
-        /// seeded before this section existed. A brand-new section, unlike
-        /// EnsureAdminQuizBankMenuAsync/EnsureAdminServerMonitoringMenuAsync appending to an
-        /// existing one — computes the next SectionOrder rather than reusing one, so it lands
-        /// after every current admin section without disturbing their order.
-        /// </summary>
-        private static async Task EnsureAdminMarketingMenuAsync(MeetToManageDbContext context)
-        {
-            const string demoRequestsPath = "/admin/demo-requests";
-            const string blogPostsPath = "/admin/blog-posts";
-            if (context.MenuItems.Local.Any(m => m.Portal == "admin" && (m.Path == demoRequestsPath || m.Path == blogPostsPath)) ||
-                await context.MenuItems.AnyAsync(m => m.Portal == "admin" && (m.Path == demoRequestsPath || m.Path == blogPostsPath)))
-            {
-                return;
-            }
-
-            var adminItems = await context.MenuItems.Where(m => m.Portal == "admin").ToListAsync();
-            var nextSectionOrder = adminItems.Count == 0 ? 0 : adminItems.Max(m => m.SectionOrder) + 1;
-
-            context.MenuItems.AddRange(
-                new MenuItem
-                {
-                    Portal = "admin",
-                    Section = "Marketing",
-                    SectionOrder = nextSectionOrder,
-                    Label = "Demo Requests",
-                    Path = demoRequestsPath,
-                    Icon = "Handshake",
-                    SortOrder = 0,
-                    IsActive = true,
-                    RequiredModule = PermissionModule.Marketing.ToString(),
-                },
-                new MenuItem
-                {
-                    Portal = "admin",
-                    Section = "Marketing",
-                    SectionOrder = nextSectionOrder,
-                    Label = "Blog Posts",
-                    Path = blogPostsPath,
-                    Icon = "Newspaper",
-                    SortOrder = 1,
-                    IsActive = true,
-                    RequiredModule = PermissionModule.Marketing.ToString(),
-                });
         }
 
         /// <summary>

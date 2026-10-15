@@ -503,6 +503,7 @@ app.UseCors();
 app.UseAuthentication();
 // "View as parent" sessions are look-only: refuse their writes/joins before authorization runs.
 app.UseMiddleware<ViewAsReadOnlyMiddleware>();
+app.UseMiddleware<MarketingScopeMiddleware>();
 app.UseAuthorization();
 app.UseRateLimiter();
 

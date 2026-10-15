@@ -10,6 +10,13 @@ namespace iucs.meettomanage.domain.Enums
         SubAdmin,
         AdmissionTeam,
         Teacher,
-        Parent
+        Parent,
+        /// <summary>
+        /// The platform owner's marketing-site team (demo requests, blog, SEO, analytics). Separate
+        /// login at /marketing/login; never listed or manageable from the academy's own portals,
+        /// and Admin's permission bypass does not reach the marketing endpoints. Seeded from
+        /// Seed:MarketingEmail / Seed:MarketingPin, not created in-app.
+        /// </summary>
+        Marketing
     }
 }

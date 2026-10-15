@@ -14,5 +14,13 @@ namespace iucs.meettomanage.application.Services
         Task<IReadOnlyList<SettingDto>> UpsertAsync(
             IReadOnlyList<UpdateSettingRequest> updates,
             CancellationToken cancellationToken = default);
+
+        /// <summary>The marketing site's own settings (seo.*, analytics.*), for the marketing console only.</summary>
+        Task<IReadOnlyList<SettingDto>> GetMarketingAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>Upsert limited to marketing keys; always stored public (the marketing site reads them pre-login).</summary>
+        Task<IReadOnlyList<SettingDto>> UpsertMarketingAsync(
+            IReadOnlyList<UpdateSettingRequest> updates,
+            CancellationToken cancellationToken = default);
     }
 }

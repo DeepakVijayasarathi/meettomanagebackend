@@ -77,6 +77,9 @@ namespace iucs.meettomanage.application.Services
                 UserRole.Teacher => "teacher",
                 UserRole.Parent => "parent",
                 UserRole.AdmissionTeam => "admission",
+                // No menu rows exist for this portal: the marketing console has its own fixed
+                // sidebar, and falling through to "admin" would hand it the academy's menu.
+                UserRole.Marketing => "marketing",
                 _ => "admin",
             };
         }

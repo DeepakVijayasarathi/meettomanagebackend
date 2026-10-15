@@ -3,6 +3,7 @@ using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Marketing;
 using iucs.meettomanage.application.Services;
 using iucs.meettomanage.domain.Enums;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 
@@ -62,7 +63,7 @@ namespace iucs.meettomanage.api.Controllers
         }
 
         [HttpGet]
-        [HasPermission(PermissionModule.Marketing, PermissionAction.View)]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
         public async Task<ActionResult<IReadOnlyList<PlatformDemoRequestDto>>> List(
             [FromQuery] StoreInquiryStatus? status,
             CancellationToken cancellationToken)
@@ -71,7 +72,7 @@ namespace iucs.meettomanage.api.Controllers
         }
 
         [HttpPut("{id:guid}/status")]
-        [HasPermission(PermissionModule.Marketing, PermissionAction.Edit)]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
         public async Task<ActionResult<PlatformDemoRequestDto>> UpdateStatus(
             Guid id,
             UpdatePlatformDemoRequestStatusRequest request,
