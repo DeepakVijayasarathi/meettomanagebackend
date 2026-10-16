@@ -86,6 +86,7 @@ namespace iucs.meettomanage.domain.Data
         // Admission's academy-facing class demos above.
         public DbSet<PlatformDemoRequest> PlatformDemoRequests => Set<PlatformDemoRequest>();
         public DbSet<BlogPost> BlogPosts => Set<BlogPost>();
+        public DbSet<MarketingEvent> MarketingEvents => Set<MarketingEvent>();
 
         // Billing
         public DbSet<PaymentAccount> PaymentAccounts => Set<PaymentAccount>();

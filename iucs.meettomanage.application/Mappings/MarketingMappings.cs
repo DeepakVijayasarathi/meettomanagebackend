@@ -32,6 +32,7 @@ namespace iucs.meettomanage.application.Mappings
                 ReadMinutes = post.ReadMinutes,
                 IsPublished = post.IsPublished,
                 PublishedAtUtc = post.PublishedAtUtc,
+                Status = !post.IsPublished ? "Draft" : post.PublishedAtUtc > DateTime.UtcNow ? "Scheduled" : "Published",
                 CreatedAtUtc = post.CreatedAtUtc,
             };
         }

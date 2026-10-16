@@ -72,6 +72,11 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public string Content { get; set; } = null!;
 
         public bool IsPublished { get; set; }
+        /// <summary>
+        /// When a published post goes live. Omit (or a past time) = live now; a future time =
+        /// scheduled — hidden from the public blog until then, no background job needed.
+        /// </summary>
+        public DateTime? PublishAtUtc { get; set; }
     }
 
     public class UpdateBlogPostRequest
@@ -92,6 +97,11 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public string Content { get; set; } = null!;
 
         public bool IsPublished { get; set; }
+        /// <summary>
+        /// When a published post goes live. Omit (or a past time) = live now; a future time =
+        /// scheduled — hidden from the public blog until then, no background job needed.
+        /// </summary>
+        public DateTime? PublishAtUtc { get; set; }
     }
 
     /// <summary>Admin view — every field, published or not.</summary>
@@ -112,6 +122,9 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public bool IsPublished { get; set; }
 
         public DateTime? PublishedAtUtc { get; set; }
+
+        /// <summary>"Draft", "Scheduled" (published, PublishedAtUtc still in the future) or "Published".</summary>
+        public string Status { get; set; } = "Draft";
 
         public DateTime CreatedAtUtc { get; set; }
     }
@@ -178,5 +191,96 @@ namespace iucs.meettomanage.application.Dto.Marketing
 
         /// <summary>Set when the assistant booked a platform demo during this turn — the visitor's name, so the site can confirm it.</summary>
         public string? BookedName { get; set; }
+    }
+
+    /// <summary>Public — one anonymous marketing-site event, sent by the site itself.</summary>
+    public class TrackMarketingEventRequest
+    {
+        [Required]
+        [RegularExpression("^(page_view|chat_started)$")]
+        public string Type { get; set; } = null!;
+
+        [Required]
+        [MaxLength(200)]
+        public string Path { get; set; } = null!;
+
+        /// <summary>The browser's random analytics id (localStorage) — never tied to a person.</summary>
+        [Required]
+        [RegularExpression("^[A-Za-z0-9-]{8,64}$")]
+        public string VisitorId { get; set; } = null!;
+
+        /// <summary>Host of an external referrer (e.g. "www.google.com"); omitted for direct/internal.</summary>
+        [MaxLength(200)]
+        public string? ReferrerHost { get; set; }
+
+        [MaxLength(100)]
+        public string? UtmSource { get; set; }
+
+        [MaxLength(100)]
+        public string? UtmMedium { get; set; }
+
+        [MaxLength(100)]
+        public string? UtmCampaign { get; set; }
+    }
+
+    public class NamedCountDto
+    {
+        public string Name { get; set; } = null!;
+
+        public int Count { get; set; }
+    }
+
+    public class MarketingDailyPointDto
+    {
+        /// <summary>Local calendar day (yyyy-MM-dd) in the caller's time zone offset.</summary>
+        public string Date { get; set; } = null!;
+
+        public int PageViews { get; set; }
+
+        public int Visitors { get; set; }
+
+        public int DemoRequests { get; set; }
+    }
+
+    public class MarketingTotalsDto
+    {
+        public int PageViews { get; set; }
+
+        public int Visitors { get; set; }
+
+        public int ChatsStarted { get; set; }
+
+        public int DemoRequests { get; set; }
+
+        /// <summary>Demo requests the chat assistant booked itself (a subset of DemoRequests).</summary>
+        public int ChatBookings { get; set; }
+
+        /// <summary>Demo requests per 100 unique visitors.</summary>
+        public double ConversionRate { get; set; }
+    }
+
+    /// <summary>The marketing console's analytics dashboard for the last <see cref="Days"/> days.</summary>
+    public class MarketingDashboardDto
+    {
+        public int Days { get; set; }
+
+        public MarketingTotalsDto Totals { get; set; } = new();
+
+        /// <summary>Same figures for the equal-length period just before, for trend arrows.</summary>
+        public MarketingTotalsDto Previous { get; set; } = new();
+
+        public List<MarketingDailyPointDto> Daily { get; set; } = new();
+
+        public List<NamedCountDto> TopPages { get; set; } = new();
+
+        public List<NamedCountDto> TopBlogPosts { get; set; } = new();
+
+        public List<NamedCountDto> Sources { get; set; } = new();
+
+        public List<NamedCountDto> Campaigns { get; set; } = new();
+
+        public List<NamedCountDto> Devices { get; set; } = new();
+
+        public List<NamedCountDto> DemoRequestsByStatus { get; set; } = new();
     }
 }

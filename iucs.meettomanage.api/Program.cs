@@ -344,6 +344,17 @@ builder.Services.AddRateLimiter(options =>
             }));
     // Public marketing chat: every message is a paid model call, so this caps one visitor's
     // spend while still allowing a real back-and-forth conversation.
+    // Marketing-site analytics beacons: generous enough for a visitor browsing quickly, low
+    // enough that one IP can't flood the events table.
+    options.AddPolicy("marketing-track", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
     options.AddPolicy("marketing-chat", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",

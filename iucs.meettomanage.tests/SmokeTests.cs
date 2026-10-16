@@ -1,5 +1,6 @@
 using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Exceptions;
+using iucs.meettomanage.application.Dto.Marketing;
 using iucs.meettomanage.application.Dto.Academics;
 using iucs.meettomanage.application.Dto.Admission;
 using iucs.meettomanage.application.Dto.Auth;
@@ -12208,6 +12209,92 @@ namespace iucs.meettomanage.tests
             await Assert.ThrowsAsync<NotFoundException>(() => users.ResetPinAsync(marketer.Id));
             await Assert.ThrowsAsync<NotFoundException>(() => users.SetStatusAsync(marketer.Id, UserStatus.Inactive));
             await Assert.ThrowsAsync<DomainValidationException>(() => users.ChangeRoleAsync(teacher.Id, UserRole.Marketing));
+        }
+
+        /// <summary>A post published with a future time stays off the public blog until then.</summary>
+        [Fact]
+        public async Task Blog_ScheduledPost_IsHiddenUntilItsPublishTime()
+        {
+            var blog = new BlogService(_db.UnitOfWork, _auditLog);
+            var later = DateTime.UtcNow.AddDays(2);
+
+            var scheduled = await blog.CreateAsync(new CreateBlogPostRequest
+            {
+                Title = "Scheduled post", Excerpt = "Soon", Content = "Body text", IsPublished = true, PublishAtUtc = later,
+            });
+            var live = await blog.CreateAsync(new CreateBlogPostRequest
+            {
+                Title = "Live post", Excerpt = "Now", Content = "Body text", IsPublished = true,
+            });
+
+            Assert.Equal("Scheduled", scheduled.Status);
+            Assert.Equal("Published", live.Status);
+            var listed = await blog.ListPublishedAsync();
+            Assert.DoesNotContain(listed, p => p.Id == scheduled.Id);
+            Assert.Contains(listed, p => p.Id == live.Id);
+            await Assert.ThrowsAsync<NotFoundException>(() => blog.GetPublishedBySlugAsync(scheduled.Slug));
+
+            // Editing a live post (the editor resends its existing date) must not move its date.
+            var edited = await blog.UpdateAsync(live.Id, new UpdateBlogPostRequest
+            {
+                Title = "Live post", Slug = live.Slug, Excerpt = "Edited", Content = "Body text", IsPublished = true,
+                PublishAtUtc = live.PublishedAtUtc,
+            });
+            Assert.Equal(live.PublishedAtUtc, edited.PublishedAtUtc);
+
+            // Saving the scheduled one without a future time publishes it now.
+            var now = await blog.UpdateAsync(scheduled.Id, new UpdateBlogPostRequest
+            {
+                Title = "Scheduled post", Slug = scheduled.Slug, Excerpt = "Soon", Content = "Body text", IsPublished = true,
+            });
+            Assert.Equal("Published", now.Status);
+            Assert.Contains(await blog.ListPublishedAsync(), p => p.Id == scheduled.Id);
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => blog.CreateAsync(new CreateBlogPostRequest
+            {
+                Title = "Too far", Excerpt = "x", Content = "x", IsPublished = true, PublishAtUtc = DateTime.UtcNow.AddYears(2),
+            }));
+        }
+
+        [Fact]
+        public async Task MarketingAnalytics_CountsVisitorsSourcesAndBookings_AndDropsBots()
+        {
+            var analytics = new MarketingAnalyticsService(_db.UnitOfWork);
+            const string desktop = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0";
+            const string phone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148";
+
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/", VisitorId = "visitor-aaaa", ReferrerHost = "www.google.com" }, desktop);
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/pricing?x=1", VisitorId = "visitor-aaaa" }, desktop);
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/blog/five-signs/", VisitorId = "visitor-bbbb", UtmSource = "Instagram", UtmCampaign = "launch" }, phone);
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "chat_started", Path = "/", VisitorId = "visitor-bbbb" }, phone);
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/", VisitorId = "visitor-cccc" }, "Googlebot/2.1 (+http://www.google.com/bot.html)");
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/<script>", VisitorId = "visitor-dddd" }, desktop);
+
+            var demos = new PlatformDemoRequestService(_db.UnitOfWork, _auditLog);
+            await demos.CreateAsync(new CreatePlatformDemoRequestRequest { FullName = "A", WorkEmail = "a@x.com", Phone = "9000000001", AcademyName = "A Academy" });
+            await demos.CreateAsync(new CreatePlatformDemoRequestRequest
+            {
+                FullName = "B", WorkEmail = "b@x.com", Phone = "9000000002", AcademyName = "B School",
+                Message = "Booked by the website chat assistant. Notes: 200 students",
+            });
+
+            var dashboard = await analytics.GetDashboardAsync(30, 330);
+
+            Assert.Equal(3, dashboard.Totals.PageViews);
+            Assert.Equal(2, dashboard.Totals.Visitors);
+            Assert.Equal(1, dashboard.Totals.ChatsStarted);
+            Assert.Equal(2, dashboard.Totals.DemoRequests);
+            Assert.Equal(1, dashboard.Totals.ChatBookings);
+            Assert.Equal(100, dashboard.Totals.ConversionRate);
+            Assert.Equal(30, dashboard.Daily.Count);
+            Assert.Equal(3, dashboard.Daily.Sum(d => d.PageViews));
+            Assert.Contains(dashboard.TopPages, p => p.Name == "/pricing");
+            Assert.Contains(dashboard.TopBlogPosts, p => p.Name == "/blog/five-signs" && p.Count == 1);
+            Assert.Contains(dashboard.Sources, s => s.Name == "Google" && s.Count == 1);
+            Assert.Contains(dashboard.Sources, s => s.Name == "Instagram" && s.Count == 1);
+            Assert.Contains(dashboard.Campaigns, c => c.Name == "launch");
+            Assert.Contains(dashboard.Devices, d => d.Name == "mobile" && d.Count == 1);
+            Assert.Contains(dashboard.Devices, d => d.Name == "desktop" && d.Count == 1);
         }
 
         public void Dispose() => _db.Dispose();

@@ -21,11 +21,36 @@ namespace iucs.meettomanage.api.Controllers
     {
         private readonly IPlatformDemoRequestService _platformDemoRequestService;
         private readonly ISalesAssistant _salesAssistant;
+        private readonly IMarketingAnalyticsService _analytics;
 
-        public MarketingController(IPlatformDemoRequestService platformDemoRequestService, ISalesAssistant salesAssistant)
+        public MarketingController(
+            IPlatformDemoRequestService platformDemoRequestService,
+            ISalesAssistant salesAssistant,
+            IMarketingAnalyticsService analytics)
         {
             _platformDemoRequestService = platformDemoRequestService;
             _salesAssistant = salesAssistant;
+            _analytics = analytics;
+        }
+
+        /// <summary>Anonymous analytics beacon from the public marketing pages (page views, chat starts).</summary>
+        [HttpPost("track")]
+        [EnableRateLimiting("marketing-track")]
+        public async Task<IActionResult> Track(TrackMarketingEventRequest request, CancellationToken cancellationToken)
+        {
+            await _analytics.TrackAsync(request, Request.Headers.UserAgent.ToString(), cancellationToken);
+            return NoContent();
+        }
+
+        /// <summary>The marketing console's analytics dashboard. Marketing role only.</summary>
+        [HttpGet("analytics")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingDashboardDto>> Analytics(
+            [FromQuery] int days = 30,
+            [FromQuery] int tzOffsetMinutes = 0,
+            CancellationToken cancellationToken = default)
+        {
+            return Ok(await _analytics.GetDashboardAsync(days, tzOffsetMinutes, cancellationToken));
         }
 
         [HttpPost("demo-requests")]

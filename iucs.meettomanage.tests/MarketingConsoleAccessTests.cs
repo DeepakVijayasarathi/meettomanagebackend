@@ -84,6 +84,15 @@ namespace iucs.meettomanage.tests
         /// Admin passes every HasPermission check, so a marketing endpoint gated that way would be
         /// open to every academy Admin. Each one must require the Marketing role instead.
         /// </summary>
+        /// <summary>The analytics dashboard lives on the otherwise-public MarketingController.</summary>
+        [Fact]
+        public void AnalyticsDashboard_RequiresTheMarketingRole()
+        {
+            var action = typeof(MarketingController).GetMethod(nameof(MarketingController.Analytics))!;
+            Assert.Empty(action.GetCustomAttributes<HasPermissionAttribute>());
+            Assert.Contains(nameof(UserRole.Marketing), action.GetCustomAttributes<AuthorizeAttribute>().Select(a => a.Roles));
+        }
+
         [Theory]
         [InlineData(typeof(PlatformDemoRequestsAdminController))]
         [InlineData(typeof(BlogAdminController))]
