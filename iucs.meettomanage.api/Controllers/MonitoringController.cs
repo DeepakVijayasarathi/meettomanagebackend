@@ -169,7 +169,7 @@ namespace iucs.meettomanage.api.Controllers
         [HasPermission(PermissionModule.SystemMonitoring, PermissionAction.Edit)]
         public async Task<ActionResult> BroadcastReload([FromQuery] string? message, CancellationToken cancellationToken)
         {
-            await _classroomHub.Clients.All.SendAsync(
+            await _classroomHub.Clients.Group(iucs.meettomanage.api.Hubs.ClassroomHub.TenantGroup).SendAsync(
                 "ReloadRequested",
                 string.IsNullOrWhiteSpace(message) ? "An update is available." : message,
                 cancellationToken);

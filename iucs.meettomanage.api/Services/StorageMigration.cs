@@ -213,6 +213,9 @@ namespace iucs.meettomanage.api.Services
         public static async Task<HashSet<string>> ReferencedKeysAsync(IServiceProvider services, CancellationToken cancellationToken)
         {
             using var scope = services.CreateScope();
+            if (iucs.meettomanage.application.Common.TenantExecution.Current is { } tenant)
+                await scope.ServiceProvider.GetRequiredService<iucs.meettomanage.api.Tenancy.TenantResolver>()
+                    .ResolveCodeAsync(tenant.Code, cancellationToken);
             var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
             var resources = await unitOfWork.Repository<Resource>().Query().Select(r => r.FileUrl).ToListAsync(cancellationToken);
             var presentations = await unitOfWork.Repository<SessionPresentation>().Query().Select(p => p.StorageUrl).ToListAsync(cancellationToken);
@@ -254,7 +257,8 @@ namespace iucs.meettomanage.api.Services
         private readonly IServiceProvider _services;
         private readonly IConfiguration _configuration;
         private readonly object _gate = new();
-        private StorageSyncProgress? _current;
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, StorageSyncProgress> _progress = new();
+        private static Guid CurrentTenant => iucs.meettomanage.application.Common.TenantExecution.Current?.Id ?? Guid.Empty;
 
         public StorageSyncService(IServiceProvider services, IConfiguration configuration)
         {
@@ -263,20 +267,20 @@ namespace iucs.meettomanage.api.Services
         }
 
         /// <summary>A snapshot of the latest sync, safe to serialize while it runs.</summary>
-        public StorageSyncProgress? Current => _current?.Snapshot();
+        public StorageSyncProgress? Current => _progress.TryGetValue(CurrentTenant, out var progress) ? progress.Snapshot() : null;
 
         /// <summary>Starts a sync; false when one is already running.</summary>
         public bool TryStart(string to)
         {
             lock (_gate)
             {
-                if (_current is { Running: true })
+                if (_progress.TryGetValue(CurrentTenant, out var current) && current.Running)
                 {
                     return false;
                 }
 
                 var progress = new StorageSyncProgress { To = to, Running = true, StartedAtUtc = DateTime.UtcNow };
-                _current = progress;
+                _progress[CurrentTenant] = progress;
                 _ = Task.Run(() => StorageMigration.SyncAsync(to, _services, _configuration, progress, CancellationToken.None));
                 return true;
             }

@@ -362,7 +362,7 @@ namespace iucs.meettomanage.application.Services
             return body.Length <= PreviewLength ? body : body[..PreviewLength].TrimEnd() + "…";
         }
 
-        private string FrontendBaseUrl() => (_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173").TrimEnd('/');
+        private string FrontendBaseUrl() => iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173");
 
         /// <summary>
         /// Alerts every active Admin plus every active Sub Admin holding SupportTickets:View.

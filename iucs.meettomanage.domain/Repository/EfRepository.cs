@@ -88,13 +88,18 @@ namespace iucs.meettomanage.domain.Repository
         }
 
         /// <inheritdoc />
-        public Task<int> ExecuteHardDeleteAsync(
+        public async Task<int> ExecuteHardDeleteAsync(
             Expression<Func<TEntity, bool>> predicate,
             CancellationToken cancellationToken = default)
         {
             // .IgnoreQueryFilters() -- see the interface doc comment: a hard-delete purge must
             // also remove a row this entity's own soft-delete filter would otherwise hide.
-            return _dbSet.IgnoreQueryFilters().Where(predicate).ExecuteDeleteAsync(cancellationToken);
+            if (typeof(TEntity) == typeof(Entities.Users.User))
+            {
+                var ids = await _dbSet.IgnoreQueryFilters().Where(predicate).Select(x => x.Id).ToListAsync(cancellationToken);
+                _context.LoginDirectoryChanges.AddRange(ids.Select(id => new Entities.Tenancy.LoginDirectoryChange { UserId = id }));
+            }
+            return await _dbSet.IgnoreQueryFilters().Where(predicate).ExecuteDeleteAsync(cancellationToken);
         }
 
         /// <inheritdoc />

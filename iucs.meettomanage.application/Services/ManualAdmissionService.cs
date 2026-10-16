@@ -322,7 +322,7 @@ namespace iucs.meettomanage.application.Services
                 // A first-time parent must see the Terms & Conditions before paying (reported live:
                 // the raw gateway link let a new parent pay without them) -- so the link is the
                 // portal's /pay page, which shows the Terms and then opens the gateway.
-                var frontendBase = (_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in").TrimEnd('/');
+                var frontendBase = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in");
                 paymentLinkUrl = $"{frontendBase}/pay/{InvoicePayToken.Create(invoice.Id, _configuration["Jwt:SigningKey"])}";
             }
             else if (invoice is not null && amountDue > 0)
@@ -357,7 +357,7 @@ namespace iucs.meettomanage.application.Services
             }
 
             var loginId = ParentLogin.IsPlaceholderEmail(parent.Email) ? (phone ?? parent.Phone ?? string.Empty) : parent.Email;
-            var loginUrl = (_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in").TrimEnd('/') + "/login";
+            var loginUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in") + "/login";
             var currency = invoice?.Currency ?? "INR";
 
             return new ManualAdmissionResultDto

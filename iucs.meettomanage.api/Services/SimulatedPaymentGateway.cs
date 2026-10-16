@@ -36,7 +36,7 @@ namespace iucs.meettomanage.api.Services
 
             return Task.FromResult(new PaymentLinkResult
             {
-                Url = $"{_payBaseUrl.TrimEnd('/')}/parent/billing?invoice={invoice.Id}&ref={reference}",
+                Url = $"{iucs.meettomanage.application.Common.TenantExecution.Url(_payBaseUrl)}/parent/billing?invoice={invoice.Id}&ref={reference}",
                 GatewayReference = reference,
             });
         }

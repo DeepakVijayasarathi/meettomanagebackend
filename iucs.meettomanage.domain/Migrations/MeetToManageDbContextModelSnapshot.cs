@@ -4974,6 +4974,25 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("app_settings");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Tenancy.LoginDirectoryChange", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasColumnName("id");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_login_directory_changes");
+
+                    b.ToTable("login_directory_changes");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Users.AccessRequest", b =>
                 {
                     b.Property<Guid>("Id")

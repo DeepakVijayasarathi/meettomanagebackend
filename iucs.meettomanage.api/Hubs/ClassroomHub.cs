@@ -73,10 +73,18 @@ namespace iucs.meettomanage.api.Hubs
 
         public record ParticipantState(string Name, string Role, bool HandRaised);
 
-        private static string Group(string sessionId) => $"classroom-{sessionId}";
+        private static string StateKey(string sessionId) => iucs.meettomanage.application.Common.TenantExecution.Current is { } tenant ? $"{tenant.Id:N}:{sessionId}" : sessionId;
+        private static string Group(string sessionId) => $"classroom-{StateKey(sessionId)}";
 
         /// <summary>The SignalR group a session's live classroom clients join — for server-side pushes via IHubContext.</summary>
         public static string GroupFor(Guid sessionId) => Group(sessionId.ToString());
+        public static string TenantGroup => "classroom-tenant-" + (iucs.meettomanage.application.Common.TenantExecution.Current?.Id.ToString("N") ?? "legacy");
+
+        public override async Task OnConnectedAsync()
+        {
+            await Groups.AddToGroupAsync(Context.ConnectionId, TenantGroup);
+            await base.OnConnectedAsync();
+        }
 
         private bool IsTeacher =>
             Context.User?.IsInRole(nameof(UserRole.Teacher)) == true
@@ -100,7 +108,7 @@ namespace iucs.meettomanage.api.Hubs
         /// <summary>Joined AND the room recorded this connection's role as teacher at join time.</summary>
         private bool IsTeacherInRoom(string sessionId) =>
             IsJoined(sessionId)
-            && Rooms.TryGetValue(sessionId, out var room)
+            && Rooms.TryGetValue(StateKey(sessionId), out var room)
             && room.TryGetValue(Context.ConnectionId, out var state)
             && state.Role == "teacher";
 
@@ -209,8 +217,8 @@ namespace iucs.meettomanage.api.Hubs
             // room -- sessionGuid there is the owner's own account id, never a real ClassSession,
             // so GetLeaderboardAsync could only ever come back empty; skipping avoids a pointless
             // DB round-trip on every personal-room join.
-            var isNewRoom = !Rooms.ContainsKey(sessionId);
-            var room = Rooms.GetOrAdd(sessionId, _ => new ConcurrentDictionary<string, ParticipantState>());
+            var isNewRoom = !Rooms.ContainsKey(StateKey(sessionId));
+            var room = Rooms.GetOrAdd(StateKey(sessionId), _ => new ConcurrentDictionary<string, ParticipantState>());
             room[Context.ConnectionId] = new ParticipantState(name, role, HandRaised: false);
             Context.Items["sessionId"] = sessionId;
 
@@ -219,7 +227,7 @@ namespace iucs.meettomanage.api.Hubs
                 var persisted = await _gamificationService.GetLeaderboardAsync(sessionGuid, top: 50, Context.ConnectionAborted);
                 if (persisted.Count > 0)
                 {
-                    var scores = Scores.GetOrAdd(sessionId, _ => new ConcurrentDictionary<string, int>());
+                    var scores = Scores.GetOrAdd(StateKey(sessionId), _ => new ConcurrentDictionary<string, int>());
                     foreach (var entry in persisted)
                     {
                         scores[entry.ParticipantName] = entry.Stars;
@@ -237,7 +245,7 @@ namespace iucs.meettomanage.api.Hubs
             // arrives on (SignalR preserves per-connection delivery order), so the client-side
             // handler that already knows how to apply a Board op needs no separate code path
             // for a replayed one.
-            if (BoardHistory.TryGetValue(sessionId, out var boardHistory))
+            if (BoardHistory.TryGetValue(StateKey(sessionId), out var boardHistory))
             {
                 string[] snapshot;
                 lock (boardHistory)
@@ -252,7 +260,7 @@ namespace iucs.meettomanage.api.Hubs
 
             // Same idea as the whiteboard replay above, for whichever slide the teacher's
             // already on — a mid-class joiner should see the current slide, not page 0.
-            if (CurrentSlide.TryGetValue(sessionId, out var pageIndex))
+            if (CurrentSlide.TryGetValue(StateKey(sessionId), out var pageIndex))
             {
                 await Clients.Caller.SendAsync("Slide", pageIndex);
             }
@@ -260,7 +268,7 @@ namespace iucs.meettomanage.api.Hubs
             // Same idea again for whoever the teacher currently has pinned/spotlighted — a
             // student who joins after the teacher already pinned themselves (or anyone else)
             // should land on that same view, not the room's default tile layout with no pin.
-            if (PinnedParticipant.TryGetValue(sessionId, out var pinnedId))
+            if (PinnedParticipant.TryGetValue(StateKey(sessionId), out var pinnedId))
             {
                 await Clients.Caller.SendAsync("Pinned", pinnedId);
             }
@@ -320,13 +328,13 @@ namespace iucs.meettomanage.api.Hubs
             // The teacher always has access; anyone else needs an explicit grant recorded by
             // SetBoardAccess below — this is the actual enforcement, not just a UI hint.
             var hasAccess = IsTeacherInRoom(sessionId)
-                || (BoardAccessGrants.TryGetValue(sessionId, out var grants) && grants.ContainsKey(Context.ConnectionId));
+                || (BoardAccessGrants.TryGetValue(StateKey(sessionId), out var grants) && grants.ContainsKey(Context.ConnectionId));
             if (!hasAccess)
             {
                 return;
             }
 
-            var history = BoardHistory.GetOrAdd(sessionId, _ => new List<string>());
+            var history = BoardHistory.GetOrAdd(StateKey(sessionId), _ => new List<string>());
             lock (history)
             {
                 history.Add(opJson);
@@ -365,7 +373,7 @@ namespace iucs.meettomanage.api.Hubs
                 return;
             }
 
-            CurrentSlide[sessionId] = pageIndex;
+            CurrentSlide[StateKey(sessionId)] = pageIndex;
             await Clients.OthersInGroup(Group(sessionId)).SendAsync("Slide", pageIndex);
         }
 
@@ -391,7 +399,7 @@ namespace iucs.meettomanage.api.Hubs
                 return;
             }
 
-            PinnedParticipant[sessionId] = participantId;
+            PinnedParticipant[StateKey(sessionId)] = participantId;
             await Clients.OthersInGroup(Group(sessionId)).SendAsync("Pinned", participantId);
         }
 
@@ -468,7 +476,7 @@ namespace iucs.meettomanage.api.Hubs
                 return;
             }
 
-            if (!AnsweredQuestions.TryAdd($"{sessionId}:{Context.ConnectionId}:{questionIndex}", 0))
+            if (!AnsweredQuestions.TryAdd($"{StateKey(sessionId)}:{Context.ConnectionId}:{questionIndex}", 0))
             {
                 return;
             }
@@ -539,7 +547,7 @@ namespace iucs.meettomanage.api.Hubs
         public async Task RaiseHand(string sessionId, bool raised)
         {
             if (IsJoined(sessionId)
-                && Rooms.TryGetValue(sessionId, out var room)
+                && Rooms.TryGetValue(StateKey(sessionId), out var room)
                 && room.TryGetValue(Context.ConnectionId, out var state))
             {
                 room[Context.ConnectionId] = state with { HandRaised = raised };
@@ -558,12 +566,12 @@ namespace iucs.meettomanage.api.Hubs
             // The target connection must be a member of THIS room too — otherwise a
             // legitimate teacher of one class could grant/revoke board access on an
             // arbitrary connection id belonging to a completely different session.
-            if (!Rooms.TryGetValue(sessionId, out var room) || !room.ContainsKey(connectionId))
+            if (!Rooms.TryGetValue(StateKey(sessionId), out var room) || !room.ContainsKey(connectionId))
             {
                 return;
             }
 
-            var grants = BoardAccessGrants.GetOrAdd(sessionId, _ => new ConcurrentDictionary<string, byte>());
+            var grants = BoardAccessGrants.GetOrAdd(StateKey(sessionId), _ => new ConcurrentDictionary<string, byte>());
             if (allowed)
             {
                 grants[connectionId] = 0;
@@ -582,10 +590,10 @@ namespace iucs.meettomanage.api.Hubs
         {
             _presenceTracker.UserLeft(sessionId, Context.ConnectionId);
 
-            if (Rooms.TryGetValue(sessionId, out var room))
+            if (Rooms.TryGetValue(StateKey(sessionId), out var room))
             {
                 room.TryRemove(Context.ConnectionId, out var removedState);
-                if (BoardAccessGrants.TryGetValue(sessionId, out var grants))
+                if (BoardAccessGrants.TryGetValue(StateKey(sessionId), out var grants))
                 {
                     grants.TryRemove(Context.ConnectionId, out _);
                 }
@@ -624,13 +632,13 @@ namespace iucs.meettomanage.api.Hubs
 
                 if (room.IsEmpty)
                 {
-                    Rooms.TryRemove(sessionId, out _);
-                    Scores.TryRemove(sessionId, out _); // class over — scoreboard resets
-                    BoardAccessGrants.TryRemove(sessionId, out _);
-                    BoardHistory.TryRemove(sessionId, out _);
-                    CurrentSlide.TryRemove(sessionId, out _);
-                    PinnedParticipant.TryRemove(sessionId, out _);
-                    foreach (var key in AnsweredQuestions.Keys.Where(k => k.StartsWith($"{sessionId}:", StringComparison.Ordinal)))
+                    Rooms.TryRemove(StateKey(sessionId), out _);
+                    Scores.TryRemove(StateKey(sessionId), out _); // class over — scoreboard resets
+                    BoardAccessGrants.TryRemove(StateKey(sessionId), out _);
+                    BoardHistory.TryRemove(StateKey(sessionId), out _);
+                    CurrentSlide.TryRemove(StateKey(sessionId), out _);
+                    PinnedParticipant.TryRemove(StateKey(sessionId), out _);
+                    foreach (var key in AnsweredQuestions.Keys.Where(k => k.StartsWith($"{StateKey(sessionId)}:", StringComparison.Ordinal)))
                     {
                         AnsweredQuestions.TryRemove(key, out _);
                     }
@@ -647,18 +655,18 @@ namespace iucs.meettomanage.api.Hubs
         /// <summary>Shared by AnswerQuiz and AwardStar — bumps the in-memory live score only.</summary>
         private static void AddLiveStar(string sessionId, string name)
         {
-            var scores = Scores.GetOrAdd(sessionId, _ => new ConcurrentDictionary<string, int>());
+            var scores = Scores.GetOrAdd(StateKey(sessionId), _ => new ConcurrentDictionary<string, int>());
             scores.AddOrUpdate(name, 1, (_, current) => current + 1);
         }
 
         private string UserNameFor(string sessionId) =>
-            Rooms.TryGetValue(sessionId, out var room) && room.TryGetValue(Context.ConnectionId, out var state)
+            Rooms.TryGetValue(StateKey(sessionId), out var room) && room.TryGetValue(Context.ConnectionId, out var state)
                 ? state.Name
                 : UserName;
 
         private async Task BroadcastRosterAsync(string sessionId)
         {
-            if (!Rooms.TryGetValue(sessionId, out var room))
+            if (!Rooms.TryGetValue(StateKey(sessionId), out var room))
             {
                 return;
             }
@@ -677,7 +685,7 @@ namespace iucs.meettomanage.api.Hubs
 
         private async Task SendLeaderboardAsync(string sessionId)
         {
-            var board = Scores.TryGetValue(sessionId, out var scores)
+            var board = Scores.TryGetValue(StateKey(sessionId), out var scores)
                 ? scores.Select(kv => new { name = kv.Key, stars = kv.Value })
                     .OrderByDescending(e => e.stars)
                     .Take(10)

@@ -169,7 +169,7 @@ namespace iucs.meettomanage.api.Controllers
                 configuration.GetSection("Cors:AllowedOrigins").Get<string[]>());
             var joinUrl = $"{frontendBaseUrl}/guest-join?token={Uri.EscapeDataString(guestLink.Token)}";
             var slug = await shortLinks.CreateAsync(joinUrl, guestLink.ExpiresAtUtc, userId, cancellationToken);
-            var apiBaseUrl = $"{Request.Scheme}://{Request.Host}";
+            var apiBaseUrl = iucs.meettomanage.application.Common.TenantExecution.Url($"{Request.Scheme}://{Request.Host}");
             return Ok(new { url = $"{apiBaseUrl}/m/{slug}" });
         }
 
@@ -649,7 +649,7 @@ namespace iucs.meettomanage.api.Controllers
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             }
 
-            return Ok(new { url = $"/api/sessions/calendar/mine.ics?token={user.CalendarFeedToken:N}" });
+            return Ok(new { url = iucs.meettomanage.application.Common.TenantExecution.Url("") + $"/api/sessions/calendar/mine.ics?token={user.CalendarFeedToken:N}" });
         }
 
         /// <summary>Role-scoped personal iCalendar feed: teachers get their classes, parents their children's.</summary>

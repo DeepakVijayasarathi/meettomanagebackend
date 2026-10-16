@@ -6,22 +6,24 @@ namespace iucs.meettomanage.application.Services
     /// <summary>Singleton, in-memory. See IClassroomPresenceTracker for why this exists alongside ClassroomHub's own Rooms dictionary.</summary>
     public class ClassroomPresenceTracker : IClassroomPresenceTracker
     {
+        private static string Prefix => Common.TenantExecution.Current is { } tenant ? tenant.Id.ToString("N") + ":" : "";
+        private IEnumerable<ConcurrentDictionary<string, LivePresenceEntry>> TenantRooms => _rooms.Where(x => x.Key.StartsWith(Prefix, StringComparison.Ordinal)).Select(x => x.Value);
         private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, LivePresenceEntry>> _rooms = new();
 
         public void UserJoined(string sessionId, string connectionId, Guid userId, string name, string role)
         {
-            var room = _rooms.GetOrAdd(sessionId, _ => new ConcurrentDictionary<string, LivePresenceEntry>());
+            var room = _rooms.GetOrAdd(Prefix + sessionId, _ => new ConcurrentDictionary<string, LivePresenceEntry>());
             room[connectionId] = new LivePresenceEntry(sessionId, userId, name, role, DateTime.UtcNow);
         }
 
         public void UserLeft(string sessionId, string connectionId)
         {
-            if (_rooms.TryGetValue(sessionId, out var room))
+            if (_rooms.TryGetValue(Prefix + sessionId, out var room))
             {
                 room.TryRemove(connectionId, out _);
                 if (room.IsEmpty)
                 {
-                    _rooms.TryRemove(sessionId, out _);
+                    _rooms.TryRemove(Prefix + sessionId, out _);
                 }
             }
         }
@@ -33,12 +35,12 @@ namespace iucs.meettomanage.application.Services
         // Jibri's "recording observer" connection (see ClassroomHub.JoinSession) is excluded
         // from every reader below -- it's a robot, not a person, and would otherwise show up as
         // a phantom "Recording" participant in the admin's live-users dashboard.
-        public int TotalConnectedUsers => _rooms.Values.Sum(r => r.Values.Where(IsRealPerson).Select(v => v.UserId).Distinct().Count());
+        public int TotalConnectedUsers => TenantRooms.Sum(r => r.Values.Where(IsRealPerson).Select(v => v.UserId).Distinct().Count());
 
-        public int ActiveClassCount => _rooms.Values.Count(room => room.Values.Any(IsRealPerson));
+        public int ActiveClassCount => TenantRooms.Count(room => room.Values.Any(IsRealPerson));
 
         public IReadOnlyList<LivePresenceEntry> GetLiveConnections() =>
-            _rooms.Values.SelectMany(room => room.Values).Where(IsRealPerson).ToList();
+            TenantRooms.SelectMany(room => room.Values).Where(IsRealPerson).ToList();
 
         private static bool IsRealPerson(LivePresenceEntry entry) => entry.Role != "observer";
     }

@@ -23,8 +23,36 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
+using Microsoft.AspNetCore.SignalR;
+using iucs.meettomanage.api.Tenancy;
 
+if (args.Contains("platform-password-hash", StringComparer.Ordinal))
+{
+    PlatformPasswordCommand.Run();
+    return;
+}
 var builder = WebApplication.CreateBuilder(args);
+var tenantMode = builder.Configuration.GetValue<bool>("MultiTenancy:Enabled");
+// Local development may reuse its existing PostgreSQL server credentials while
+// keeping the control plane in a new database. Never infer production mappings.
+if (tenantMode && builder.Environment.IsDevelopment())
+{
+    var localConnection = builder.Configuration.GetConnectionString("ReaderNestDb");
+    if (!string.IsNullOrWhiteSpace(localConnection))
+    {
+        var local = new Npgsql.NpgsqlConnectionStringBuilder(localConnection);
+        if (local.Host is "localhost" or "127.0.0.1" or "::1")
+        {
+            if (string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("MasterDb")))
+                builder.Configuration["ConnectionStrings:MasterDb"] = new Npgsql.NpgsqlConnectionStringBuilder(local.ConnectionString)
+                    { Database = "meettomanage_tenants" }.ConnectionString;
+            if (string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("TenantServer")))
+                builder.Configuration["ConnectionStrings:TenantServer"] = new Npgsql.NpgsqlConnectionStringBuilder(local.ConnectionString)
+                    { Database = "postgres" }.ConnectionString;
+        }
+    }
+}
+if (tenantMode) builder.Services.AddTenantServices(builder.Configuration);
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
@@ -42,14 +70,18 @@ var connectionString =
     builder.Configuration.GetConnectionString("ReaderNestDb") ??
     Environment.GetEnvironmentVariable("ConnectionStrings__ReaderNestDb");
 
-if (string.IsNullOrWhiteSpace(connectionString))
+if (!tenantMode && string.IsNullOrWhiteSpace(connectionString))
 {
     throw new InvalidOperationException("Database connection string is missing.");
 }
 
 builder.Services.AddDbContext<MeetToManageDbContext>((serviceProvider, options) =>
-    options.UseNpgsql(connectionString)
-           .AddInterceptors(serviceProvider.GetRequiredService<AuditableEntityInterceptor>()));
+{
+    options.UseNpgsql(tenantMode
+        ? TenantServices.BoundTenant(serviceProvider).RequireConnectionString()
+        : connectionString).AddInterceptors(serviceProvider.GetRequiredService<AuditableEntityInterceptor>());
+    if (tenantMode) options.AddInterceptors(serviceProvider.GetRequiredService<LoginDirectoryInterceptor>());
+});
 
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
@@ -83,19 +115,24 @@ builder.Services.AddSingleton<StorageProviderSwitch>();
 var s3Storage = S3FileStorage.IsConfigured(builder.Configuration) ? new S3FileStorage(builder.Configuration) : null;
 if (s3Storage is not null)
 {
-    builder.Services.AddSingleton(s3Storage);
+    if (tenantMode) builder.Services.AddScoped(sp => TenantServices.InTenant(sp, () => new S3FileStorage(builder.Configuration, s3Storage)));
+    else builder.Services.AddSingleton(s3Storage);
 }
 
 // With S3 configured it doubles as the fallback for files not yet copied to this server.
-builder.Services.AddSingleton(sp => new LocalFileStorage(
+ServiceLifetime fileLifetime = tenantMode ? ServiceLifetime.Scoped : ServiceLifetime.Singleton;
+builder.Services.Add(new ServiceDescriptor(typeof(LocalFileStorage), sp => tenantMode
+    ? TenantServices.InTenant(sp, () => new LocalFileStorage(sp.GetRequiredService<IWebHostEnvironment>(), builder.Configuration,
+        sp.GetRequiredService<IHttpContextAccessor>(), sp.GetService<S3FileStorage>()))
+    : new LocalFileStorage(
     sp.GetRequiredService<IWebHostEnvironment>(),
     builder.Configuration,
     sp.GetRequiredService<IHttpContextAccessor>(),
-    s3Storage));
-builder.Services.AddSingleton(sp => new RoutingFileStorage(
-    sp.GetRequiredService<StorageProviderSwitch>(), sp.GetRequiredService<LocalFileStorage>(), s3Storage));
-builder.Services.AddSingleton<IFileStorage>(sp => sp.GetRequiredService<RoutingFileStorage>());
-builder.Services.AddSingleton<IDirectUploadStorage>(sp => sp.GetRequiredService<RoutingFileStorage>());
+    s3Storage), fileLifetime));
+builder.Services.Add(new ServiceDescriptor(typeof(RoutingFileStorage), sp => new RoutingFileStorage(
+    sp.GetRequiredService<StorageProviderSwitch>(), sp.GetRequiredService<LocalFileStorage>(), sp.GetService<S3FileStorage>()), fileLifetime));
+builder.Services.Add(new ServiceDescriptor(typeof(IFileStorage), sp => sp.GetRequiredService<RoutingFileStorage>(), fileLifetime));
+builder.Services.Add(new ServiceDescriptor(typeof(IDirectUploadStorage), sp => sp.GetRequiredService<RoutingFileStorage>(), fileLifetime));
 // Parses uploaded bulk-import spreadsheets (.csv/.xlsx) for Users/Students/Departments/
 // Courses/Package Plans/Quiz Questions — stateless, so singleton is fine.
 builder.Services.AddSingleton<IBulkFileReader, BulkFileReader>();
@@ -117,27 +154,27 @@ builder.Services.AddScoped<iucs.meettomanage.api.Services.Payments.IGatewayAdapt
 builder.Services.AddScoped<iucs.meettomanage.api.Services.Payments.IGatewayAdapter, iucs.meettomanage.api.Services.Payments.CashfreeGateway>();
 builder.Services.AddScoped<IPaymentGateway, iucs.meettomanage.api.Services.Payments.PaymentGatewayDispatcher>();
 // Auto billing: recurring invoice generation + overdue flagging + fee suspension
-builder.Services.AddHostedService<BillingBackgroundService>();
+builder.Services.AddTenantWorker<BillingBackgroundService>(tenantMode);
 // Session reminders, delayed-session alerts
-builder.Services.AddHostedService<SessionReminderBackgroundService>();
-builder.Services.AddHostedService<AbandonedClassCompletionBackgroundService>();
+builder.Services.AddTenantWorker<SessionReminderBackgroundService>(tenantMode);
+builder.Services.AddTenantWorker<AbandonedClassCompletionBackgroundService>(tenantMode);
 // Automatic no-show detection: flags a session once its grace period elapses with one
 // side never having joined, instead of relying solely on a human clicking "Mark No-Show"
-builder.Services.AddHostedService<NoShowDetectionBackgroundService>();
+builder.Services.AddTenantWorker<NoShowDetectionBackgroundService>(tenantMode);
 // Batch payment plan reminders: "payment after N sessions" / "payment due on a specific date"
-builder.Services.AddHostedService<PaymentPlanReminderBackgroundService>();
+builder.Services.AddTenantWorker<PaymentPlanReminderBackgroundService>(tenantMode);
 // Catches a completed class that never received a recording — auto-record can start
 // with no error yet still fail later in the pipeline, which nothing else catches
-builder.Services.AddHostedService<RecordingReconciliationBackgroundService>();
+builder.Services.AddTenantWorker<RecordingReconciliationBackgroundService>(tenantMode);
 // CRM integration: lead webhooks, no-op until Integrations:CrmWebhookUrl is set
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ICrmNotifier, WebhookCrmNotifier>();
 // Automated reports: weekly KPI digest to admins
-builder.Services.AddHostedService<ReportsDigestBackgroundService>();
-builder.Services.AddHostedService<BulkEmailQueueBackgroundService>();
+builder.Services.AddTenantWorker<ReportsDigestBackgroundService>(tenantMode);
+builder.Services.AddTenantWorker<BulkEmailQueueBackgroundService>(tenantMode);
 // Progress reports: seeds an empty monthly draft per active child on the 1st
-builder.Services.AddHostedService<ProgressReportsBackgroundService>();
-builder.Services.AddHostedService<LeaveCancellationReportBackgroundService>();
+builder.Services.AddTenantWorker<ProgressReportsBackgroundService>(tenantMode);
+builder.Services.AddTenantWorker<LeaveCancellationReportBackgroundService>(tenantMode);
 
 // Authentication: JWT bearer
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
@@ -180,6 +217,13 @@ builder.Services
         {
             OnMessageReceived = context =>
             {
+                if (context.Request.Path.Value is "/api/auth/login" or "/api/auth/forgot-pin"
+                    || (context.HttpContext.Items["TenantPathCode"] is string
+                        && context.HttpContext.GetEndpoint()?.Metadata.GetMetadata<IAllowAnonymous>() is not null))
+                {
+                    context.NoResult();
+                    return Task.CompletedTask;
+                }
                 var accessToken = context.Request.Query["access_token"];
                 if (!string.IsNullOrEmpty(accessToken)
                     && context.HttpContext.Request.Path.StartsWithSegments("/hubs"))
@@ -199,6 +243,33 @@ builder.Services
             // call — the same shape of cost this check already paid for the status-only version.
             OnTokenValidated = async context =>
             {
+                if (context.Principal?.FindFirstValue("purpose") == "platform-admin"
+                    && context.Principal.IsInRole("PlatformAdmin"))
+                {
+                    if (!tenantMode) context.Fail("Platform administration is not enabled.");
+                    return;
+                }
+                if (tenantMode)
+                {
+                    if (!Guid.TryParse(context.Principal?.FindFirstValue(TenantContext.TenantIdClaim), out var tenantId)
+                        || context.Principal?.FindFirstValue(TenantContext.TenantCodeClaim) is not { } tenantCode)
+                    {
+                        context.Fail("A tenant-bound token is required.");
+                        return;
+                    }
+                    try
+                    {
+                        await context.HttpContext.RequestServices.GetRequiredService<TenantResolver>()
+                            .ResolveTokenAsync(tenantId, tenantCode, context.HttpContext.RequestAborted);
+                    }
+                    catch (Exception ex) when (!context.HttpContext.RequestAborted.IsCancellationRequested)
+                    {
+                        context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+                            .CreateLogger("TenantAuthentication").LogWarning(ex, "Tenant resolution failed.");
+                        context.Fail("The tenant is unavailable.");
+                        return;
+                    }
+                }
                 // Jibri's recording-observer token (ClassroomHub-only, see
                 // CreateRecordingObserverHubToken) carries a throwaway subject that never
                 // resolves to a real User row -- the active-account check below would always
@@ -235,6 +306,11 @@ builder.Services
                 }
                 catch (Exception ex) when (!context.HttpContext.RequestAborted.IsCancellationRequested)
                 {
+                    if (tenantMode)
+                    {
+                        context.Fail("Current account access could not be verified.");
+                        return;
+                    }
                     // A DB hiccup here (slow query, exhausted connection pool under class-time
                     // load) used to throw out of this handler, which JwtBearer turns into a 401 —
                     // and the frontend treats any 401 as "session over": it clears the token and
@@ -307,11 +383,14 @@ builder.Services
 builder.Services.AddMemoryCache();
 
 // Real-time classroom layer (roster, whiteboard sync, quizzes, celebrations)
-builder.Services.AddSignalR();
+builder.Services.AddSignalR(options =>
+{
+    if (tenantMode) options.AddFilter<TenantHubFilter>();
+});
 
 // Live Server Monitoring push (replaces the dashboard's client-side poll)
 builder.Services.AddSingleton<iucs.meettomanage.api.Hubs.MonitoringConnectionTracker>();
-builder.Services.AddHostedService<iucs.meettomanage.api.Services.MonitoringBroadcastService>();
+builder.Services.AddTenantWorker<iucs.meettomanage.api.Services.MonitoringBroadcastService>(tenantMode);
 
 // Brute-force protection on login: framework-provided rate limiting (built into
 // ASP.NET Core since .NET 7, no extra package). Rejects immediately over the limit
@@ -402,7 +481,8 @@ builder.Services.AddRateLimiter(options =>
 });
 
 // Authorization: module/action permission policies (Admin passes implicitly)
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options => options.AddPolicy("PlatformAdmin", policy =>
+    policy.RequireAuthenticatedUser().RequireRole("PlatformAdmin").RequireClaim("purpose", "platform-admin")));
 builder.Services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProvider>();
 builder.Services.AddSingleton<IAuthorizationHandler, PermissionAuthorizationHandler>();
 
@@ -460,6 +540,7 @@ var app = builder.Build();
 // and the local folder, then exit without starting the web server (see StorageMigration).
 if (StorageMigration.IsRequested(args))
 {
+    if (tenantMode) throw new InvalidOperationException("Use the tenant's storage-sync page in multi-tenant mode.");
     Environment.ExitCode = await StorageMigration.RunAsync(args, app.Services, app.Configuration);
     return;
 }
@@ -483,6 +564,31 @@ app.UseForwardedHeaders(forwardedHeadersOptions);
 app.UseResponseCompression();
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
+
+// A public client URL carries routing metadata. The endpoint's normal bearer,
+// capability-token, HMAC or IP checks still authorize the requested operation.
+app.Use(async (http, next) =>
+{
+    if (!tenantMode && http.Request.Path.StartsWithSegments("/api/platform"))
+    {
+        http.Response.StatusCode = 404;
+        return;
+    }
+    if (tenantMode && http.Request.Path.StartsWithSegments("/t", out var remaining))
+    {
+        var segments = (remaining.Value ?? "").Split('/', 3, StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length >= 1)
+        {
+            http.Items["TenantPathCode"] = segments[0];
+            var prefix = new PathString("/t/" + segments[0]);
+            http.Request.PathBase = http.Request.PathBase.Add(prefix);
+            http.Request.Path = remaining.Value!.Length > segments[0].Length + 1
+                ? new PathString(remaining.Value[(segments[0].Length + 1)..]) : new PathString("/");
+        }
+    }
+    await next(http);
+});
+app.UseRouting();
 
 if (app.Environment.IsDevelopment())
 {
@@ -517,6 +623,7 @@ app.UseMiddleware<ViewAsReadOnlyMiddleware>();
 app.UseMiddleware<MarketingScopeMiddleware>();
 app.UseAuthorization();
 app.UseRateLimiter();
+if (tenantMode) app.UseMiddleware<TenantRequestMiddleware>();
 
 app.MapControllers();
 app.MapHub<iucs.meettomanage.api.Hubs.ClassroomHub>("/hubs/classroom");
@@ -549,10 +656,11 @@ app.MapGet("/m/{slug}", async (
         : Results.Redirect(target, permanent: false);
 });
 
-await DatabaseInitializer.InitializeAsync(app.Services, app.Configuration);
+if (tenantMode) await app.InitializeTenantsAsync();
+else await DatabaseInitializer.InitializeAsync(app.Services, app.Configuration);
 
 // The S3-or-local choice saved on Admin → Settings → File storage.
-await app.Services.GetRequiredService<StorageProviderSwitch>().LoadAsync(app.Services);
+if (!tenantMode) await app.Services.GetRequiredService<StorageProviderSwitch>().LoadAsync(app.Services);
 
 // Browser-direct (multipart) uploads need the bucket itself to allow the portal's origin. Done
 // whenever S3 is configured, so switching to it from the Settings page works straight away.

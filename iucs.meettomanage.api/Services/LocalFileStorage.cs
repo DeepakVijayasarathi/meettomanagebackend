@@ -49,6 +49,7 @@ namespace iucs.meettomanage.api.Services
         private readonly string? _configuredBaseUrl;
         private readonly IHttpContextAccessor _httpContext;
         private readonly S3FileStorage? _fallback;
+        private readonly string _keyPrefix = "";
 
         /// <param name="fallback">
         /// S3, when it's still configured: a file not found on this server is read from there, so
@@ -63,6 +64,12 @@ namespace iucs.meettomanage.api.Services
             _signingKey = Encoding.UTF8.GetBytes(configuration["Jwt:SigningKey"] is { Length: > 0 } key ? key : "local-storage-dev-key");
             _configuredBaseUrl = configuration["Api:BaseUrl"]?.TrimEnd('/');
             _httpContext = httpContext;
+            if (iucs.meettomanage.application.Common.TenantExecution.Current is { } tenant)
+            {
+                _rootPath = Path.Combine(_rootPath, tenant.Id.ToString("N"));
+                _keyPrefix = tenant.Id.ToString("N") + "-";
+                _signingKey = HMACSHA256.HashData(_signingKey, Encoding.UTF8.GetBytes(tenant.Id.ToString("N")));
+            }
         }
 
         public string RootPath => _rootPath;
@@ -358,13 +365,13 @@ namespace iucs.meettomanage.api.Services
             var request = _httpContext.HttpContext?.Request;
             if (request is not null && request.Host.HasValue)
             {
-                return $"{request.Scheme}://{request.Host}{request.PathBase}".TrimEnd('/');
+                return iucs.meettomanage.application.Common.TenantExecution.Url($"{request.Scheme}://{request.Host}{request.PathBase}");
             }
 
-            return _configuredBaseUrl ?? string.Empty;
+            return iucs.meettomanage.application.Common.TenantExecution.Url(_configuredBaseUrl ?? string.Empty);
         }
 
-        private static string NewKey(string originalFileName)
+        private string NewKey(string originalFileName)
         {
             var extension = Path.GetExtension(originalFileName);
             if (string.IsNullOrEmpty(extension) || !AllowedExtensions.Contains(extension))
@@ -374,7 +381,7 @@ namespace iucs.meettomanage.api.Services
                     string.Join(", ", AllowedExtensions.OrderBy(e => e)) + ".");
             }
 
-            return $"{Guid.NewGuid():N}{extension.ToLowerInvariant()}";
+            return $"{_keyPrefix}{Guid.NewGuid():N}{extension.ToLowerInvariant()}";
         }
 
         private string PathFor(string key) =>

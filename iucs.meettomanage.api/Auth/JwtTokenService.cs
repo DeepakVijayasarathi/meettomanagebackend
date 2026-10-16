@@ -6,6 +6,7 @@ using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.domain.Entities.Users;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using iucs.meettomanage.api.Tenancy;
 
 namespace iucs.meettomanage.api.Auth
 {
@@ -15,10 +16,20 @@ namespace iucs.meettomanage.api.Auth
         public const string PermissionClaimType = "perm";
 
         private readonly JwtOptions _options;
+        private readonly TenantContext? _tenant;
 
-        public JwtTokenService(IOptions<JwtOptions> options)
+        public JwtTokenService(IOptions<JwtOptions> options, TenantContext? tenant = null)
         {
             _options = options.Value;
+            _tenant = tenant;
+        }
+
+        private void AddTenantClaims(List<Claim> claims)
+        {
+            if (_tenant is null) return;
+            if (_tenant.TenantId is not { } id) throw new InvalidOperationException("Resolve a tenant before issuing a token.");
+            claims.Add(new(TenantContext.TenantIdClaim, id.ToString()));
+            claims.Add(new(TenantContext.TenantCodeClaim, _tenant.TenantCode!));
         }
 
         public TokenResult CreateToken(User user, IReadOnlyCollection<string> permissionClaims)
@@ -44,6 +55,7 @@ namespace iucs.meettomanage.api.Auth
             };
             claims.AddRange(permissionClaims.Select(p => new Claim(PermissionClaimType, p)));
             claims.AddRange(extraClaims);
+            AddTenantClaims(claims);
 
             var credentials = new SigningCredentials(
                 new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey)),
@@ -78,6 +90,7 @@ namespace iucs.meettomanage.api.Auth
                 new("purpose", "recording-observer"),
                 new("sessionId", sessionId.ToString()),
             };
+            AddTenantClaims(claims);
 
             var credentials = new SigningCredentials(
                 new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey)),
@@ -119,6 +132,7 @@ namespace iucs.meettomanage.api.Auth
                 new("purpose", GuestClassroomPurpose),
                 new(SessionIdClaimType, sessionId.ToString()),
             };
+            AddTenantClaims(claims);
             if (childId is Guid cid)
             {
                 claims.Add(new Claim(ChildIdClaimType, cid.ToString()));
@@ -151,6 +165,7 @@ namespace iucs.meettomanage.api.Auth
                 new("purpose", GuestJoinPurpose),
                 new(SessionIdClaimType, sessionId.ToString()),
             };
+            AddTenantClaims(claims);
             if (childId is Guid cid)
             {
                 claims.Add(new Claim(ChildIdClaimType, cid.ToString()));
@@ -233,6 +248,8 @@ namespace iucs.meettomanage.api.Auth
             {
                 return null;
             }
+            if (_tenant is not null && (principal.FindFirst(TenantContext.TenantIdClaim)?.Value != _tenant.TenantId?.ToString()
+                || principal.FindFirst(TenantContext.TenantCodeClaim)?.Value != _tenant.TenantCode)) return null;
 
             if (!Guid.TryParse(principal.FindFirst(SessionIdClaimType)?.Value, out var sessionId))
             {

@@ -14,7 +14,7 @@ namespace iucs.meettomanage.application.Services
 {
     public class EmailTemplateService : IEmailTemplateService
     {
-        private const string CacheKeyPrefix = "email-template:";
+        private static string CacheKeyPrefix => $"email-template:{TenantExecution.Current?.Id.ToString() ?? "legacy"}:";
 
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;

@@ -20,10 +20,10 @@ namespace iucs.meettomanage.application.Helper
                 && allowedOrigins is not null
                 && allowedOrigins.Any(a => string.Equals(a?.Trim().TrimEnd('/'), origin, StringComparison.OrdinalIgnoreCase)))
             {
-                return origin;
+                return Common.TenantExecution.Url(origin);
             }
 
-            return configured;
+            return Common.TenantExecution.Url(configured);
         }
     }
 }

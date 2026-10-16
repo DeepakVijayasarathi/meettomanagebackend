@@ -26,14 +26,28 @@ namespace iucs.meettomanage.api.Services
 
         private readonly IAmazonS3 _client;
         private readonly string _bucket;
+        private readonly string _prefix = iucs.meettomanage.application.Common.TenantExecution.Current is { } tenant
+            ? tenant.Id.ToString("N") + "-" : "";
+
+        private void RequireOwnedKey(string key)
+        {
+            if (_prefix.Length > 0 && !key.StartsWith(_prefix, StringComparison.Ordinal))
+                throw new ForbiddenException("The file does not belong to this tenant.");
+        }
 
         /// <summary>True when every Storage:S3:* value is set (endpoint, keys, bucket).</summary>
         public static bool IsConfigured(IConfiguration configuration) =>
             new[] { "Endpoint", "AccessKey", "SecretKey", "BucketName" }
                 .All(k => !string.IsNullOrWhiteSpace(configuration[$"Storage:S3:{k}"]));
 
-        public S3FileStorage(IConfiguration configuration)
+        public S3FileStorage(IConfiguration configuration, S3FileStorage? shared = null)
         {
+            if (shared is not null)
+            {
+                _client = shared._client;
+                _bucket = shared._bucket;
+                return;
+            }
             // appsettings.json seeds these as "" (so the key names are discoverable), not
             // absent — a plain `?? throw` only catches a missing key, not that empty default,
             // and let this constructor build ServiceURL = "https://" from an unset endpoint
@@ -79,7 +93,7 @@ namespace iucs.meettomanage.api.Services
                     string.Join(", ", AllowedExtensions.OrderBy(e => e)) + ".");
             }
 
-            var key = $"{Guid.NewGuid():N}{extension.ToLowerInvariant()}";
+            var key = $"{_prefix}{Guid.NewGuid():N}{extension.ToLowerInvariant()}";
 
             // S3's PutObject needs the content length up front and a seekable stream for
             // retries; the incoming upload stream (an ASP.NET Core IFormFile stream) is
@@ -133,7 +147,7 @@ namespace iucs.meettomanage.api.Services
                     string.Join(", ", AllowedExtensions.OrderBy(e => e)) + ".");
             }
 
-            var key = $"{Guid.NewGuid():N}{extension.ToLowerInvariant()}";
+            var key = $"{_prefix}{Guid.NewGuid():N}{extension.ToLowerInvariant()}";
             try
             {
                 var response = await _client.InitiateMultipartUploadAsync(
@@ -154,6 +168,7 @@ namespace iucs.meettomanage.api.Services
 
         public IReadOnlyList<PresignedPart> GetPartUrls(string key, string uploadId, IEnumerable<int> partNumbers)
         {
+            RequireOwnedKey(key);
             return partNumbers.Distinct().Select(n => new PresignedPart
             {
                 PartNumber = n,
@@ -173,6 +188,7 @@ namespace iucs.meettomanage.api.Services
         public async Task<long> CompleteMultipartAsync(
             string key, string uploadId, IReadOnlyList<UploadedPart> parts, CancellationToken cancellationToken = default)
         {
+            RequireOwnedKey(key);
             try
             {
                 await _client.CompleteMultipartUploadAsync(
@@ -195,6 +211,7 @@ namespace iucs.meettomanage.api.Services
 
         public async Task AbortMultipartAsync(string key, string uploadId, CancellationToken cancellationToken = default)
         {
+            RequireOwnedKey(key);
             try
             {
                 await _client.AbortMultipartUploadAsync(
@@ -274,6 +291,7 @@ namespace iucs.meettomanage.api.Services
 
         public string GetReadUrl(string key, TimeSpan validFor, string? contentType)
         {
+            RequireOwnedKey(key);
             var request = new GetPreSignedUrlRequest
             {
                 BucketName = _bucket,
@@ -299,7 +317,7 @@ namespace iucs.meettomanage.api.Services
         public async Task<List<(string Key, long Size)>> ListAllAsync(CancellationToken cancellationToken = default)
         {
             var all = new List<(string Key, long Size)>();
-            var request = new ListObjectsV2Request { BucketName = _bucket };
+            var request = new ListObjectsV2Request { BucketName = _bucket, Prefix = _prefix };
             ListObjectsV2Response response;
             do
             {
@@ -315,6 +333,7 @@ namespace iucs.meettomanage.api.Services
         /// <summary>Whether the object is in the bucket; null when S3 can't be reached to tell.</summary>
         public async Task<bool?> ExistsAsync(string key, CancellationToken cancellationToken = default)
         {
+            RequireOwnedKey(key);
             try
             {
                 await _client.GetObjectMetadataAsync(_bucket, key, cancellationToken);
@@ -333,12 +352,14 @@ namespace iucs.meettomanage.api.Services
         /// <summary>Uploads a file under an exact key (the local -> S3 migration keeps keys unchanged).</summary>
         public async Task SaveAsync(string key, Stream content, CancellationToken cancellationToken = default)
         {
+            RequireOwnedKey(key);
             using var transfer = new Amazon.S3.Transfer.TransferUtility(_client);
             await transfer.UploadAsync(content, _bucket, key, cancellationToken);
         }
 
         public async Task<Stream?> OpenReadAsync(string relativePath, CancellationToken cancellationToken = default)
         {
+            RequireOwnedKey(relativePath);
             try
             {
                 var response = await _client.GetObjectAsync(_bucket, relativePath, cancellationToken);

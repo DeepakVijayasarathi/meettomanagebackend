@@ -482,6 +482,6 @@ namespace iucs.meettomanage.application.Services
 
         private static string NewToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
-        private string BaseUrl() => (_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in").TrimEnd('/');
+        private string BaseUrl() => iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in");
     }
 }

@@ -643,7 +643,7 @@ namespace iucs.meettomanage.application.Services
             {
                 var pin = await _userService.RevealPinAsync(parentUserId, cancellationToken);
                 await _unitOfWork.SaveChangesAsync(cancellationToken);
-                var loginUrl = (_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in").TrimEnd('/') + "/login";
+                var loginUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in") + "/login";
                 var loginId = booking.ParentPhone ?? string.Empty;
                 result.IssuedLogin = new IssuedParentLoginDto
                 {
@@ -706,7 +706,7 @@ namespace iucs.meettomanage.application.Services
             if (ParentLogin.IsDeliverable(email))
             {
                 var pin = await _userService.RevealPinAsync(created.Id, cancellationToken);
-                var portalUrl = (_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in").TrimEnd('/');
+                var portalUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in");
                 await _notificationService.SendTemplatedEmailAsync(
                     created.Id,
                     email,
@@ -1223,7 +1223,7 @@ namespace iucs.meettomanage.application.Services
 
             var guestLink = await _sessionService.CreateGuestLinkForParticipantAsync(
                 session.Id, participantName, participantEmail, cancellationToken);
-            var frontendBaseUrl = (_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173").TrimEnd('/');
+            var frontendBaseUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173");
             return $"{frontendBaseUrl}/guest-join?token={Uri.EscapeDataString(guestLink.Token)}";
         }
 
@@ -1244,7 +1244,7 @@ namespace iucs.meettomanage.application.Services
         /// </summary>
         private string BuildStableJoinUrl(Guid bookingId, Guid? participantId)
         {
-            var apiBaseUrl = (_configuration["Api:BaseUrl"] ?? "https://api.thereadernest.in").TrimEnd('/');
+            var apiBaseUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Api:BaseUrl"] ?? "https://api.thereadernest.in");
             var query = participantId.HasValue ? $"?p={participantId.Value}" : string.Empty;
             return $"{apiBaseUrl}/api/demo-bookings/{bookingId}/join{query}";
         }
@@ -1475,7 +1475,7 @@ namespace iucs.meettomanage.application.Services
         /// </summary>
         private string BuildTeacherDemoAppJoinUrl(ClassSession session)
         {
-            var frontendBaseUrl = (_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173").TrimEnd('/');
+            var frontendBaseUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173");
             return $"{frontendBaseUrl}/teacher/live/{session.Id}";
         }
 

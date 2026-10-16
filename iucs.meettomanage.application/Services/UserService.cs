@@ -274,6 +274,11 @@ namespace iucs.meettomanage.application.Services
                 }
             }
 
+            // Commit identity/global alias validation before sending credentials.
+            // A rejected cross-tenant duplicate must never receive a welcome PIN.
+            await _auditLog.StageAsync(AuditAction.Create, nameof(User), user.Id.ToString(), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
             // Requirement: the account holder receives login credentials on creation.
             // The plain-text temp PIN lives only in this email, never in the database.
             if (!request.SuppressWelcomeEmail)
@@ -291,9 +296,6 @@ namespace iucs.meettomanage.application.Services
                     },
                     cancellationToken);
             }
-
-            await _auditLog.StageAsync(AuditAction.Create, nameof(User), user.Id.ToString(), cancellationToken: cancellationToken);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             return user.ToDto();
         }

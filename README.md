@@ -1,5 +1,9 @@
 # Meet to Manage Backend
 
+Database-per-tenant setup, provisioning, login routing and live-data import are
+documented in [docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md). Tenant mode is enabled
+by default; manage clients, menus and configuration through `/platform/tenants`.
+
 .NET 9 Web API for the Meet to Manage LMS & Virtual Classroom platform (internal project/namespace names remain `iucs.meettomanage.*` — see note below).
 
 ## Solution structure

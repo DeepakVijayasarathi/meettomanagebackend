@@ -39,9 +39,8 @@ namespace iucs.meettomanage.application.Services
             // A menu item with no RequiredModule is always visible; a gated item shows
             // only when the user's assigned role grants View on that module (Admin bypasses).
             var visible = items.Where(m =>
-                m.RequiredModule is null
-                || isAdmin
-                || viewableModules.Contains(m.RequiredModule));
+                (Common.TenantExecution.Current is null || m.RequiredModule != nameof(PermissionModule.SystemMonitoring))
+                && (m.RequiredModule is null || isAdmin || viewableModules.Contains(m.RequiredModule)));
 
             return visible.Select(ToDto).ToList();
         }

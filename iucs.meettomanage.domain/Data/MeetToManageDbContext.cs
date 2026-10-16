@@ -30,6 +30,7 @@ namespace iucs.meettomanage.domain.Data
         }
 
         // Users & access control
+        public DbSet<iucs.meettomanage.domain.Entities.Tenancy.LoginDirectoryChange> LoginDirectoryChanges => Set<iucs.meettomanage.domain.Entities.Tenancy.LoginDirectoryChange>();
         public DbSet<User> Users => Set<User>();
         public DbSet<ParentProfile> ParentProfiles => Set<ParentProfile>();
         public DbSet<TeacherProfile> TeacherProfiles => Set<TeacherProfile>();

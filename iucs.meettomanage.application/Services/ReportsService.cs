@@ -25,7 +25,7 @@ namespace iucs.meettomanage.application.Services
 
         // The dashboard summary is org-wide (not per user) and a screenful of aggregates; a
         // minute of staleness is invisible, recomputing it on every page view is not.
-        private const string DashboardSummaryCacheKey = "reports:dashboard-summary";
+        private static string DashboardSummaryCacheKey => $"reports:dashboard-summary:{Common.TenantExecution.Current?.Id.ToString() ?? "legacy"}";
         private static readonly TimeSpan DashboardSummaryTtl = TimeSpan.FromSeconds(60);
 
         public ReportsService(IUnitOfWork unitOfWork, INotificationService notificationService, IMemoryCache? cache = null)

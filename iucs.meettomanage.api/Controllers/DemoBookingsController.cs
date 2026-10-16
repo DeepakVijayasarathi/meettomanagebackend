@@ -241,7 +241,7 @@ namespace iucs.meettomanage.api.Controllers
             var joinUrl = await _demoBookingService.GetJoinLinkAsync(id, cancellationToken);
             var userId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
             var slug = await shortLinks.CreateAsync(joinUrl, DateTime.UtcNow.AddYears(10), userId, cancellationToken);
-            var apiBaseUrl = $"{Request.Scheme}://{Request.Host}";
+            var apiBaseUrl = iucs.meettomanage.application.Common.TenantExecution.Url($"{Request.Scheme}://{Request.Host}");
             return Ok(new { joinUrl, shortUrl = $"{apiBaseUrl}/m/{slug}" });
         }
 

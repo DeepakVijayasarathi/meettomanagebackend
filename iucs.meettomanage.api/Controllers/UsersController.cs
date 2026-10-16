@@ -240,7 +240,7 @@ namespace iucs.meettomanage.api.Controllers
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             }
 
-            var apiBaseUrl = $"{Request.Scheme}://{Request.Host}";
+            var apiBaseUrl = iucs.meettomanage.application.Common.TenantExecution.Url($"{Request.Scheme}://{Request.Host}");
             // The site this request came from (when it is an origin CORS already trusts) rather than the
             // one fixed Frontend:BaseUrl -- on UAT that setting still names production, so the invite
             // link used to open the wrong site.

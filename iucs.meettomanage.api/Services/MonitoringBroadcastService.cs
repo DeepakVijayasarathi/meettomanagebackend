@@ -44,7 +44,7 @@ namespace iucs.meettomanage.api.Services
                         using var scope = _scopeFactory.CreateScope();
                         var monitoring = scope.ServiceProvider.GetRequiredService<IMonitoringService>();
                         var summary = await monitoring.GetSummaryAsync(stoppingToken);
-                        await _hubContext.Clients.All.SendAsync("MonitoringUpdate", summary, stoppingToken);
+                        await _hubContext.Clients.Group(MonitoringHub.TenantGroup).SendAsync("MonitoringUpdate", summary, stoppingToken);
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)

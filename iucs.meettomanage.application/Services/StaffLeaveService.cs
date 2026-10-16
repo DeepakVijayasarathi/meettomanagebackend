@@ -232,7 +232,7 @@ namespace iucs.meettomanage.application.Services
                                         && grants.Any(p => p.UserId == u.Id && p.Module == module && p.CanApprove))))
                     .ToListAsync(cancellationToken);
 
-                var baseUrl = (_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173").TrimEnd('/');
+                var baseUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173");
                 foreach (var approver in approvers)
                 {
                     var portal = approver.Role == UserRole.Admin

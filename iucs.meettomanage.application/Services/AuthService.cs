@@ -198,8 +198,9 @@ namespace iucs.meettomanage.application.Services
 
             var phone = ParentLogin.NormalizePhone(value)!;
             var lastFour = phone[^4..];
+            var tenantMobileLogin = bool.TryParse(_configuration["MultiTenancy:Enabled"], out var enabled) && enabled;
             var candidates = (await _unitOfWork.Repository<User>().TrackedQuery()
-                    .Where(u => u.Role == UserRole.Parent && u.Phone != null && u.Phone.Contains(lastFour))
+                    .Where(u => (tenantMobileLogin || u.Role == UserRole.Parent) && u.Phone != null && u.Phone.Contains(lastFour))
                     .ToListAsync(cancellationToken))
                 .Where(u => ParentLogin.NormalizePhone(u.Phone) == phone)
                 .ToList();
@@ -267,7 +268,7 @@ namespace iucs.meettomanage.application.Services
                 cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-            var frontendBaseUrl = (_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173").TrimEnd('/');
+            var frontendBaseUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173");
             var resetUrl = $"{frontendBaseUrl}/reset-pin?token={Uri.EscapeDataString(token)}";
 
             await _notificationService.SendTemplatedEmailAsync(
@@ -422,6 +423,8 @@ namespace iucs.meettomanage.application.Services
         {
             return new LoginResponse
             {
+                TenantId = TenantExecution.Current?.Id,
+                TenantCode = TenantExecution.Current?.Code,
                 AccessToken = token?.AccessToken ?? string.Empty,
                 ExpiresAtUtc = token?.ExpiresAtUtc ?? default,
                 User = user.ToDto(),

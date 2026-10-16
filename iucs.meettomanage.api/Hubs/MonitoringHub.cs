@@ -14,6 +14,7 @@ namespace iucs.meettomanage.api.Hubs
     [HasPermission(PermissionModule.SystemMonitoring, PermissionAction.View)]
     public class MonitoringHub : Hub
     {
+        public static string TenantGroup => "monitoring-" + (iucs.meettomanage.application.Common.TenantExecution.Current?.Id.ToString("N") ?? "legacy");
         private readonly MonitoringConnectionTracker _tracker;
 
         public MonitoringHub(MonitoringConnectionTracker tracker)
@@ -21,10 +22,11 @@ namespace iucs.meettomanage.api.Hubs
             _tracker = tracker;
         }
 
-        public override Task OnConnectedAsync()
+        public override async Task OnConnectedAsync()
         {
             _tracker.Increment();
-            return base.OnConnectedAsync();
+            await Groups.AddToGroupAsync(Context.ConnectionId, TenantGroup);
+            await base.OnConnectedAsync();
         }
 
         public override Task OnDisconnectedAsync(Exception? exception)
@@ -37,10 +39,11 @@ namespace iucs.meettomanage.api.Hubs
     /// <summary>Lets MonitoringBroadcastService skip its Prometheus round-trip entirely when nobody has the monitoring page open.</summary>
     public class MonitoringConnectionTracker
     {
-        private int _count;
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, int> _counts = new();
+        private static Guid TenantId => iucs.meettomanage.application.Common.TenantExecution.Current?.Id ?? Guid.Empty;
 
-        public void Increment() => Interlocked.Increment(ref _count);
-        public void Decrement() => Interlocked.Decrement(ref _count);
-        public bool HasConnections => Volatile.Read(ref _count) > 0;
+        public void Increment() => _counts.AddOrUpdate(TenantId, 1, (_, count) => count + 1);
+        public void Decrement() => _counts.AddOrUpdate(TenantId, 0, (_, count) => Math.Max(0, count - 1));
+        public bool HasConnections => _counts.TryGetValue(TenantId, out var count) && count > 0;
     }
 }

@@ -4,6 +4,8 @@ namespace iucs.meettomanage.application.Dto.Auth
 {
     public class LoginResponse
     {
+        public Guid? TenantId { get; set; }
+        public string? TenantCode { get; set; }
         public string AccessToken { get; set; } = null!;
 
         public DateTime ExpiresAtUtc { get; set; }

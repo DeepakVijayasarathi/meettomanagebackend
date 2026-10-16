@@ -405,7 +405,7 @@ namespace iucs.meettomanage.application.Services
                                     && approvers.Any(p => p.UserId == u.Id && p.Module == module && p.CanApprove))))
                 .ToListAsync(cancellationToken);
 
-            var baseUrl = (_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173").TrimEnd('/');
+            var baseUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "http://localhost:5173");
             foreach (var recipient in recipients)
             {
                 var portal = recipient.Role == UserRole.Admin

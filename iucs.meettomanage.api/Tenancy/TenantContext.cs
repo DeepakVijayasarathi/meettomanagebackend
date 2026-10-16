@@ -1,0 +1,30 @@
+namespace iucs.meettomanage.api.Tenancy;
+
+/// <summary>Immutable after binding, to prevent changing databases within a request/job.</summary>
+public sealed class TenantContext
+{
+    public const string TenantIdClaim = "tenant_id";
+    public const string TenantCodeClaim = "tenant_code";
+
+    public Guid? TenantId { get; private set; }
+    public string? TenantCode { get; private set; }
+    internal string? ConnectionString { get; private set; }
+
+    internal void Bind(Guid id, string code, string connectionString)
+    {
+        if (id == Guid.Empty || string.IsNullOrWhiteSpace(code) || string.IsNullOrWhiteSpace(connectionString))
+            throw new ArgumentException("A complete tenant binding is required.");
+        if (TenantId is not null)
+        {
+            if (TenantId != id || TenantCode != code || ConnectionString != connectionString)
+                throw new InvalidOperationException("The tenant cannot change within an existing scope.");
+            return;
+        }
+        TenantId = id;
+        TenantCode = code;
+        ConnectionString = connectionString;
+    }
+
+    public string RequireConnectionString() => ConnectionString
+        ?? throw new InvalidOperationException("A tenant must be resolved before accessing business data.");
+}

@@ -23,9 +23,12 @@ namespace iucs.meettomanage.api.Data
     /// </summary>
     public static class DatabaseInitializer
     {
-        public static async Task InitializeAsync(IServiceProvider services, IConfiguration configuration)
+        public static async Task InitializeAsync(IServiceProvider services, IConfiguration configuration,
+            iucs.meettomanage.domain.Entities.Tenancy.Tenant? tenant = null)
         {
             using var scope = services.CreateScope();
+            if (tenant is not null)
+                scope.ServiceProvider.GetRequiredService<iucs.meettomanage.api.Tenancy.TenantResolver>().BindForProvisioning(tenant);
             var context = scope.ServiceProvider.GetRequiredService<MeetToManageDbContext>();
 
             if (configuration.GetValue<bool>("Database:MigrateOnStartup"))
@@ -436,6 +439,9 @@ namespace iucs.meettomanage.api.Data
                 .Select(s => s.Key)
                 .ToListAsync();
 
+            // A fresh tenant's base seed is still tracked and not yet committed.
+            // Database queries alone cannot see those keys.
+            existingKeys.AddRange(context.AppSettings.Local.Where(s => !s.IsDeleted).Select(s => s.Key));
             var missing = SeoSettingDefaults(Setting).Where(s => !existingKeys.Contains(s.Key));
             context.AppSettings.AddRange(missing);
         }
