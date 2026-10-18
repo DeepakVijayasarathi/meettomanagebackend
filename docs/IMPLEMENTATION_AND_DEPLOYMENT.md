@@ -264,6 +264,15 @@ internal HTTP port restricted to the proxy, as in the loopback bindings above.
 6. In the operator console, select the client on the menu/configuration pages
    and make the required changes.
 
+**Using an existing database.** The create form has an optional *Existing database
+name*. Leave it empty to get a generated `mt_<hex>` database. If you enter a name
+(lowercase letters, digits, underscores; not `postgres`, `template0/1` or the master
+database) that already exists on the tenant server, the database is kept as-is and only
+its missing migrations are applied; if it does not exist it is created. For an existing
+database no administrator is seeded and no PIN is reset, and the client is left
+**Suspended**: run **Sync imported logins**, then activate it. A new database still
+requires the administrator email and PIN.
+
 Failed provisioning retains the database for diagnosis. Check API logs and use
 Retry with the intended original administrator details. The management API does
 not provide a tenant database deletion operation.

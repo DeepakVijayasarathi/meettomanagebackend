@@ -167,6 +167,20 @@ public sealed class TenantResolutionTests : IDisposable
     public void RegistryDatabaseNamesCannotInjectConnectionOptions(string name) =>
         Assert.Throws<InvalidOperationException>(() => TenantResolver.BuildConnectionString("Host=localhost;Username=app", name));
 
+    [Theory]
+    [InlineData("meettomanagedemo", true)]
+    [InlineData("mt_1c2d9f5d52c34f2aa6ecee4b3f017154", true)]
+    [InlineData("client_db_2", true)]
+    [InlineData("postgres", false)]
+    [InlineData("template1", false)]
+    [InlineData("Mixed", false)]
+    [InlineData("1starts_with_digit", false)]
+    [InlineData("has-dash", false)]
+    [InlineData("quote\"; DROP DATABASE x;--", false)]
+    [InlineData("", false)]
+    public void OperatorSuppliedDatabaseNamesAreStrictIdentifiers(string name, bool valid) =>
+        Assert.Equal(valid, TenantResolver.IsValidDatabaseName(name));
+
     public void Dispose()
     {
         _master.Dispose();
