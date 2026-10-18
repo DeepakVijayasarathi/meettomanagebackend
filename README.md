@@ -1,5 +1,8 @@
 # Meet to Manage Backend
 
+For what is implemented and step-by-step deployment instructions, see
+[Implementation and deployment guide](docs/IMPLEMENTATION_AND_DEPLOYMENT.md).
+
 Database-per-tenant setup, provisioning, login routing and live-data import are
 documented in [docs/MULTI_TENANCY.md](docs/MULTI_TENANCY.md). Tenant mode is enabled
 by default; manage clients, menus and configuration through `/platform/tenants`.

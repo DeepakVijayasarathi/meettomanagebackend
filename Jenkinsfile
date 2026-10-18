@@ -1,32 +1,28 @@
-// Deploys the backend API container. Every secret below (DB password, JWT signing key,
-// S3 access/secret key) comes from Jenkins' Credentials store via withCredentials() — never
-// hardcoded here. See the "Jenkins setup required" note at the bottom of this file for the
-// exact credential IDs this pipeline expects; create them once in
-// Manage Jenkins -> Credentials before the first run.
 pipeline {
     agent any
 
     environment {
-        IMAGE_NAME         = 'deepakrajv/readernestackend'
-        CONTAINER_NAME     = 'readernestbackend'
-        GITHUB_REPO        = 'https://github.com/karthivg192002/reader-nest-backend.git'
+        IMAGE_NAME         = 'deepakrajv/meettomanagebackend'
+        CONTAINER_NAME     = 'meettomanagebackend'
+        GITHUB_REPO        = 'https://github.com/DeepakVijayasarathi/meettomanagebackend.git'
 
-        DB_HOST            = '204.168.140.222'
+        // Non-secret settings only. Every password/key comes from Jenkins credentials
+        // (see "Jenkins setup required" at the bottom) -- never commit secret values here.
+        DB_HOST            = 'postgres'
         DB_PORT            = '5432'
-        DB_NAME            = 'reader_nest'
-        DB_USER            = 'admin'
+        // Shared master registry database -- create it once on the server (empty); the API
+        // migrates it on startup. Client databases are created by the API at provisioning
+        // time, so DB_USER must have CREATEDB (the postgres superuser does).
+        DB_NAME            = 'meettomanage_master'
+        DB_USER            = 'postgres'
 
-        // Not secret on their own (an endpoint hostname and a bucket name reveal nothing
-        // exploitable without the access/secret key pair, which ARE credential-bound below).
         STORAGE_S3_ENDPOINT      = 'hel1.your-objectstorage.com'
         STORAGE_S3_BUCKET_NAME   = 'readernest'
 
-        // Where uploaded resources and class presentations live: 'S3' (the bucket above) or
-        // 'Local' (STORAGE_LOCAL_HOST_PATH on this server, mounted into the container). Before
-        // switching, copy the existing files across -- see StorageMigration.cs:
-        //   docker exec readernestbackend dotnet iucs.meettomanage.api.dll storage-migrate --to local
-        STORAGE_PROVIDER         = 'S3'
-        STORAGE_LOCAL_HOST_PATH  = '/opt/readernest/uploads'
+        // Replace with the real public URLs. CORS must be the exact frontend origin, never '*'.
+        FRONTEND_BASE_URL    = 'https://app.example.com'
+        API_BASE_URL         = 'https://api.example.com'
+        PLATFORM_ADMIN_EMAIL = 'platform-admin@example.com'
 
         DOCKER_NETWORK     = 'reader-network'
     }
@@ -66,20 +62,6 @@ pipeline {
             }
         }
 
-        stage('Prepare Upload Folder') {
-            steps {
-                // The host folder local storage writes to. Always mounted (harmless while on S3) so
-                // switching STORAGE_PROVIDER never strands files inside a container that a redeploy
-                // throws away -- how files were lost before the move to S3. Owned by the container's
-                // non-root app user (uid 1654 in the .NET images), set via a throwaway container so no
-                // sudo is needed on the host.
-                sh """
-                    mkdir -p ${STORAGE_LOCAL_HOST_PATH} || true
-                    docker run --rm -u 0 -v ${STORAGE_LOCAL_HOST_PATH}:/data alpine sh -c 'chown 1654:1654 /data' || echo 'WARNING: could not set upload folder owner (only matters with STORAGE_PROVIDER=Local)'
-                """
-            }
-        }
-
         stage('Remove Old Container') {
             steps {
                 sh """
@@ -91,60 +73,57 @@ pipeline {
 
         stage('Run Container') {
             steps {
-                // withCredentials binds each secret to a short-lived env var for just this
-                // shell step; Jenkins also masks their values out of the console log
-                // automatically. Nothing here is ever written to disk or to the image.
-                script {
-                // Marketing-site chat assistant (Gemini) is optional: withCredentials fails the
-                // build on a missing credential id, and by this stage the old container is
-                // already gone -- so a missing key must never take the whole API down. Without
-                // it the API runs normally and the site's chat falls back to WhatsApp/email.
-                def optionalCredentials = []
-                try {
-                    withCredentials([string(credentialsId: 'meettomanage-gemini-api-key', variable: 'GEMINI_PROBE')]) {}
-                    optionalCredentials << string(credentialsId: 'meettomanage-gemini-api-key', variable: 'GEMINI_API_KEY')
-                } catch (err) {
-                    echo "WARNING: Jenkins credential 'meettomanage-gemini-api-key' not found -- deploying with the website chat assistant disabled."
-                }
-                // Marketing console login (Marketing role, /marketing/login): a username/password
-                // credential -- username = email, password = 4-digit PIN. Optional for the same
-                // reason; the account is created once on first start and then keeps its own PIN.
-                try {
-                    withCredentials([usernamePassword(credentialsId: 'meettomanage-marketing-login', usernameVariable: 'MKT_PROBE_U', passwordVariable: 'MKT_PROBE_P')]) {}
-                    optionalCredentials << usernamePassword(credentialsId: 'meettomanage-marketing-login', usernameVariable: 'MARKETING_EMAIL', passwordVariable: 'MARKETING_PIN')
-                } catch (err) {
-                    echo "WARNING: Jenkins credential 'meettomanage-marketing-login' not found -- no marketing console account will be created."
-                }
-                withCredentials([
-                    string(credentialsId: 'readernest-db-password',    variable: 'DB_PASS'),
-                    string(credentialsId: 'readernest-jwt-signing-key', variable: 'JWT_SIGNING_KEY'),
-                    string(credentialsId: 'readernest-s3-access-key',  variable: 'S3_ACCESS_KEY'),
-                    string(credentialsId: 'readernest-s3-secret-key',  variable: 'S3_SECRET_KEY'),
-                ] + optionalCredentials) {
-                    sh """
-                        docker run -d \
-                          --name ${CONTAINER_NAME} \
-                          --network ${DOCKER_NETWORK} \
-                          -p 1002:8080 \
-                          --restart unless-stopped \
-                          -e ASPNETCORE_ENVIRONMENT=Production \
-                          -e ASPNETCORE_URLS=http://+:8080 \
-                          -e ConnectionStrings__ReaderNestDb="Host=${DB_HOST};Port=${DB_PORT};Database=${DB_NAME};Username=${DB_USER};Password=${DB_PASS}" \
-                          -e Jwt__SigningKey="${JWT_SIGNING_KEY}" \
-                          -e Storage__S3__Endpoint="${STORAGE_S3_ENDPOINT}" \
-                          -e Storage__S3__AccessKey="${S3_ACCESS_KEY}" \
-                          -e Storage__S3__SecretKey="${S3_SECRET_KEY}" \
-                          -e Storage__S3__BucketName="${STORAGE_S3_BUCKET_NAME}" \
-                          -e Storage__Provider="${STORAGE_PROVIDER}" \
-                          -e Storage__LocalPath=/app/uploads \
-                          -e Gemini__ApiKey="\${GEMINI_API_KEY:-}" \
-                          -e Seed__MarketingEmail="\${MARKETING_EMAIL:-}" \
-                          -e Seed__MarketingPin="\${MARKETING_PIN:-}" \
-                          -v ${STORAGE_LOCAL_HOST_PATH}:/app/uploads \
-                          ${IMAGE_NAME}:latest
-                    """
-                }
-                }
+              script {
+              // The marketing-site chat assistant (Gemini) is optional: a missing credential must
+              // not take the API down after the old container is already gone.
+              def optionalCredentials = []
+              try {
+                  withCredentials([string(credentialsId: 'meettomanage-gemini-api-key', variable: 'GEMINI_PROBE')]) {}
+                  optionalCredentials << string(credentialsId: 'meettomanage-gemini-api-key', variable: 'GEMINI_API_KEY')
+              } catch (err) {
+                  echo "WARNING: credential 'meettomanage-gemini-api-key' not found -- deploying without the chat assistant."
+              }
+              withCredentials([
+                  string(credentialsId: 'meettomanage-db-password',          variable: 'DB_PASS'),
+                  string(credentialsId: 'meettomanage-jwt-signing-key',      variable: 'JWT_SIGNING_KEY'),
+                  string(credentialsId: 'meettomanage-s3-access-key',        variable: 'S3_ACCESS_KEY'),
+                  string(credentialsId: 'meettomanage-s3-secret-key',        variable: 'S3_SECRET_KEY'),
+                  string(credentialsId: 'meettomanage-ssh-password-server0', variable: 'SSH_PASS_0'),
+                  string(credentialsId: 'meettomanage-ssh-password-server1', variable: 'SSH_PASS_1'),
+                  string(credentialsId: 'meettomanage-platform-admin-hash',  variable: 'PLATFORM_ADMIN_HASH'),
+              ] + optionalCredentials) {
+                // Secrets are escaped so the shell (not Groovy) expands them and Jenkins masks them.
+                sh """
+                    docker run -d \
+                      --name ${CONTAINER_NAME} \
+                      --network ${DOCKER_NETWORK} \
+                      -e Jwt__SigningKey="\${JWT_SIGNING_KEY}" \
+                      -p 2200:8080 \
+                      --restart unless-stopped \
+                      -e ASPNETCORE_ENVIRONMENT=Production \
+                      -e ASPNETCORE_URLS=http://+:8080 \
+                       -e Storage__S3__Endpoint="${STORAGE_S3_ENDPOINT}" \
+                      -e Storage__S3__AccessKey="\${S3_ACCESS_KEY}" \
+                      -e Storage__S3__SecretKey="\${S3_SECRET_KEY}" \
+                      -e Storage__S3__BucketName="${STORAGE_S3_BUCKET_NAME}" \
+                      -e Monitoring__Servers__0__SshPassword="\${SSH_PASS_0}" \
+                      -e Monitoring__Servers__1__SshPassword="\${SSH_PASS_1}" \
+                      -e Gemini__ApiKey="\${GEMINI_API_KEY:-}" \
+                      -e Seed__MarketingEmail="marketing@meettomanage.cloud" \
+                      -e Seed__MarketingPin="1234" \
+                      -e MultiTenancy__Enabled=true \
+                      -e ConnectionStrings__MasterDb="Host=${DB_HOST};Port=${DB_PORT};Database=${DB_NAME};Username=${DB_USER};Password=\${DB_PASS}" \
+                      -e ConnectionStrings__TenantServer="Host=${DB_HOST};Port=${DB_PORT};Database=postgres;Username=${DB_USER};Password=\${DB_PASS};Maximum Pool Size=20" \
+                      -e MultiTenancy__PlatformAdmin__Email="${PLATFORM_ADMIN_EMAIL}" \
+                      -e MultiTenancy__PlatformAdmin__PasswordHash="\${PLATFORM_ADMIN_HASH}" \
+                      -e Database__MigrateOnStartup=true \
+                      -e Frontend__BaseUrl="${FRONTEND_BASE_URL}" \
+                      -e Api__BaseUrl="${API_BASE_URL}" \
+                      -e Cors__AllowedOrigins__0="${FRONTEND_BASE_URL}" \
+                      ${IMAGE_NAME}:latest
+                """
+              }
+              }
             }
         }
 
@@ -154,6 +133,8 @@ pipeline {
                     sleep 15
                     docker ps | grep ${CONTAINER_NAME}
                     docker logs --tail 50 ${CONTAINER_NAME}
+                    # A missing master/tenant connection fails startup, so require /health to answer.
+                    curl --fail --silent --show-error http://127.0.0.1:2200/health
                 """
             }
         }
@@ -161,7 +142,7 @@ pipeline {
 
     post {
         success {
-            echo '✅ ReaderNest Backend deployed successfully on port 1002'
+            echo '✅ ReaderNest Backend deployed successfully on port 2200'
         }
 
         failure {
@@ -175,17 +156,16 @@ pipeline {
 }
 
 // ---------------------------------------------------------------------------------------
-// Jenkins setup required (one-time, before the first run of this pipeline):
-// Manage Jenkins -> Credentials -> System -> Global credentials -> Add Credentials
-// Kind = "Secret text" for each of these four credential IDs. The actual secret values are
-// NOT recorded in this file (or anywhere else in this repo) on purpose — get them from
-// wherever your team keeps real secrets out-of-band:
+// Jenkins setup required (one-time): Manage Jenkins -> Credentials -> Global -> Add
+// Kind = "Secret text" for each ID below. Real values are NOT stored in this repo.
 //
-//   readernest-db-password
-//   readernest-jwt-signing-key   (rotating this invalidates every existing session — that
-//                                 is the intended effect if the previous deploy was ever
-//                                 running with a guessable/placeholder key, not a side
-//                                 effect to work around)
-//   readernest-s3-access-key
-//   readernest-s3-secret-key
+//   meettomanage-db-password           (Postgres password for DB_USER)
+//   meettomanage-jwt-signing-key       (>= 32 bytes; rotating it invalidates all sessions)
+//   meettomanage-s3-access-key
+//   meettomanage-s3-secret-key
+//   meettomanage-ssh-password-server0  (Monitoring server 0)
+//   meettomanage-ssh-password-server1  (Monitoring server 1)
+//   meettomanage-platform-admin-hash   (BCrypt hash from
+//                                       `dotnet iucs.meettomanage.api.dll platform-password-hash`)
+//   meettomanage-gemini-api-key        (optional)
 // ---------------------------------------------------------------------------------------

@@ -7,13 +7,15 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: reader_nest
+      # The shared master registry. Client databases (mt_<hex>) are created by the API at
+      # provisioning time on this same server using the superuser below.
+      POSTGRES_DB: meettomanage_master
       POSTGRES_USER: ${POSTGRES_USER:?set in .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
     volumes:
       - reader_nest_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d reader_nest"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d meettomanage_master"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -29,8 +31,15 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_HTTP_PORTS: "8080"
-      ConnectionStrings__ReaderNestDb: >-
-        Host=postgres;Port=5432;Database=reader_nest;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      MultiTenancy__Enabled: "true"
+      ConnectionStrings__MasterDb: >-
+        Host=postgres;Port=5432;Database=meettomanage_master;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__TenantServer: >-
+        Host=postgres;Port=5432;Database=postgres;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD};Maximum Pool Size=20
+      MultiTenancy__PlatformAdmin__Email: ${PLATFORM_ADMIN_EMAIL:?set in .env}
+      # BCrypt hashes contain '$'; write it as '$$' in .env so compose does not interpolate it.
+      # Generate with: dotnet iucs.meettomanage.api.dll platform-password-hash
+      MultiTenancy__PlatformAdmin__PasswordHash: ${PLATFORM_ADMIN_PASSWORD_HASH:?set in .env}
       Database__MigrateOnStartup: "true"
       Jwt__Issuer: reader-nest
       Jwt__Audience: reader-nest-portals
@@ -40,6 +49,8 @@ services:
       Seed__AdminFirstName: Meet to Manage
       Seed__AdminLastName: Admin
       Cors__AllowedOrigins__0: ${PORTAL_ORIGIN:?set in .env}
+      Frontend__BaseUrl: ${PORTAL_ORIGIN}
+      Api__BaseUrl: ${API_ORIGIN:?set in .env}
       Payments__PayNowBaseUrl: ${PORTAL_ORIGIN}
       # S3-compatible object storage (Hetzner Object Storage) for uploaded resources —
       # replaces the earlier local-disk LocalFileStorage, which depended on the

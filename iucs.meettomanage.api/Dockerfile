@@ -13,6 +13,8 @@ FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
 COPY ["iucs.meettomanage.api/iucs.meettomanage.api.csproj", "iucs.meettomanage.api/"]
+COPY ["iucs.meettomanage.application/iucs.meettomanage.application.csproj", "iucs.meettomanage.application/"]
+COPY ["iucs.meettomanage.domain/iucs.meettomanage.domain.csproj", "iucs.meettomanage.domain/"]
 RUN dotnet restore "./iucs.meettomanage.api/iucs.meettomanage.api.csproj"
 COPY . .
 WORKDIR "/src/iucs.meettomanage.api"
