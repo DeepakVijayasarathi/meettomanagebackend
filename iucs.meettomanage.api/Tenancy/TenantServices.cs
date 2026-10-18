@@ -47,6 +47,22 @@ public static class TenantServices
         else services.AddHostedService<T>();
     }
 
+    /// <summary>
+    /// Seed:MarketingEmail is one global value, but login identifiers are unique across all clients.
+    /// If another client already owns that email, seeding it again would fail the whole setup, so it is
+    /// blanked for this tenant.
+    /// </summary>
+    public static async Task<Dictionary<string, string?>> MarketingSeedOverridesAsync(
+        MasterDbContext master, IConfiguration configuration, CancellationToken ct = default)
+    {
+        var email = configuration["Seed:MarketingEmail"]?.Trim();
+        if (string.IsNullOrWhiteSpace(email)) return [];
+        var key = TenantResolver.NormalizeIdentifier(email);
+        return await master.LoginIdentifiers.AsNoTracking().AnyAsync(x => x.Identifier == key, ct)
+            ? new() { ["Seed:MarketingEmail"] = "", ["Seed:MarketingPin"] = "" }
+            : [];
+    }
+
     public static async Task InitializeTenantsAsync(this WebApplication app)
     {
         await using var scope = app.Services.CreateAsyncScope();
@@ -54,10 +70,9 @@ public static class TenantServices
         if (app.Configuration.GetValue<bool>("Database:MigrateOnStartup")) await master.Database.MigrateAsync();
         var tenants = await master.Tenants.AsNoTracking()
             .Where(x => x.Status == domain.Entities.Tenancy.TenantStatus.Active).ToListAsync();
-        var seed = new ConfigurationBuilder().AddConfiguration(app.Configuration).AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["Seed:AdminEmail"] = "", ["Seed:AdminPin"] = "",
-        }).Build();
+        var seedValues = new Dictionary<string, string?> { ["Seed:AdminEmail"] = "", ["Seed:AdminPin"] = "" };
+        foreach (var (name, value) in await MarketingSeedOverridesAsync(master, app.Configuration)) seedValues[name] = value;
+        var seed = new ConfigurationBuilder().AddConfiguration(app.Configuration).AddInMemoryCollection(seedValues).Build();
         foreach (var tenant in tenants)
         {
             try

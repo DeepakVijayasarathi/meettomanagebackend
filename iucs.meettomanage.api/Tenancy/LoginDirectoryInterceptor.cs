@@ -12,12 +12,19 @@ public sealed class LoginDirectoryInterceptor(LoginDirectory directory, ILogger<
         DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
     {
         if (eventData.Context is not MeetToManageDbContext db) return result;
-        var users = db.ChangeTracker.Entries<User>()
-            .Where(x => x.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
-            .Select(x => x.Entity).ToList();
-        if (users.Count == 0) return result;
+        var entries = db.ChangeTracker.Entries<User>()
+            .Where(x => x.State is EntityState.Added or EntityState.Modified or EntityState.Deleted).ToList();
+        if (entries.Count == 0) return result;
         // EF assigns GUIDs when users enter the tracker. Audit/soft delete runs first.
-        await directory.ReserveAsync(users, cancellationToken);
+        // Users whose email/phone did not change keep working even if an import left them sharing a
+        // phone with someone else (the sync skipped that phone); changed contact details stay strict.
+        var contactUnchanged = entries.Where(x => x.State == EntityState.Modified
+            && !x.Property(u => u.Email).IsModified && !x.Property(u => u.Phone).IsModified).ToList();
+        var strict = entries.Except(contactUnchanged).Select(x => x.Entity).ToList();
+        if (strict.Count > 0) await directory.ReserveAsync(strict, cancellationToken);
+        if (contactUnchanged.Count > 0)
+            await directory.ReserveAsync(contactUnchanged.Select(x => x.Entity), cancellationToken, skipPhoneConflicts: true);
+        var users = entries.Select(x => x.Entity).ToList();
         foreach (var user in users)
             db.LoginDirectoryChanges.Add(new LoginDirectoryChange { UserId = user.Id });
         return result;

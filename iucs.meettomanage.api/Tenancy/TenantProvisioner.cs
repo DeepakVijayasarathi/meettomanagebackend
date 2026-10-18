@@ -87,7 +87,7 @@ public sealed class TenantProvisioner(IServiceProvider services, IDbContextFacto
                 }
             }
             using var ambient = TenantExecution.Enter(tenant.Id, tenant.Code);
-            var seed = new ConfigurationBuilder().AddConfiguration(configuration).AddInMemoryCollection(new Dictionary<string, string?>
+            var seedValues = new Dictionary<string, string?>
             {
                 ["Database:MigrateOnStartup"] = "true",
                 // An existing database keeps its own users; never seed or reset an admin there.
@@ -95,7 +95,10 @@ public sealed class TenantProvisioner(IServiceProvider services, IDbContextFacto
                 ["Seed:AdminPin"] = existingDatabase ? "" : request.AdminPin,
                 ["Seed:AdminFirstName"] = tenant.Name,
                 ["Seed:AdminLastName"] = "Admin",
-            }).Build();
+            };
+            foreach (var (name, value) in await TenantServices.MarketingSeedOverridesAsync(master, configuration, ct))
+                seedValues[name] = value;
+            var seed = new ConfigurationBuilder().AddConfiguration(configuration).AddInMemoryCollection(seedValues).Build();
             await DatabaseInitializer.InitializeAsync(services, seed, tenant);
             // An existing database's users are not in the shared login registry yet, so keep the
             // client Suspended: run "Sync imported logins", then activate it.

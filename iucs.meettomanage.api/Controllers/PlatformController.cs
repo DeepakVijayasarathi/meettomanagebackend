@@ -29,8 +29,8 @@ public sealed class PlatformController(IConfiguration configuration, IPasswordHa
         if (tenant.Status != TenantStatus.Suspended)
             throw new ConflictException("Suspend the client before synchronizing imported users.");
         using var scope = scopes.CreateScope(tenant);
-        await scope.ServiceProvider.GetRequiredService<LoginDirectory>().RebuildAsync(ct);
-        return NoContent();
+        var skippedPhones = await scope.ServiceProvider.GetRequiredService<LoginDirectory>().RebuildAsync(ct);
+        return Ok(new { skippedPhones });
     }
     public sealed class PlatformLogin
     {

@@ -2,6 +2,7 @@ using iucs.meettomanage.api.Tenancy;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.domain.Data;
 using iucs.meettomanage.domain.Entities.Tenancy;
+using iucs.meettomanage.domain.Entities.Users;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -180,6 +181,66 @@ public sealed class TenantResolutionTests : IDisposable
     [InlineData("", false)]
     public void OperatorSuppliedDatabaseNamesAreStrictIdentifiers(string name, bool valid) =>
         Assert.Equal(valid, TenantResolver.IsValidDatabaseName(name));
+
+    private sealed class SharedFactory(SqliteConnection connection) : IDbContextFactory<MasterDbContext>
+    {
+        public MasterDbContext CreateDbContext() =>
+            new(new DbContextOptionsBuilder<MasterDbContext>().UseSqlite(connection).Options);
+    }
+
+    private async Task<LoginDirectory> DirectoryForSecondTenantAsync()
+    {
+        await _resolver.ResolveCodeAsync(_second.Code);
+        return new LoginDirectory(new SharedFactory(_connection), _current);
+    }
+
+    [Fact]
+    public async Task SyncSkipsAPhoneSharedByTwoUsersAndKeepsTheirEmails()
+    {
+        var directory = await DirectoryForSecondTenantAsync();
+        var first = new User { Id = Guid.NewGuid(), Email = "a@example.test", Phone = "+91 98765 43210" };
+        var second = new User { Id = Guid.NewGuid(), Email = "b@example.test", Phone = "9876543210" };
+        var skipped = new List<string>();
+
+        await directory.ReserveAsync([first, second], default, skipPhoneConflicts: true, skipped);
+
+        Assert.Equal(["phone:9876543210"], skipped);
+        var identifiers = await _master.LoginIdentifiers.AsNoTracking().Select(x => x.Identifier).ToListAsync();
+        Assert.Contains("email:a@example.test", identifiers);
+        Assert.Contains("email:b@example.test", identifiers);
+        Assert.Single(identifiers, x => x == "phone:9876543210");
+    }
+
+    [Fact]
+    public async Task OrdinaryWritesStillRejectASharedPhone()
+    {
+        var directory = await DirectoryForSecondTenantAsync();
+        await directory.ReserveAsync([new User { Id = Guid.NewGuid(), Email = "a@example.test", Phone = "9876543210" }], default);
+        await Assert.ThrowsAsync<ConflictException>(() => directory.ReserveAsync(
+            [new User { Id = Guid.NewGuid(), Email = "b@example.test", Phone = "9876543210" }], default));
+    }
+
+    [Fact]
+    public async Task SyncStillRejectsASharedEmail()
+    {
+        var directory = await DirectoryForSecondTenantAsync();
+        await Assert.ThrowsAsync<ConflictException>(() => directory.ReserveAsync(
+            [new User { Id = Guid.NewGuid(), Email = "one@example.test" }], default, skipPhoneConflicts: true));
+    }
+
+    [Theory]
+    [InlineData("one@example.test", true)]
+    [InlineData("free@example.test", false)]
+    public async Task MarketingSeedIsBlankedWhenAnotherClientOwnsTheEmail(string email, bool blanked)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Seed:MarketingEmail"] = email, ["Seed:MarketingPin"] = "1234",
+        }).Build();
+        var overrides = await TenantServices.MarketingSeedOverridesAsync(_master, configuration);
+        Assert.Equal(blanked, overrides.ContainsKey("Seed:MarketingEmail"));
+        if (blanked) Assert.Equal("", overrides["Seed:MarketingEmail"]);
+    }
 
     public void Dispose()
     {

@@ -14,7 +14,12 @@ namespace iucs.meettomanage.api.Tenancy;
 /// </summary>
 public sealed class LoginDirectory(IDbContextFactory<MasterDbContext> factory, TenantContext tenant)
 {
-    public async Task RebuildAsync(CancellationToken ct)
+    /// <summary>
+    /// Rebuilds this tenant's slice of the shared registry from its users. Shared phone numbers cannot
+    /// belong to two users, so a clashing phone is skipped (the user still logs in by email) and returned.
+    /// Clashing emails still stop the rebuild.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> RebuildAsync(CancellationToken ct)
     {
         await using var business = new MeetToManageDbContext(new DbContextOptionsBuilder<MeetToManageDbContext>()
             .UseNpgsql(tenant.RequireConnectionString()).Options);
@@ -32,10 +37,12 @@ public sealed class LoginDirectory(IDbContextFactory<MasterDbContext> factory, T
             master.LoginIdentifiers.RemoveRange(await master.LoginIdentifiers.Where(x => orphanIds.Contains(x.UserId)).ToListAsync(ct));
             await master.SaveChangesAsync(ct);
         }
-        await ReserveAsync(users, ct);
+        var skipped = new List<string>();
+        await ReserveAsync(users, ct, skipPhoneConflicts: true, skipped);
         business.LoginDirectoryChanges.AddRange(ids.Select(id => new LoginDirectoryChange { UserId = id }));
         await business.SaveChangesAsync(ct);
         while (await business.LoginDirectoryChanges.AnyAsync(ct)) await FlushAsync(ct);
+        return skipped.Distinct().Order().ToList();
     }
 
     public static IReadOnlyList<string> Aliases(User user)
@@ -46,7 +53,8 @@ public sealed class LoginDirectory(IDbContextFactory<MasterDbContext> factory, T
         return aliases;
     }
 
-    public async Task ReserveAsync(IEnumerable<User> users, CancellationToken ct)
+    public async Task ReserveAsync(IEnumerable<User> users, CancellationToken ct,
+        bool skipPhoneConflicts = false, ICollection<string>? skippedPhones = null)
     {
         await using var master = await factory.CreateDbContextAsync(ct);
         await using var transaction = await master.Database.BeginTransactionAsync(ct);
@@ -66,7 +74,14 @@ public sealed class LoginDirectory(IDbContextFactory<MasterDbContext> factory, T
                 if (existing is not null && existing.UserId != user.Id)
                 {
                     if (!existing.Account.IsDeleted)
+                    {
+                        if (skipPhoneConflicts && key.StartsWith("phone:", StringComparison.Ordinal))
+                        {
+                            skippedPhones?.Add(key);
+                            continue;
+                        }
                         throw new ConflictException("The email or mobile number is already in use.");
+                    }
                     master.LoginIdentifiers.Remove(existing);
                     await master.SaveChangesAsync(ct);
                     existing = null;
@@ -118,7 +133,14 @@ public sealed class LoginDirectory(IDbContextFactory<MasterDbContext> factory, T
             var aliases = await master.LoginIdentifiers.Where(x => x.UserId == id).ToListAsync(ct);
             master.LoginIdentifiers.RemoveRange(aliases.Where(x => !desired.Contains(x.Identifier)));
             foreach (var key in desired.Except(aliases.Select(x => x.Identifier)))
+            {
+                // A phone number already registered to another user (kept by a tenant import) stays theirs.
+                if (key.StartsWith("phone:", StringComparison.Ordinal)
+                    && (master.LoginIdentifiers.Local.Any(x => x.Identifier == key && x.UserId != id)
+                        || await master.LoginIdentifiers.AnyAsync(x => x.Identifier == key && x.UserId != id, ct)))
+                    continue;
                 master.LoginIdentifiers.Add(new() { Identifier = key, Account = account });
+            }
         }
         await master.SaveChangesAsync(ct);
         await masterTransaction.CommitAsync(ct);
