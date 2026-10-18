@@ -1,6 +1,7 @@
 using iucs.meettomanage.api.Tenancy;
 using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Exceptions;
+using iucs.meettomanage.application.Dto.Integrations;
 using iucs.meettomanage.application.Dto.Navigation;
 using iucs.meettomanage.application.Dto.Settings;
 using iucs.meettomanage.application.Services;
@@ -34,6 +35,30 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
     [HttpPut("configuration")]
     public async Task<IActionResult> SaveConfiguration(Guid tenantId, List<UpdateSettingRequest> updates, CancellationToken ct) =>
         Ok(await InTenant(tenantId, sp => sp.GetRequiredService<ISettingsService>().UpsertAsync(updates, ct), ct));
+
+    // seo.* settings are hidden from the normal settings list on purpose (the public site's SEO
+    // belongs to the marketing scope), so the operator reads and writes them through the same
+    // marketing-scope service methods.
+    [HttpGet("seo")]
+    public async Task<IActionResult> Seo(Guid tenantId, CancellationToken ct) =>
+        Ok(await InTenant(tenantId, sp => sp.GetRequiredService<ISettingsService>().GetMarketingAsync(ct), ct));
+
+    [HttpPut("seo")]
+    public async Task<IActionResult> SaveSeo(Guid tenantId, List<UpdateSettingRequest> updates, CancellationToken ct) =>
+        Ok(await InTenant(tenantId, async sp =>
+        {
+            var settings = sp.GetRequiredService<ISettingsService>();
+            await settings.UpsertMarketingAsync(updates, ct);
+            return await settings.GetMarketingAsync(ct);
+        }, ct));
+
+    [HttpGet("integrations")]
+    public async Task<IActionResult> Integrations(Guid tenantId, CancellationToken ct) =>
+        Ok(await InTenant(tenantId, sp => sp.GetRequiredService<IIntegrationService>().ListAsync(ct), ct));
+
+    [HttpPut("integrations/{integrationId:guid}")]
+    public async Task<IActionResult> UpdateIntegration(Guid tenantId, Guid integrationId, SaveIntegrationRequest request, CancellationToken ct) =>
+        Ok(await InTenant(tenantId, sp => sp.GetRequiredService<IIntegrationService>().UpdateAsync(integrationId, request, ct), ct));
 
     [HttpGet("menus")]
     public async Task<IActionResult> Menus(Guid tenantId, [FromQuery] string? portal, CancellationToken ct) =>
