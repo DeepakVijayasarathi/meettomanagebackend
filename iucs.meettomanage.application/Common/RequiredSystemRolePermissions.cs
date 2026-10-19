@@ -17,6 +17,10 @@ namespace iucs.meettomanage.application.Common
         public static readonly IReadOnlyList<RequiredGrant> All =
         [
             new("teacher", PermissionModule.Payouts, View: true),
+            // Learning Plugins is a core teacher classroom tool. Keep View as baseline so
+            // upgrading an existing database cannot hide the newly seeded menu from every
+            // teacher until an administrator manually edits each role or user snapshot.
+            new("teacher", PermissionModule.LearningPlugins, View: true),
             // The Relationship Manager Dashboard's KPI tiles read GET /api/reports/dashboard-summary,
             // gated on this module — the "sub-admin" preset shipped with an empty grant set ("grant
             // modules as needed"), so every Relationship Manager who never had this hand-granted saw

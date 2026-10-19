@@ -2977,17 +2977,21 @@ namespace iucs.meettomanage.api.Data
                 ("teacher", "/teacher/attendance", "/teacher/learning-plugins"),
             })
             {
+                var anchor = context.MenuItems.Local.FirstOrDefault(m => m.Portal == portal && m.Path == anchorPath)
+                    ?? await context.MenuItems.FirstOrDefaultAsync(m => m.Portal == portal && m.Path == anchorPath);
                 var existing = context.MenuItems.Local.FirstOrDefault(m => m.Portal == portal && m.Path == path)
                     ?? await context.MenuItems.FirstOrDefaultAsync(m => m.Portal == portal && m.Path == path);
                 if (existing is not null)
                 {
+                    existing.Section = "Games & Activities";
+                    existing.SectionOrder = anchor?.SectionOrder + 1 ?? existing.SectionOrder;
+                    existing.Label = "Learning Games & Activities";
+                    existing.SortOrder = 0;
                     existing.RequiredModule = PermissionModule.LearningPlugins.ToString();
                     existing.IsActive = true;
                     continue;
                 }
 
-                var anchor = context.MenuItems.Local.FirstOrDefault(m => m.Portal == portal && m.Path == anchorPath)
-                    ?? await context.MenuItems.FirstOrDefaultAsync(m => m.Portal == portal && m.Path == anchorPath);
                 if (anchor is null)
                 {
                     continue;
@@ -2996,12 +3000,12 @@ namespace iucs.meettomanage.api.Data
                 context.MenuItems.Add(new MenuItem
                 {
                     Portal = portal,
-                    Section = anchor.Section,
-                    SectionOrder = anchor.SectionOrder,
-                    Label = "Learning Plugins",
+                    Section = "Games & Activities",
+                    SectionOrder = anchor.SectionOrder + 1,
+                    Label = "Learning Games & Activities",
                     Path = path,
                     Icon = "Gamepad2",
-                    SortOrder = anchor.SortOrder + 1,
+                    SortOrder = 0,
                     IsActive = true,
                     RequiredModule = PermissionModule.LearningPlugins.ToString(),
                 });
