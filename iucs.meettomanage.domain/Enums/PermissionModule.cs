@@ -19,6 +19,7 @@ namespace iucs.meettomanage.domain.Enums
         SystemMonitoring,
         Marketing,
         ClassSessionLogs,
-        SupportTickets
+        SupportTickets,
+        LearningPlugins
     }
 }

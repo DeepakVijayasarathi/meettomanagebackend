@@ -85,6 +85,7 @@ namespace iucs.meettomanage.api.Data
             await EnsureParentFeedbackMenusAsync(context);
             await EnsureSupportTicketEmailTemplatesAsync(context);
             await EnsureSupportTicketMenusAsync(context);
+            await EnsureLearningPluginsMenusAsync(context);
             await EnsurePayoutApprovalsMenusAsync(context);
             await EnsureStaffLeaveMenusAsync(context);
             await EnsureStaffPayrollMenusAsync(context);
@@ -473,6 +474,7 @@ namespace iucs.meettomanage.api.Data
                 (PermissionModule.SystemMonitoring, "Server Monitoring"),
                 (PermissionModule.ClassSessionLogs, "Class Session Logs"),
                 (PermissionModule.SupportTickets, "Support Tickets"),
+                (PermissionModule.LearningPlugins, "Learning Plugins"),
             ];
 
             // Marketing was briefly seeded here; it's no longer grantable — the marketing console is
@@ -2958,6 +2960,50 @@ namespace iucs.meettomanage.api.Data
                     PlaceholdersJson = JsonSerializer.Serialize(seed.Placeholders),
                     IsActive = true,
                     IsSystem = true,
+                });
+            }
+        }
+
+        /// <summary>
+        /// Adds the games/resources library to Admin and Teacher menus. The dedicated module
+        /// makes its visibility grantable in Roles &amp; Permissions instead of coupling it to
+        /// course editing. Admin bypasses permission checks; other roles need View access.
+        /// </summary>
+        private static async Task EnsureLearningPluginsMenusAsync(MeetToManageDbContext context)
+        {
+            foreach (var (portal, anchorPath, path) in new[]
+            {
+                ("admin", "/admin/activity-bank", "/admin/learning-plugins"),
+                ("teacher", "/teacher/attendance", "/teacher/learning-plugins"),
+            })
+            {
+                var existing = context.MenuItems.Local.FirstOrDefault(m => m.Portal == portal && m.Path == path)
+                    ?? await context.MenuItems.FirstOrDefaultAsync(m => m.Portal == portal && m.Path == path);
+                if (existing is not null)
+                {
+                    existing.RequiredModule = PermissionModule.LearningPlugins.ToString();
+                    existing.IsActive = true;
+                    continue;
+                }
+
+                var anchor = context.MenuItems.Local.FirstOrDefault(m => m.Portal == portal && m.Path == anchorPath)
+                    ?? await context.MenuItems.FirstOrDefaultAsync(m => m.Portal == portal && m.Path == anchorPath);
+                if (anchor is null)
+                {
+                    continue;
+                }
+
+                context.MenuItems.Add(new MenuItem
+                {
+                    Portal = portal,
+                    Section = anchor.Section,
+                    SectionOrder = anchor.SectionOrder,
+                    Label = "Learning Plugins",
+                    Path = path,
+                    Icon = "Gamepad2",
+                    SortOrder = anchor.SortOrder + 1,
+                    IsActive = true,
+                    RequiredModule = PermissionModule.LearningPlugins.ToString(),
                 });
             }
         }
