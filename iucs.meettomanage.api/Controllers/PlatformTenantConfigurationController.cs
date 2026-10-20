@@ -1,6 +1,8 @@
+using iucs.meettomanage.api.Services;
 using iucs.meettomanage.api.Tenancy;
 using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Exceptions;
+using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Integrations;
 using iucs.meettomanage.application.Dto.Navigation;
 using iucs.meettomanage.application.Dto.Settings;
@@ -15,7 +17,7 @@ namespace iucs.meettomanage.api.Controllers;
 
 /// <summary>Operator access to one explicitly selected client's configuration.</summary>
 [ApiController, Route("api/platform/tenants/{tenantId:guid}"), Authorize(Policy = "PlatformAdmin")]
-public sealed class PlatformTenantConfigurationController(MasterDbContext master, TenantScopeFactory scopes) : ControllerBase
+public sealed class PlatformTenantConfigurationController(MasterDbContext master, TenantScopeFactory scopes, IConfiguration configuration) : ControllerBase
 {
     private async Task<T> InTenant<T>(Guid id, Func<IServiceProvider, Task<T>> operation, CancellationToken ct)
     {
@@ -76,6 +78,24 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
     public async Task<IActionResult> DeleteMenu(Guid tenantId, Guid menuId, CancellationToken ct)
     {
         await InTenant(tenantId, async sp => { await sp.GetRequiredService<IMenuService>().DeleteAsync(menuId, ct); return true; }, ct);
+        return NoContent();
+    }
+
+    /// <summary>Uploads the selected client's logo (stored in that client's own file storage).</summary>
+    [HttpPost("branding/logo"), RequestSizeLimit(BrandLogo.MaxBytes + 4096)]
+    public async Task<IActionResult> UploadLogo(Guid tenantId, IFormFile file, CancellationToken ct) =>
+        Ok(await InTenant(tenantId, async sp =>
+        {
+            await using var stream = file.OpenReadStream();
+            var url = await BrandLogo.SaveAsync(sp.GetRequiredService<IFileStorage>(), sp.GetRequiredService<ISettingsService>(),
+                stream, file.FileName, BrandLogo.PublicBaseUrl(configuration, Request), ct);
+            return new { logoUrl = url };
+        }, ct));
+
+    [HttpDelete("branding/logo")]
+    public async Task<IActionResult> RemoveLogo(Guid tenantId, CancellationToken ct)
+    {
+        await InTenant(tenantId, async sp => { await BrandLogo.ClearAsync(sp.GetRequiredService<ISettingsService>(), ct); return true; }, ct);
         return NoContent();
     }
 
