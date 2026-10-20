@@ -1,5 +1,8 @@
 # Meet to Manage: database per tenant
 
+> Plans, subscriptions, platform billing, limits and auto-reminders for tenants are described in
+> [SAAS_BILLING.md](SAAS_BILLING.md). They add `snake_case` tables to the master database.
+
 ## Storage split
 
 Each client retains the existing MeetToManage schema: users, profiles, roles,

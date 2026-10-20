@@ -3,6 +3,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using iucs.meettomanage.api.Auth;
+using iucs.meettomanage.api.Saas;
 using iucs.meettomanage.api.Tenancy;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.application.Common.Interfaces;
@@ -19,7 +20,8 @@ namespace iucs.meettomanage.api.Controllers;
 
 [ApiController, Route("api/platform")]
 public sealed class PlatformController(IConfiguration configuration, IPasswordHasher hasher,
-    IOptions<JwtOptions> jwt, MasterDbContext master, TenantProvisioner provisioner, TenantScopeFactory scopes) : ControllerBase
+    IOptions<JwtOptions> jwt, MasterDbContext master, TenantProvisioner provisioner, TenantScopeFactory scopes,
+    SaasSubscriptionService subscriptions) : ControllerBase
 {
     [HttpPost("tenants/{id:guid}/synchronize-logins"), Authorize(Policy = "PlatformAdmin")]
     public async Task<IActionResult> SynchronizeLogins(Guid id, CancellationToken ct)
@@ -62,6 +64,7 @@ public sealed class PlatformController(IConfiguration configuration, IPasswordHa
     public async Task<IActionResult> Create(CreateTenantRequest request, CancellationToken ct)
     {
         var tenant = await provisioner.CreateAsync(request, ct);
+        await StartSubscriptionAsync(tenant, request, ct);
         return Ok(new { tenant.Id, tenant.Code, tenant.Name, tenant.Status });
     }
 
@@ -69,8 +72,15 @@ public sealed class PlatformController(IConfiguration configuration, IPasswordHa
     public async Task<IActionResult> Retry(Guid id, CreateTenantRequest request, CancellationToken ct)
     {
         var tenant = await provisioner.ProvisionAsync(id, request, ct);
+        await StartSubscriptionAsync(tenant, request, ct);
         return Ok(new { tenant.Id, tenant.Code, tenant.Name, tenant.Status });
     }
+
+    /// <summary>A newly provisioned tenant gets a platform subscription: the requested plan, else a trial (new database) or legacy (attached database).</summary>
+    private Task StartSubscriptionAsync(Tenant tenant, CreateTenantRequest request, CancellationToken ct) =>
+        subscriptions.EnsureSubscriptionAsync(tenant.Id,
+            request.PlanCode ?? (string.IsNullOrWhiteSpace(request.DatabaseName) ? null : SaasSeeder.LegacyPlanCode),
+            "platform:" + User.Identity?.Name, request.AdminEmail, tenant.Name, ct);
 
     public sealed class SetStatusRequest { public bool Suspended { get; set; } }
     [HttpPut("tenants/{id:guid}/status"), Authorize(Policy = "PlatformAdmin")]

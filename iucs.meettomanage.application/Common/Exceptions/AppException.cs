@@ -61,6 +61,15 @@ namespace iucs.meettomanage.application.Common.Exceptions
         }
     }
 
+    /// <summary>The tenant's subscription plan does not include this feature or has reached a limit (402 Payment Required).</summary>
+    public class PlanLimitException : AppException
+    {
+        public PlanLimitException(string message)
+            : base(402, message)
+        {
+        }
+    }
+
     /// <summary>A downstream infrastructure dependency (object storage, a payment gateway, etc.)
     /// failed or is misconfigured -- distinct from a validation error, so callers see an
     /// actionable "try again / contact support" message instead of a generic 500.</summary>

@@ -53,6 +53,7 @@ namespace iucs.meettomanage.api.Data
             await EnsureDelegatedPortalSessionsMenuAsync(context);
             await EnsureDelegatedPortalCalendarMenuAsync(context);
             await EnsurePackagesAndStudentViewMenusAsync(context);
+            await EnsureAdminSubscriptionMenuAsync(context);
             await EnsureAdminDepartmentsMenuAsync(context);
             await EnsureAdminQuizBankMenuAsync(context);
             await EnsureAdminActivityBankMenuAsync(context);
@@ -852,6 +853,7 @@ namespace iucs.meettomanage.api.Data
             ("admin", "Finance", "Teacher Payouts", "/admin/payouts", "Wallet", PermissionModule.Payouts.ToString()),
             ("admin", "Finance", "Payout Approvals", "/admin/payout-approvals", "ClipboardCheck", PermissionModule.Payouts.ToString()),
             ("admin", "Finance", "Fee Suspension", "/admin/fee-suspension", "Ban", PermissionModule.BillingFinance.ToString()),
+            ("admin", "Finance", "My Subscription", "/admin/subscription", "Gauge", null),
             ("admin", "Insights", "Reports & Analytics", "/admin/reports", "BarChart3", PermissionModule.ReportsAnalytics.ToString()),
             ("admin", "Insights", "Bulk Email", "/admin/bulk-email", "Mail", PermissionModule.Communication.ToString()),
             ("admin", "Insights", "Bulk Email History", "/admin/bulk-email/history", "History", PermissionModule.Communication.ToString()),
@@ -1215,6 +1217,38 @@ namespace iucs.meettomanage.api.Data
                     RequiredModule = PermissionModule.SessionCalendarManagement.ToString(),
                 });
             }
+        }
+
+        /// <summary>
+        /// Adds the Admin "My Subscription" menu item (the tenant's own SaaS plan, usage and invoices) to
+        /// databases seeded before it existed. Idempotent; sits at the end of the Finance section.
+        /// </summary>
+        private static async Task EnsureAdminSubscriptionMenuAsync(MeetToManageDbContext context)
+        {
+            if (context.MenuItems.Local.Any(m => m.Portal == "admin" && m.Path == "/admin/subscription") ||
+                await context.MenuItems.AnyAsync(m => m.Portal == "admin" && m.Path == "/admin/subscription"))
+            {
+                return;
+            }
+
+            var finance = await context.MenuItems.Where(m => m.Portal == "admin" && m.Section == "Finance").ToListAsync();
+            if (finance.Count == 0)
+            {
+                return;
+            }
+
+            context.MenuItems.Add(new MenuItem
+            {
+                Portal = "admin",
+                Section = "Finance",
+                SectionOrder = finance[0].SectionOrder,
+                Label = "My Subscription",
+                Path = "/admin/subscription",
+                Icon = "Gauge",
+                SortOrder = finance.Max(m => m.SortOrder) + 1,
+                IsActive = true,
+                RequiredModule = null,
+            });
         }
 
         /// <summary>

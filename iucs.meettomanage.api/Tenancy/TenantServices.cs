@@ -1,4 +1,5 @@
 using iucs.meettomanage.api.Data;
+using iucs.meettomanage.api.Saas;
 using iucs.meettomanage.application.Common;
 using iucs.meettomanage.domain.Data;
 using Microsoft.EntityFrameworkCore;
@@ -68,6 +69,8 @@ public static class TenantServices
         await using var scope = app.Services.CreateAsyncScope();
         var master = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
         if (app.Configuration.GetValue<bool>("Database:MigrateOnStartup")) await master.Database.MigrateAsync();
+        // Plans, e-mail templates and a legacy subscription for pre-billing tenants.
+        await app.Services.SeedSaasAsync();
         var tenants = await master.Tenants.AsNoTracking()
             .Where(x => x.Status == domain.Entities.Tenancy.TenantStatus.Active).ToListAsync();
         var seedValues = new Dictionary<string, string?> { ["Seed:AdminEmail"] = "", ["Seed:AdminPin"] = "" };

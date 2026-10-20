@@ -23,6 +23,11 @@ public sealed class CreateTenantRequest
     // existing administrator's PIN is never overwritten.
     [EmailAddress, MaxLength(256)] public string? AdminEmail { get; set; }
     [RegularExpression(@"^\d{4}$")] public string? AdminPin { get; set; }
+    /// <summary>
+    /// Optional subscription plan code (see /api/platform/plans). Omitted: a new database starts on the configured
+    /// default plan (a free trial); an attached existing database starts on the unlimited "legacy" plan.
+    /// </summary>
+    [RegularExpression("^[a-z][a-z0-9_-]{1,49}$")] public string? PlanCode { get; set; }
 }
 
 public sealed class TenantProvisioner(IServiceProvider services, IDbContextFactory<MasterDbContext> masterFactory,

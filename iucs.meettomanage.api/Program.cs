@@ -24,6 +24,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
 using Microsoft.AspNetCore.SignalR;
+using iucs.meettomanage.api.Saas;
 using iucs.meettomanage.api.Tenancy;
 
 if (args.Contains("platform-password-hash", StringComparer.Ordinal))
@@ -52,7 +53,12 @@ if (tenantMode && builder.Environment.IsDevelopment())
         }
     }
 }
-if (tenantMode) builder.Services.AddTenantServices(builder.Configuration);
+if (tenantMode)
+{
+    builder.Services.AddTenantServices(builder.Configuration);
+    // SaaS layer: plans, subscriptions, entitlements, platform billing and reminders (master database).
+    builder.Services.AddSaasServices(builder.Configuration);
+}
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
@@ -80,7 +86,14 @@ builder.Services.AddDbContext<MeetToManageDbContext>((serviceProvider, options) 
     options.UseNpgsql(tenantMode
         ? TenantServices.BoundTenant(serviceProvider).RequireConnectionString()
         : connectionString).AddInterceptors(serviceProvider.GetRequiredService<AuditableEntityInterceptor>());
-    if (tenantMode) options.AddInterceptors(serviceProvider.GetRequiredService<LoginDirectoryInterceptor>());
+    if (tenantMode)
+    {
+        // Plan limits (students/staff) are enforced centrally on save. This must run BEFORE the login
+        // directory interceptor: that one reserves the user's e-mail/phone in the master registry, and a
+        // save rejected for being over the plan limit must not leave an orphan reservation behind.
+        options.AddInterceptors(serviceProvider.GetRequiredService<iucs.meettomanage.api.Saas.EntitlementInterceptor>());
+        options.AddInterceptors(serviceProvider.GetRequiredService<LoginDirectoryInterceptor>());
+    }
 });
 
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();

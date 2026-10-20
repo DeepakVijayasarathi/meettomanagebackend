@@ -69,6 +69,7 @@ namespace iucs.meettomanage.api.Middleware
         {
             400 => "Bad Request",
             401 => "Unauthorized",
+            402 => "Plan Limit Reached",
             403 => "Forbidden",
             404 => "Not Found",
             409 => "Conflict",
