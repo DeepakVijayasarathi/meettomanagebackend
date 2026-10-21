@@ -839,6 +839,10 @@ namespace iucs.meettomanage.domain.Migrations.Master
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<bool>("AppAccessGranted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("app_access_granted");
+
                     b.Property<string>("Code")
                         .IsRequired()
                         .HasMaxLength(50)

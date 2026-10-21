@@ -28,6 +28,8 @@ public sealed class CreateTenantRequest
     /// default plan (a free trial); an attached existing database starts on the unlimited "legacy" plan.
     /// </summary>
     [RegularExpression("^[a-z][a-z0-9_-]{1,49}$")] public string? PlanCode { get; set; }
+    /// <summary>Whether the tenant's families may use the mobile parent app. Omitted means granted.</summary>
+    public bool? AppAccessGranted { get; set; }
 }
 
 public sealed class TenantProvisioner(IServiceProvider services, IDbContextFactory<MasterDbContext> masterFactory,
@@ -41,7 +43,7 @@ public sealed class TenantProvisioner(IServiceProvider services, IDbContextFacto
         if (!TenantResolver.IsValidDatabaseName(databaseName)
             || string.Equals(databaseName, MasterDatabaseName(), StringComparison.Ordinal))
             throw new DomainValidationException("Use a lowercase database name of letters, digits and underscores that is not a system or registry database.");
-        var tenant = new Tenant { Code = request.Code, Name = request.Name.Trim(), DatabaseName = databaseName };
+        var tenant = new Tenant { Code = request.Code, Name = request.Name.Trim(), DatabaseName = databaseName, AppAccessGranted = request.AppAccessGranted ?? true };
         master.Tenants.Add(tenant);
         try { await master.SaveChangesAsync(ct); }
         catch (DbUpdateException) { throw new ConflictException("The tenant code or database name is already registered."); }

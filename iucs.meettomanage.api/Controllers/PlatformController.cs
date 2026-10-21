@@ -58,14 +58,14 @@ public sealed class PlatformController(IConfiguration configuration, IPasswordHa
 
     [HttpGet("tenants"), Authorize(Policy = "PlatformAdmin")]
     public async Task<IActionResult> List(CancellationToken ct) => Ok(await master.Tenants.AsNoTracking()
-        .OrderBy(x => x.CreatedAtUtc).Select(x => new { x.Id, x.Code, x.Name, x.Status, x.CreatedAtUtc, x.ProvisionedAtUtc }).ToListAsync(ct));
+        .OrderBy(x => x.CreatedAtUtc).Select(x => new { x.Id, x.Code, x.Name, x.Status, x.CreatedAtUtc, x.ProvisionedAtUtc, x.AppAccessGranted }).ToListAsync(ct));
 
     [HttpPost("tenants"), Authorize(Policy = "PlatformAdmin")]
     public async Task<IActionResult> Create(CreateTenantRequest request, CancellationToken ct)
     {
         var tenant = await provisioner.CreateAsync(request, ct);
         await StartSubscriptionAsync(tenant, request, ct);
-        return Ok(new { tenant.Id, tenant.Code, tenant.Name, tenant.Status });
+        return Ok(new { tenant.Id, tenant.Code, tenant.Name, tenant.Status, tenant.AppAccessGranted });
     }
 
     [HttpPost("tenants/{id:guid}/retry"), Authorize(Policy = "PlatformAdmin")]
@@ -81,6 +81,18 @@ public sealed class PlatformController(IConfiguration configuration, IPasswordHa
         subscriptions.EnsureSubscriptionAsync(tenant.Id,
             request.PlanCode ?? (string.IsNullOrWhiteSpace(request.DatabaseName) ? null : SaasSeeder.LegacyPlanCode),
             "platform:" + User.Identity?.Name, request.AdminEmail, tenant.Name, ct);
+
+    public sealed class SetAppAccessRequest { public bool Granted { get; set; } }
+
+    /// <summary>Grants or withdraws the tenant's access for the mobile parent app. Takes effect on the next request.</summary>
+    [HttpPut("tenants/{id:guid}/app-access"), Authorize(Policy = "PlatformAdmin")]
+    public async Task<IActionResult> SetAppAccess(Guid id, SetAppAccessRequest request, CancellationToken ct)
+    {
+        var tenant = await master.Tenants.SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Tenant", id);
+        tenant.AppAccessGranted = request.Granted;
+        await master.SaveChangesAsync(ct);
+        return NoContent();
+    }
 
     public sealed class SetStatusRequest { public bool Suspended { get; set; } }
     [HttpPut("tenants/{id:guid}/status"), Authorize(Policy = "PlatformAdmin")]

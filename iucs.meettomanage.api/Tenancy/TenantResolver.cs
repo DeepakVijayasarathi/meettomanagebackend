@@ -54,7 +54,7 @@ public sealed class TenantResolver(MasterDbContext master, TenantContext current
     public void BindForProvisioning(Tenant tenant)
     {
         current.Bind(tenant.Id, tenant.Code, BuildConnectionString(
-            configuration.GetConnectionString("TenantServer")!, tenant.DatabaseName));
+            configuration.GetConnectionString("TenantServer")!, tenant.DatabaseName), tenant.AppAccessGranted);
     }
 
     private void BindActive(Tenant? tenant)
@@ -64,7 +64,7 @@ public sealed class TenantResolver(MasterDbContext master, TenantContext current
         current.Bind(tenant.Id, tenant.Code, BuildConnectionString(
             configuration.GetConnectionString("TenantServer")
                 ?? throw new InvalidOperationException("ConnectionStrings:TenantServer is required."),
-            tenant.DatabaseName));
+            tenant.DatabaseName), tenant.AppAccessGranted);
     }
 
     private static readonly HashSet<string> ReservedDatabaseNames = new(StringComparer.Ordinal)

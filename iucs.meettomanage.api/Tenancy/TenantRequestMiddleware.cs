@@ -46,6 +46,8 @@ public sealed class TenantRequestMiddleware(RequestDelegate next)
 
         if (tenant.TenantId is { } id)
         {
+            if (AppAccessPolicy.IsDenied(http.Request.Headers, tenant.AppAccessGranted))
+                throw new ForbiddenException(AppAccessPolicy.DeniedMessage);
             using var ambient = TenantExecution.Enter(id, tenant.TenantCode!);
             await next(http);
         }

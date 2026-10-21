@@ -14,4 +14,6 @@ public sealed class Tenant
     public TenantStatus Status { get; set; } = TenantStatus.Provisioning;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime? ProvisionedAtUtc { get; set; }
+    /// <summary>Whether this tenant's families may use the mobile parent app. Set when the tenant is created; changed by the operator.</summary>
+    public bool AppAccessGranted { get; set; } = true;
 }
