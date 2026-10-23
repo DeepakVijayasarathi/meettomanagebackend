@@ -92,7 +92,10 @@ namespace iucs.meettomanage.application.Services
             return new AiModelListDto { Models = await _aiChatClient.ListModelsAsync(endpoint, key, cancellationToken) };
         }
 
-        public async Task<BusinessAiBriefDto> GetBusinessBriefAsync(CancellationToken cancellationToken = default)
+        public Task<BusinessAiBriefDto> GetBusinessBriefAsync(CancellationToken cancellationToken = default) =>
+            GetBusinessBriefCoreAsync(includeAiSummary: true, cancellationToken);
+
+        private async Task<BusinessAiBriefDto> GetBusinessBriefCoreAsync(bool includeAiSummary, CancellationToken cancellationToken)
         {
             var children = await _unitOfWork.Repository<Child>().Query().Where(c => c.IsActive)
                 .Select(c => new { c.Id, Name = (c.FirstName + " " + c.LastName).Trim() }).ToListAsync(cancellationToken);
@@ -131,7 +134,13 @@ namespace iucs.meettomanage.application.Services
             var missingNotes = classSummaries.Count(s => s.Summary.StartsWith("Class completed;"));
             var fallback = $"{children.Count} active students are being tracked. {actionCount} of the highest-priority students need follow-up, and {missingNotes} of the latest {classSummaries.Count} completed classes are missing teacher notes.";
             var prompt = $"Write a concise business-owner briefing in 3 sentences. Be direct and action-oriented. Active students: {children.Count}. Priority follow-ups: {actionCount}. Recent completed classes: {classSummaries.Count}. Missing class notes: {missingNotes}. Student signals: {string.Join(" | ", insights.Take(5).Select(i => i.Insight))}";
-            var ai = await AskAiAsync(prompt, Array.Empty<ChatMessage>(), requireEnabled: true, cancellationToken);
+            // Business Copilot calls this method only to assemble its grounded data context.
+            // Generating an AI briefing there as well would make every Copilot question wait
+            // for two sequential provider completions, even though the first answer is thrown
+            // away. Skip that redundant call for the Copilot path.
+            var ai = includeAiSummary
+                ? await AskAiAsync(prompt, Array.Empty<ChatMessage>(), requireEnabled: true, cancellationToken)
+                : null;
             return new BusinessAiBriefDto { ExecutiveSummary = ai ?? fallback, AiPowered = ai is not null, GeneratedAtUtc = DateTime.UtcNow, StudentProgressInsights = insights, RecentClassSummaries = classSummaries };
         }
 
@@ -140,7 +149,7 @@ namespace iucs.meettomanage.application.Services
             var question = (request.Question ?? string.Empty).Trim();
             if (question.Length is < 2 or > 1000) throw new DomainValidationException("Ask a question between 2 and 1000 characters.");
 
-            var brief = await GetBusinessBriefAsync(cancellationToken);
+            var brief = await GetBusinessBriefCoreAsync(includeAiSummary: false, cancellationToken);
             var invoices = await _unitOfWork.Repository<Invoice>().Query()
                 .Select(i => new { i.Amount, i.AmountPaid, i.Status, i.DueDate }).ToListAsync(cancellationToken);
             var activeEnrollments = await _unitOfWork.Repository<BatchEnrollment>().Query().CountAsync(e => e.Status == EnrollmentStatus.Active, cancellationToken);
