@@ -138,10 +138,21 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<ActionResult<TestAiChatResponse>> TestAi(TestAiChatRequest request, CancellationToken cancellationToken) =>
             Ok(await _chatbot.TestAiAsync(request, cancellationToken));
 
+        [HttpGet("admin/ai-configuration/models")]
+        [Authorize(Roles = nameof(UserRole.Admin))]
+        [HasPermission(PermissionModule.Settings, PermissionAction.Edit)]
+        public async Task<ActionResult<AiModelListDto>> AiModels(CancellationToken cancellationToken) =>
+            Ok(await _chatbot.ListAiModelsAsync(cancellationToken));
+
         [HttpGet("business-brief")]
         [HasPermission(PermissionModule.ReportsAnalytics, PermissionAction.View)]
         public async Task<ActionResult<BusinessAiBriefDto>> BusinessBrief(CancellationToken cancellationToken) =>
             Ok(await _chatbot.GetBusinessBriefAsync(cancellationToken));
+
+        [HttpPost("business-copilot")]
+        [HasPermission(PermissionModule.ReportsAnalytics, PermissionAction.View)]
+        public async Task<ActionResult<BusinessCopilotResponse>> BusinessCopilot(BusinessCopilotRequest request, CancellationToken cancellationToken) =>
+            Ok(await _chatbot.AskBusinessCopilotAsync(request, cancellationToken));
 
         private Guid UserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
     }

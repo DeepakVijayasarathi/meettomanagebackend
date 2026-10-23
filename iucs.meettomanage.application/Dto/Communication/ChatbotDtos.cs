@@ -4,7 +4,7 @@ namespace iucs.meettomanage.application.Dto.Communication
     {
         public bool Enabled { get; set; }
         public string Endpoint { get; set; } = string.Empty;
-        public string Model { get; set; } = "smollm2:135m";
+        public string Model { get; set; } = "Qwen/Qwen3.6-35B-A3B-FP8";
         public string SystemPrompt { get; set; } = "Answer in 2-3 short sentences.";
         public int MaxTokens { get; set; } = 120;
         public double Temperature { get; set; } = 0.3;
@@ -16,7 +16,7 @@ namespace iucs.meettomanage.application.Dto.Communication
     {
         public bool Enabled { get; set; }
         public string Endpoint { get; set; } = string.Empty;
-        public string Model { get; set; } = "smollm2:135m";
+        public string Model { get; set; } = "Qwen/Qwen3.6-35B-A3B-FP8";
         public string SystemPrompt { get; set; } = "Answer in 2-3 short sentences.";
         public int MaxTokens { get; set; } = 120;
         public double Temperature { get; set; } = 0.3;
@@ -33,6 +33,11 @@ namespace iucs.meettomanage.application.Dto.Communication
     public class TestAiChatResponse
     {
         public string Answer { get; set; } = string.Empty;
+    }
+
+    public class AiModelListDto
+    {
+        public IReadOnlyList<string> Models { get; set; } = [];
     }
 
     public class BusinessAiBriefDto
@@ -61,6 +66,25 @@ namespace iucs.meettomanage.application.Dto.Communication
         public string TeacherName { get; set; } = string.Empty;
         public DateTime CompletedAtUtc { get; set; }
         public string Summary { get; set; } = string.Empty;
+    }
+
+    public class BusinessCopilotRequest
+    {
+        public string Question { get; set; } = string.Empty;
+        public IReadOnlyList<BusinessCopilotMessageDto> History { get; set; } = [];
+    }
+
+    public class BusinessCopilotMessageDto
+    {
+        public string Role { get; set; } = string.Empty;
+        public string Content { get; set; } = string.Empty;
+    }
+
+    public class BusinessCopilotResponse
+    {
+        public string Answer { get; set; } = string.Empty;
+        public bool AiPowered { get; set; }
+        public DateTime GeneratedAtUtc { get; set; }
     }
     public class ChatFaqDto
     {

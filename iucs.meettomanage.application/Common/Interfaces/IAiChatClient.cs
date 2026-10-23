@@ -13,5 +13,10 @@ namespace iucs.meettomanage.application.Common.Interfaces
             int maxTokens,
             double temperature,
             CancellationToken cancellationToken = default);
+
+        Task<IReadOnlyList<string>> ListModelsAsync(
+            string endpoint,
+            string? bearerKey,
+            CancellationToken cancellationToken = default);
     }
 }

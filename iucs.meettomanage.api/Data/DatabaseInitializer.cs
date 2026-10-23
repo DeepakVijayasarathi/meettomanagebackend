@@ -102,6 +102,7 @@ namespace iucs.meettomanage.api.Data
             await EnsureTeacherAssignmentMenuAsync(context);
             await EnsureParentRecordingsMenuAsync(context);
             await EnsureChatbotMenusAsync(context);
+            await EnsureAiInsightsMenuAsync(context);
             await SeedChatFaqsAsync(context);
             await EnsureAdditionalChatFaqsAsync(context);
             await BackfillPlainTextNotificationBodiesAsync(context);
@@ -857,6 +858,7 @@ namespace iucs.meettomanage.api.Data
             ("admin", "Finance", "Fee Suspension", "/admin/fee-suspension", "Ban", PermissionModule.BillingFinance.ToString()),
             ("admin", "Finance", "My Subscription", "/admin/subscription", "Gauge", null),
             ("admin", "Insights", "Reports & Analytics", "/admin/reports", "BarChart3", PermissionModule.ReportsAnalytics.ToString()),
+            ("admin", "Insights", "AI Insights", "/admin/ai-insights", "Sparkles", PermissionModule.ReportsAnalytics.ToString()),
             ("admin", "Insights", "Bulk Email", "/admin/bulk-email", "Mail", PermissionModule.Communication.ToString()),
             ("admin", "Insights", "Bulk Email History", "/admin/bulk-email/history", "History", PermissionModule.Communication.ToString()),
             ("admin", "Insights", "Email Templates", "/admin/email-templates", "FileText", PermissionModule.Communication.ToString()),
@@ -2156,6 +2158,22 @@ namespace iucs.meettomanage.api.Data
                     RequiredModule = PermissionModule.Communication.ToString(),
                 });
             }
+        }
+
+        /// <summary>Adds the owner-facing AI intelligence page to databases seeded before it existed.</summary>
+        private static async Task EnsureAiInsightsMenuAsync(MeetToManageDbContext context)
+        {
+            if (context.MenuItems.Local.Any(m => m.Portal == "admin" && m.Path == "/admin/ai-insights") ||
+                await context.MenuItems.AnyAsync(m => m.Portal == "admin" && m.Path == "/admin/ai-insights")) return;
+
+            var reports = await context.MenuItems.FirstOrDefaultAsync(m => m.Portal == "admin" && m.Path == "/admin/reports");
+            context.MenuItems.Add(new MenuItem
+            {
+                Portal = "admin", Section = "Insights", SectionOrder = reports?.SectionOrder ?? 4,
+                Label = "AI Insights", Path = "/admin/ai-insights", Icon = "Sparkles",
+                SortOrder = (reports?.SortOrder ?? 0) + 1, IsActive = true,
+                RequiredModule = PermissionModule.ReportsAnalytics.ToString(),
+            });
         }
 
         /// <summary>
