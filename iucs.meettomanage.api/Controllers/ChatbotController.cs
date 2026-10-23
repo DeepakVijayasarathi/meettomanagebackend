@@ -138,6 +138,11 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<ActionResult<TestAiChatResponse>> TestAi(TestAiChatRequest request, CancellationToken cancellationToken) =>
             Ok(await _chatbot.TestAiAsync(request, cancellationToken));
 
+        [HttpGet("business-brief")]
+        [HasPermission(PermissionModule.ReportsAnalytics, PermissionAction.View)]
+        public async Task<ActionResult<BusinessAiBriefDto>> BusinessBrief(CancellationToken cancellationToken) =>
+            Ok(await _chatbot.GetBusinessBriefAsync(cancellationToken));
+
         private Guid UserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
     }
 }

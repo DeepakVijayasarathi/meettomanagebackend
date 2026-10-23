@@ -34,6 +34,34 @@ namespace iucs.meettomanage.application.Dto.Communication
     {
         public string Answer { get; set; } = string.Empty;
     }
+
+    public class BusinessAiBriefDto
+    {
+        public string ExecutiveSummary { get; set; } = string.Empty;
+        public bool AiPowered { get; set; }
+        public DateTime GeneratedAtUtc { get; set; }
+        public IReadOnlyList<BusinessStudentInsightDto> StudentProgressInsights { get; set; } = [];
+        public IReadOnlyList<BusinessClassSummaryDto> RecentClassSummaries { get; set; } = [];
+    }
+
+    public class BusinessStudentInsightDto
+    {
+        public Guid ChildId { get; set; }
+        public string ChildName { get; set; } = string.Empty;
+        public double? AttendancePercent { get; set; }
+        public int EngagementScore { get; set; }
+        public string Priority { get; set; } = "Monitor";
+        public string Insight { get; set; } = string.Empty;
+    }
+
+    public class BusinessClassSummaryDto
+    {
+        public Guid SessionId { get; set; }
+        public string ClassName { get; set; } = string.Empty;
+        public string TeacherName { get; set; } = string.Empty;
+        public DateTime CompletedAtUtc { get; set; }
+        public string Summary { get; set; } = string.Empty;
+    }
     public class ChatFaqDto
     {
         public Guid Id { get; set; }

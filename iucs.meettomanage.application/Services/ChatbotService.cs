@@ -3,6 +3,8 @@ using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Communication;
 using iucs.meettomanage.domain.Entities.Communication;
 using iucs.meettomanage.domain.Entities.Settings;
+using iucs.meettomanage.domain.Entities.Sessions;
+using iucs.meettomanage.domain.Entities.Users;
 using iucs.meettomanage.domain.Enums;
 using iucs.meettomanage.domain.Repository;
 using Microsoft.EntityFrameworkCore;
@@ -76,6 +78,49 @@ namespace iucs.meettomanage.application.Services
             var answer = await AskAiAsync((request.Message ?? string.Empty).Trim(), Array.Empty<ChatMessage>(), requireEnabled: false, cancellationToken)
                 ?? throw new DomainValidationException("AI is not configured. Save an endpoint and model first.");
             return new TestAiChatResponse { Answer = answer };
+        }
+
+        public async Task<BusinessAiBriefDto> GetBusinessBriefAsync(CancellationToken cancellationToken = default)
+        {
+            var children = await _unitOfWork.Repository<Child>().Query().Where(c => c.IsActive)
+                .Select(c => new { c.Id, Name = (c.FirstName + " " + c.LastName).Trim() }).ToListAsync(cancellationToken);
+            var childIds = children.Select(c => c.Id).ToList();
+            var attendance = await _unitOfWork.Repository<SessionAttendance>().Query().Where(a => a.ChildId != null && childIds.Contains(a.ChildId.Value))
+                .Select(a => new { ChildId = a.ChildId!.Value, a.Status }).ToListAsync(cancellationToken);
+            var engagement = await _unitOfWork.Repository<EngagementEvent>().Query().Where(e => e.ChildId != null && childIds.Contains(e.ChildId.Value))
+                .Select(e => new { ChildId = e.ChildId!.Value, e.Type, e.Value }).ToListAsync(cancellationToken);
+
+            var insights = children.Select(child =>
+            {
+                var rows = attendance.Where(a => a.ChildId == child.Id).ToList();
+                double? rate = rows.Count == 0 ? null : Math.Round(100d * rows.Count(a => a.Status != AttendanceStatus.Absent) / rows.Count, 1);
+                var events = engagement.Where(e => e.ChildId == child.Id).ToList();
+                var score = Math.Min(100, events.Sum(e => e.Value));
+                var priority = rate is < 70 || (rate is not null && score < 10) ? "Action needed" : rate is < 85 || score < 25 ? "Monitor" : "On track";
+                var narrative = rate is null ? $"{child.Name} has no attendance history yet. Confirm onboarding and first-class readiness."
+                    : rate < 70 ? $"{child.Name}'s attendance is {rate}%. Contact the family and remove scheduling barriers."
+                    : score < 10 ? $"{child.Name} attends ({rate}%) but recorded participation is low. Ask the teacher for an engagement plan."
+                    : $"{child.Name} is progressing steadily with {rate}% attendance and consistent participation.";
+                return new BusinessStudentInsightDto { ChildId = child.Id, ChildName = child.Name, AttendancePercent = rate, EngagementScore = score, Priority = priority, Insight = narrative };
+            }).OrderBy(i => i.Priority == "Action needed" ? 0 : i.Priority == "Monitor" ? 1 : 2).ThenBy(i => i.AttendancePercent ?? -1).Take(8).ToList();
+
+            var sessions = await _unitOfWork.Repository<ClassSession>().Query()
+                .Include(s => s.Batch).ThenInclude(b => b!.Course).Include(s => s.TeacherProfile).ThenInclude(t => t.User)
+                .Where(s => s.Status == SessionStatus.Completed).OrderByDescending(s => s.ActualEndAtUtc ?? s.ScheduledEndAtUtc).Take(8).ToListAsync(cancellationToken);
+            var classSummaries = sessions.Select(s => new BusinessClassSummaryDto
+            {
+                SessionId = s.Id, ClassName = s.Batch?.Course?.Name ?? s.Batch?.Name ?? "Demo class",
+                TeacherName = $"{s.TeacherProfile.User.FirstName} {s.TeacherProfile.User.LastName}".Trim(),
+                CompletedAtUtc = s.ActualEndAtUtc ?? s.ScheduledEndAtUtc,
+                Summary = string.IsNullOrWhiteSpace(s.Summary) ? "Class completed; teacher notes have not been added yet." : s.Summary,
+            }).ToList();
+
+            var actionCount = insights.Count(i => i.Priority == "Action needed");
+            var missingNotes = classSummaries.Count(s => s.Summary.StartsWith("Class completed;"));
+            var fallback = $"{children.Count} active students are being tracked. {actionCount} of the highest-priority students need follow-up, and {missingNotes} of the latest {classSummaries.Count} completed classes are missing teacher notes.";
+            var prompt = $"Write a concise business-owner briefing in 3 sentences. Be direct and action-oriented. Active students: {children.Count}. Priority follow-ups: {actionCount}. Recent completed classes: {classSummaries.Count}. Missing class notes: {missingNotes}. Student signals: {string.Join(" | ", insights.Take(5).Select(i => i.Insight))}";
+            var ai = await AskAiAsync(prompt, Array.Empty<ChatMessage>(), requireEnabled: true, cancellationToken);
+            return new BusinessAiBriefDto { ExecutiveSummary = ai ?? fallback, AiPowered = ai is not null, GeneratedAtUtc = DateTime.UtcNow, StudentProgressInsights = insights, RecentClassSummaries = classSummaries };
         }
 
         public async Task<IReadOnlyList<ChatFaqDto>> ListActiveFaqsAsync(CancellationToken cancellationToken = default)
