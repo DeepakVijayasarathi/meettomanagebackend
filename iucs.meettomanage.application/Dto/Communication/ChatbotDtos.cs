@@ -1,5 +1,39 @@
 namespace iucs.meettomanage.application.Dto.Communication
 {
+    public class AiChatConfigurationDto
+    {
+        public bool Enabled { get; set; }
+        public string Endpoint { get; set; } = string.Empty;
+        public string Model { get; set; } = "smollm2:135m";
+        public string SystemPrompt { get; set; } = "Answer in 2-3 short sentences.";
+        public int MaxTokens { get; set; } = 120;
+        public double Temperature { get; set; } = 0.3;
+        public bool HasApiKey { get; set; }
+        public string MaskedApiKey { get; set; } = string.Empty;
+    }
+
+    public class UpdateAiChatConfigurationRequest
+    {
+        public bool Enabled { get; set; }
+        public string Endpoint { get; set; } = string.Empty;
+        public string Model { get; set; } = "smollm2:135m";
+        public string SystemPrompt { get; set; } = "Answer in 2-3 short sentences.";
+        public int MaxTokens { get; set; } = 120;
+        public double Temperature { get; set; } = 0.3;
+        /// <summary>Null/blank preserves the current key; a new value rotates it.</summary>
+        public string? ApiKey { get; set; }
+        public bool ClearApiKey { get; set; }
+    }
+
+    public class TestAiChatRequest
+    {
+        public string Message { get; set; } = "What is Node.js?";
+    }
+
+    public class TestAiChatResponse
+    {
+        public string Answer { get; set; } = string.Empty;
+    }
     public class ChatFaqDto
     {
         public Guid Id { get; set; }

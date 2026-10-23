@@ -113,6 +113,8 @@ builder.Services.AddScoped<ISmsSender, SmsSender>();
 // Gemini__ApiKey env var in prod, never committed.
 builder.Services.AddHttpClient(nameof(GeminiSalesAssistant), client => client.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<ISalesAssistant, GeminiSalesAssistant>();
+builder.Services.AddHttpClient(nameof(OllamaChatClient), client => client.Timeout = TimeSpan.FromSeconds(45));
+builder.Services.AddScoped<IAiChatClient, OllamaChatClient>();
 // S3-compatible object storage (Hetzner Object Storage) everywhere — dev and prod both, so
 // an upload made locally behaves identically to one made against the real deployment instead
 // of silently depending on which environment you're in. Configured via Storage:S3:* (real

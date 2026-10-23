@@ -120,6 +120,24 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _chatbot.GetUsageStatsAsync(cancellationToken));
         }
 
+        [HttpGet("admin/ai-configuration")]
+        [Authorize(Roles = nameof(UserRole.Admin))]
+        [HasPermission(PermissionModule.Settings, PermissionAction.View)]
+        public async Task<ActionResult<AiChatConfigurationDto>> AiConfiguration(CancellationToken cancellationToken) =>
+            Ok(await _chatbot.GetAiConfigurationAsync(cancellationToken));
+
+        [HttpPut("admin/ai-configuration")]
+        [Authorize(Roles = nameof(UserRole.Admin))]
+        [HasPermission(PermissionModule.Settings, PermissionAction.Edit)]
+        public async Task<ActionResult<AiChatConfigurationDto>> UpdateAiConfiguration(UpdateAiChatConfigurationRequest request, CancellationToken cancellationToken) =>
+            Ok(await _chatbot.UpdateAiConfigurationAsync(request, cancellationToken));
+
+        [HttpPost("admin/ai-configuration/test")]
+        [Authorize(Roles = nameof(UserRole.Admin))]
+        [HasPermission(PermissionModule.Settings, PermissionAction.Edit)]
+        public async Task<ActionResult<TestAiChatResponse>> TestAi(TestAiChatRequest request, CancellationToken cancellationToken) =>
+            Ok(await _chatbot.TestAiAsync(request, cancellationToken));
+
         private Guid UserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
     }
 }

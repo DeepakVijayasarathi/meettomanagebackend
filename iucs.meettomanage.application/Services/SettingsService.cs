@@ -57,7 +57,7 @@ namespace iucs.meettomanage.application.Services
         public async Task<IReadOnlyList<SettingDto>> GetAllAsync(CancellationToken cancellationToken = default)
         {
             var settings = await _unitOfWork.Repository<AppSetting>().Query()
-                .Where(s => !s.Key.StartsWith("seo.") && !s.Key.StartsWith("analytics."))
+                .Where(s => !s.Key.StartsWith("seo.") && !s.Key.StartsWith("analytics.") && s.Key != "ai.chat.apiKeyEncrypted")
                 .OrderBy(s => s.Category).ThenBy(s => s.Key)
                 .ToListAsync(cancellationToken);
 

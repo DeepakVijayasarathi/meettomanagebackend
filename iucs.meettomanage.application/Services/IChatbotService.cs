@@ -20,6 +20,9 @@ namespace iucs.meettomanage.application.Services
         Task<IReadOnlyList<ChatMessageDto>> ListMyMessagesAsync(Guid userId, CancellationToken cancellationToken = default);
 
         Task<AskChatbotResponse> AskAsync(Guid userId, AskChatbotRequest request, CancellationToken cancellationToken = default);
+        Task<AiChatConfigurationDto> GetAiConfigurationAsync(CancellationToken cancellationToken = default);
+        Task<AiChatConfigurationDto> UpdateAiConfigurationAsync(UpdateAiChatConfigurationRequest request, CancellationToken cancellationToken = default);
+        Task<TestAiChatResponse> TestAiAsync(TestAiChatRequest request, CancellationToken cancellationToken = default);
 
         Task<ChatMessageDto> SubmitFeedbackAsync(
             Guid userId,

@@ -1,6 +1,8 @@
 using iucs.meettomanage.application.Common.Exceptions;
+using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Communication;
 using iucs.meettomanage.domain.Entities.Communication;
+using iucs.meettomanage.domain.Entities.Settings;
 using iucs.meettomanage.domain.Enums;
 using iucs.meettomanage.domain.Repository;
 using Microsoft.EntityFrameworkCore;
@@ -10,6 +12,16 @@ namespace iucs.meettomanage.application.Services
     public class ChatbotService : IChatbotService
     {
         private readonly IUnitOfWork _unitOfWork;
+        private readonly IAiChatClient _aiChatClient;
+        private readonly IPinVault _secretVault;
+
+        private const string AiEnabledKey = "ai.chat.enabled";
+        private const string AiEndpointKey = "ai.chat.endpoint";
+        private const string AiModelKey = "ai.chat.model";
+        private const string AiSystemPromptKey = "ai.chat.systemPrompt";
+        private const string AiMaxTokensKey = "ai.chat.maxTokens";
+        private const string AiTemperatureKey = "ai.chat.temperature";
+        private const string AiApiKeyKey = "ai.chat.apiKeyEncrypted";
 
         /// <summary>Common filler words ignored when scoring a question against an FAQ's tokens —
         /// otherwise two unrelated questions could "match" purely by sharing "the" or "class".</summary>
@@ -20,9 +32,50 @@ namespace iucs.meettomanage.application.Services
             "help", "about", "you", "your", "it", "this", "that", "and", "or", "with",
         };
 
-        public ChatbotService(IUnitOfWork unitOfWork)
+        public ChatbotService(IUnitOfWork unitOfWork, IAiChatClient aiChatClient, IPinVault secretVault)
         {
             _unitOfWork = unitOfWork;
+            _aiChatClient = aiChatClient;
+            _secretVault = secretVault;
+        }
+
+        public async Task<AiChatConfigurationDto> GetAiConfigurationAsync(CancellationToken cancellationToken = default)
+        {
+            var values = await AiSettingsAsync(cancellationToken);
+            var hasKey = values.TryGetValue(AiApiKeyKey, out var encrypted) && !string.IsNullOrWhiteSpace(encrypted);
+            return new AiChatConfigurationDto
+            {
+                Enabled = Bool(values, AiEnabledKey),
+                Endpoint = Val(values, AiEndpointKey),
+                Model = Val(values, AiModelKey, "smollm2:135m"),
+                SystemPrompt = Val(values, AiSystemPromptKey, "Answer in 2-3 short sentences."),
+                MaxTokens = Int(values, AiMaxTokensKey, 120, 1, 2000),
+                Temperature = Double(values, AiTemperatureKey, 0.3, 0, 2),
+                HasApiKey = hasKey,
+                MaskedApiKey = hasKey ? "••••••••" : string.Empty,
+            };
+        }
+
+        public async Task<AiChatConfigurationDto> UpdateAiConfigurationAsync(UpdateAiChatConfigurationRequest request, CancellationToken cancellationToken = default)
+        {
+            ValidateAiConfiguration(request);
+            var values = new Dictionary<string, string?>
+            {
+                [AiEnabledKey] = request.Enabled.ToString().ToLowerInvariant(), [AiEndpointKey] = request.Endpoint.Trim(),
+                [AiModelKey] = request.Model.Trim(), [AiSystemPromptKey] = request.SystemPrompt.Trim(),
+                [AiMaxTokensKey] = request.MaxTokens.ToString(), [AiTemperatureKey] = request.Temperature.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            };
+            if (request.ClearApiKey) values[AiApiKeyKey] = null;
+            else if (!string.IsNullOrWhiteSpace(request.ApiKey)) values[AiApiKeyKey] = _secretVault.Protect(request.ApiKey.Trim());
+            await UpsertAiSettingsAsync(values, cancellationToken);
+            return await GetAiConfigurationAsync(cancellationToken);
+        }
+
+        public async Task<TestAiChatResponse> TestAiAsync(TestAiChatRequest request, CancellationToken cancellationToken = default)
+        {
+            var answer = await AskAiAsync((request.Message ?? string.Empty).Trim(), Array.Empty<ChatMessage>(), requireEnabled: false, cancellationToken)
+                ?? throw new DomainValidationException("AI is not configured. Save an endpoint and model first.");
+            return new TestAiChatResponse { Answer = answer };
         }
 
         public async Task<IReadOnlyList<ChatFaqDto>> ListActiveFaqsAsync(CancellationToken cancellationToken = default)
@@ -112,16 +165,22 @@ namespace iucs.meettomanage.application.Services
                 .Where(f => f.IsActive)
                 .ToListAsync(cancellationToken);
 
+            var recent = await _unitOfWork.Repository<ChatMessage>().Query()
+                .Where(m => m.UserId == userId && m.Id != userMessage.Id)
+                .OrderByDescending(m => m.CreatedAtUtc).Take(8).OrderBy(m => m.CreatedAtUtc)
+                .ToListAsync(cancellationToken);
+            var aiAnswer = await AskAiAsync(question, recent, requireEnabled: true, cancellationToken);
+
             var match = FindBestMatch(question, faqs);
 
-            var escalated = match is null;
+            var escalated = aiAnswer is null && match is null;
             var botMessage = new ChatMessage
             {
                 UserId = userId,
                 Sender = ChatMessageSender.Bot,
-                Text = match?.Answer
+                Text = aiAnswer ?? match?.Answer
                     ?? "I don't have an answer for that yet — I've forwarded your doubt to a teacher, who'll follow up soon.",
-                MatchedFaqId = match?.Id,
+                MatchedFaqId = aiAnswer is null ? match?.Id : null,
             };
             await _unitOfWork.Repository<ChatMessage>().AddAsync(botMessage, cancellationToken);
 
@@ -141,10 +200,54 @@ namespace iucs.meettomanage.application.Services
             {
                 UserMessage = ToDto(userMessage),
                 BotMessage = ToDto(botMessage),
-                Matched = match is not null,
+                Matched = aiAnswer is not null || match is not null,
                 Escalated = escalated,
             };
         }
+
+        private async Task<string?> AskAiAsync(string question, IReadOnlyList<ChatMessage> history, bool requireEnabled, CancellationToken cancellationToken)
+        {
+            var values = await AiSettingsAsync(cancellationToken);
+            if ((requireEnabled && !Bool(values, AiEnabledKey)) || string.IsNullOrWhiteSpace(Val(values, AiEndpointKey))) return null;
+            var turns = new List<AiChatTurn> { new("system", Val(values, AiSystemPromptKey, "Answer in 2-3 short sentences.")) };
+            turns.AddRange(history.Select(m => new AiChatTurn(m.Sender == ChatMessageSender.User ? "user" : "assistant", m.Text)));
+            turns.Add(new AiChatTurn("user", question));
+            string? key = null;
+            if (values.TryGetValue(AiApiKeyKey, out var encrypted) && !string.IsNullOrWhiteSpace(encrypted)) key = _secretVault.TryReveal(encrypted);
+            try
+            {
+                return await _aiChatClient.CompleteAsync(Val(values, AiEndpointKey), key, Val(values, AiModelKey, "smollm2:135m"), turns,
+                    Int(values, AiMaxTokensKey, 120, 1, 2000), Double(values, AiTemperatureKey, 0.3, 0, 2), cancellationToken);
+            }
+            catch when (requireEnabled) { return null; } // Keep FAQ/escalation available if the configured provider is temporarily down.
+        }
+
+        private async Task<Dictionary<string, string?>> AiSettingsAsync(CancellationToken ct) => await _unitOfWork.Repository<AppSetting>().Query()
+            .Where(s => s.Key.StartsWith("ai.chat.")).ToDictionaryAsync(s => s.Key, s => s.Value, ct);
+
+        private async Task UpsertAiSettingsAsync(Dictionary<string, string?> values, CancellationToken ct)
+        {
+            var repo = _unitOfWork.Repository<AppSetting>();
+            var existing = await repo.Query().Where(s => values.Keys.Contains(s.Key)).ToDictionaryAsync(s => s.Key, ct);
+            foreach (var pair in values)
+                if (existing.TryGetValue(pair.Key, out var row)) { row.Value = pair.Value; repo.Update(row); }
+                else await repo.AddAsync(new AppSetting { Key = pair.Key, Value = pair.Value, Category = SettingCategory.Integrations, IsPublic = false }, ct);
+            await _unitOfWork.SaveChangesAsync(ct);
+        }
+
+        private static void ValidateAiConfiguration(UpdateAiChatConfigurationRequest r)
+        {
+            if (!Uri.TryCreate(r.Endpoint?.Trim(), UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                throw new DomainValidationException("Enter a valid HTTP or HTTPS AI endpoint.");
+            if (string.IsNullOrWhiteSpace(r.Model)) throw new DomainValidationException("Enter an AI model.");
+            if (string.IsNullOrWhiteSpace(r.SystemPrompt)) throw new DomainValidationException("Enter a system prompt.");
+            if (r.MaxTokens is < 1 or > 2000) throw new DomainValidationException("Max tokens must be between 1 and 2000.");
+            if (r.Temperature is < 0 or > 2) throw new DomainValidationException("Temperature must be between 0 and 2.");
+        }
+        private static string Val(Dictionary<string, string?> v, string k, string fallback = "") => v.TryGetValue(k, out var x) && !string.IsNullOrWhiteSpace(x) ? x : fallback;
+        private static bool Bool(Dictionary<string, string?> v, string k) => bool.TryParse(Val(v, k), out var x) && x;
+        private static int Int(Dictionary<string, string?> v, string k, int fallback, int min, int max) => int.TryParse(Val(v, k), out var x) ? Math.Clamp(x, min, max) : fallback;
+        private static double Double(Dictionary<string, string?> v, string k, double fallback, double min, double max) => double.TryParse(Val(v, k), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var x) ? Math.Clamp(x, min, max) : fallback;
 
         public async Task<ChatMessageDto> SubmitFeedbackAsync(
             Guid userId,
