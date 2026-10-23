@@ -53,7 +53,7 @@ namespace iucs.meettomanage.application.Services
                 Endpoint = Val(values, AiEndpointKey, "https://inference.hetzner.com/api/v1"),
                 Model = Val(values, AiModelKey, "Qwen/Qwen3.6-35B-A3B-FP8"),
                 SystemPrompt = Val(values, AiSystemPromptKey, "Answer in 2-3 short sentences."),
-                MaxTokens = Int(values, AiMaxTokensKey, 120, 1, 2000),
+                MaxTokens = Int(values, AiMaxTokensKey, 500, 1, 2000),
                 Temperature = Double(values, AiTemperatureKey, 0.3, 0, 2),
                 HasApiKey = hasKey,
                 MaskedApiKey = hasKey ? "••••••••" : string.Empty,
@@ -313,7 +313,7 @@ namespace iucs.meettomanage.application.Services
             try
             {
                 return await _aiChatClient.CompleteAsync(Val(values, AiEndpointKey), key, Val(values, AiModelKey, "Qwen/Qwen3.6-35B-A3B-FP8"), turns,
-                    Int(values, AiMaxTokensKey, 120, 1, 2000), Double(values, AiTemperatureKey, 0.3, 0, 2), cancellationToken);
+                    Int(values, AiMaxTokensKey, 500, 1, 2000), Double(values, AiTemperatureKey, 0.3, 0, 2), cancellationToken);
             }
             catch when (requireEnabled) { return null; } // Keep FAQ/escalation available if the configured provider is temporarily down.
         }

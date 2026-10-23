@@ -16,8 +16,13 @@ namespace iucs.meettomanage.api.Services
         {
             var openAi = IsOpenAi(endpoint);
             var chatUrl = openAi ? Join(endpoint, "chat/completions") : endpoint;
+            // Hetzner's current Qwen reasoning models count their hidden reasoning against
+            // max_tokens. With the old 120-token default they often stopped with finish_reason
+            // "length" before emitting message.content at all. Preserve small limits for Ollama,
+            // but guarantee enough room for an OpenAI-compatible reasoning response.
+            var effectiveMaxTokens = openAi ? Math.Max(maxTokens, 500) : maxTokens;
             object payload = openAi
-                ? new { model, messages = messages.Select(m => new { role = m.Role, content = m.Content }), stream = false, max_tokens = maxTokens, temperature }
+                ? new { model, messages = messages.Select(m => new { role = m.Role, content = m.Content }), stream = false, max_tokens = effectiveMaxTokens, temperature }
                 : new { model, messages = messages.Select(m => new { role = m.Role, content = m.Content }), stream = false, options = new { num_predict = maxTokens, temperature } };
             using var request = new HttpRequestMessage(HttpMethod.Post, chatUrl)
             {
