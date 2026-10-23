@@ -22,7 +22,19 @@ namespace iucs.meettomanage.api.Services
             // but guarantee enough room for an OpenAI-compatible reasoning response.
             var effectiveMaxTokens = openAi ? Math.Max(maxTokens, 500) : maxTokens;
             object payload = openAi
-                ? new { model, messages = messages.Select(m => new { role = m.Role, content = m.Content }), stream = false, max_tokens = effectiveMaxTokens, temperature }
+                // Qwen reasoning models can otherwise spend the whole output budget on hidden
+                // reasoning and return an empty message.content (or take minutes on a grounded
+                // business prompt). Hetzner's OpenAI-compatible endpoint forwards this Qwen
+                // chat-template option, producing the concise visible answer the UI needs.
+                ? new
+                {
+                    model,
+                    messages = messages.Select(m => new { role = m.Role, content = m.Content }),
+                    stream = false,
+                    max_tokens = effectiveMaxTokens,
+                    temperature,
+                    chat_template_kwargs = new { enable_thinking = false },
+                }
                 : new { model, messages = messages.Select(m => new { role = m.Role, content = m.Content }), stream = false, options = new { num_predict = maxTokens, temperature } };
             using var request = new HttpRequestMessage(HttpMethod.Post, chatUrl)
             {
