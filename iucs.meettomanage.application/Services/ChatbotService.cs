@@ -288,6 +288,10 @@ namespace iucs.meettomanage.application.Services
             var turns = new List<AiChatTurn> { new("system", $"{system}\n\n--- BEGIN LIVE BUSINESS DATA ---\n{context}\n--- END LIVE BUSINESS DATA ---") };
             turns.AddRange((request.History ?? []).TakeLast(8)
                 .Where(m => (m.Role is "user" or "assistant") && !string.IsNullOrWhiteSpace(m.Content))
+                // A deterministic outage fallback is not an AI answer. Sending it back as
+                // assistant history teaches the model to repeat the outage text even after the
+                // provider recovers (especially for short follow-ups such as "hi").
+                .Where(m => m.Role != "assistant" || !m.Content.Contains("AI analysis is temporarily unavailable", StringComparison.OrdinalIgnoreCase))
                 .Select(m => new AiChatTurn(m.Role, m.Content.Length > 2000 ? m.Content[..2000] : m.Content)));
             turns.Add(new AiChatTurn("user", question));
 
