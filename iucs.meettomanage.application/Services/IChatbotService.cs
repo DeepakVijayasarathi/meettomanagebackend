@@ -24,6 +24,7 @@ namespace iucs.meettomanage.application.Services
         Task<AiChatConfigurationDto> UpdateAiConfigurationAsync(UpdateAiChatConfigurationRequest request, CancellationToken cancellationToken = default);
         Task<TestAiChatResponse> TestAiAsync(TestAiChatRequest request, CancellationToken cancellationToken = default);
         Task<AiModelListDto> ListAiModelsAsync(CancellationToken cancellationToken = default);
+        Task<AiCostMonitorDto> GetAiCostMonitorAsync(CancellationToken cancellationToken = default);
         Task<BusinessAiBriefDto> GetBusinessBriefAsync(CancellationToken cancellationToken = default);
         Task<BusinessCopilotResponse> AskBusinessCopilotAsync(BusinessCopilotRequest request, CancellationToken cancellationToken = default);
 

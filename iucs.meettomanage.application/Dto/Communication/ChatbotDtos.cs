@@ -10,6 +10,9 @@ namespace iucs.meettomanage.application.Dto.Communication
         public double Temperature { get; set; } = 0.3;
         public bool HasApiKey { get; set; }
         public string MaskedApiKey { get; set; } = string.Empty;
+        public decimal InputCostPerMillionTokensUsd { get; set; }
+        public decimal OutputCostPerMillionTokensUsd { get; set; }
+        public decimal MonthlyBudgetUsd { get; set; }
     }
 
     public class UpdateAiChatConfigurationRequest
@@ -23,6 +26,9 @@ namespace iucs.meettomanage.application.Dto.Communication
         /// <summary>Null/blank preserves the current key; a new value rotates it.</summary>
         public string? ApiKey { get; set; }
         public bool ClearApiKey { get; set; }
+        public decimal InputCostPerMillionTokensUsd { get; set; }
+        public decimal OutputCostPerMillionTokensUsd { get; set; }
+        public decimal MonthlyBudgetUsd { get; set; }
     }
 
     public class TestAiChatRequest
@@ -40,13 +46,53 @@ namespace iucs.meettomanage.application.Dto.Communication
         public IReadOnlyList<string> Models { get; set; } = [];
     }
 
+    public class AiCostMonitorDto
+    {
+        public string PeriodLabel { get; set; } = string.Empty;
+        public long Requests { get; set; }
+        public long SuccessfulRequests { get; set; }
+        public long FailedRequests { get; set; }
+        public long InputTokens { get; set; }
+        public long OutputTokens { get; set; }
+        public long TotalTokens => InputTokens + OutputTokens;
+        public decimal EstimatedCostUsd { get; set; }
+        public decimal MonthlyBudgetUsd { get; set; }
+        public double BudgetUsedPercent { get; set; }
+        public bool PricingConfigured { get; set; }
+        public DateTime GeneratedAtUtc { get; set; }
+    }
+
     public class BusinessAiBriefDto
     {
         public string ExecutiveSummary { get; set; } = string.Empty;
         public bool AiPowered { get; set; }
         public DateTime GeneratedAtUtc { get; set; }
+        public BusinessCostSnapshotDto CostSnapshot { get; set; } = new();
         public IReadOnlyList<BusinessStudentInsightDto> StudentProgressInsights { get; set; } = [];
         public IReadOnlyList<BusinessClassSummaryDto> RecentClassSummaries { get; set; } = [];
+    }
+
+    public class BusinessCostSnapshotDto
+    {
+        public string PeriodLabel { get; set; } = string.Empty;
+        public decimal CollectedRevenue { get; set; }
+        public decimal OutstandingRevenue { get; set; }
+        public decimal OverdueRevenue { get; set; }
+        public int OverdueInvoiceCount { get; set; }
+        public decimal TeacherPayoutCost { get; set; }
+        public decimal StaffPayrollCost { get; set; }
+        public decimal TotalPeopleCost { get; set; }
+        public decimal EstimatedContribution { get; set; }
+        public double? EstimatedMarginPercent { get; set; }
+        public decimal ProjectedMonthRevenue { get; set; }
+        public decimal ProjectedMonthContribution { get; set; }
+        public string ForecastBasis { get; set; } = string.Empty;
+        public decimal? CostPerActiveEnrollment { get; set; }
+        public int ActiveEnrollmentCount { get; set; }
+        public int EligibleStaffCount { get; set; }
+        public int ConfiguredStaffCount { get; set; }
+        public bool HasRecordedPeopleCosts { get; set; }
+        public string CoverageNote { get; set; } = string.Empty;
     }
 
     public class BusinessStudentInsightDto

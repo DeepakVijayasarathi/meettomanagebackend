@@ -11,7 +11,7 @@ namespace iucs.meettomanage.api.Services
         private readonly IHttpClientFactory _clients;
         public OllamaChatClient(IHttpClientFactory clients) => _clients = clients;
 
-        public async Task<string> CompleteAsync(string endpoint, string? bearerKey, string model,
+        public async Task<AiChatCompletion> CompleteAsync(string endpoint, string? bearerKey, string model,
             IReadOnlyList<AiChatTurn> messages, int maxTokens, double temperature, CancellationToken cancellationToken = default)
         {
             var openAi = IsOpenAi(endpoint);
@@ -51,7 +51,23 @@ namespace iucs.meettomanage.api.Services
                 : json.RootElement.TryGetProperty("message", out var message) && message.TryGetProperty("content", out content);
             if (!found || string.IsNullOrWhiteSpace(content.GetString()))
                 throw new InvalidOperationException("AI provider returned no message content.");
-            return content.GetString()!.Trim();
+            var promptTokens = 0;
+            var completionTokens = 0;
+            if (openAi && json.RootElement.TryGetProperty("usage", out var usage))
+            {
+                if (usage.TryGetProperty("prompt_tokens", out var prompt)) promptTokens = prompt.GetInt32();
+                if (usage.TryGetProperty("completion_tokens", out var completion)) completionTokens = completion.GetInt32();
+            }
+            else
+            {
+                if (json.RootElement.TryGetProperty("prompt_eval_count", out var prompt)) promptTokens = prompt.GetInt32();
+                if (json.RootElement.TryGetProperty("eval_count", out var completion)) completionTokens = completion.GetInt32();
+            }
+            // Some compatible providers omit usage. Retain a clearly estimated count instead of
+            // silently reporting zero cost; roughly four characters per token is conservative.
+            if (promptTokens <= 0) promptTokens = Math.Max(1, messages.Sum(m => m.Content.Length) / 4);
+            if (completionTokens <= 0) completionTokens = Math.Max(1, content.GetString()!.Length / 4);
+            return new AiChatCompletion(content.GetString()!.Trim(), promptTokens, completionTokens);
         }
 
         public async Task<IReadOnlyList<string>> ListModelsAsync(string endpoint, string? bearerKey, CancellationToken cancellationToken = default)

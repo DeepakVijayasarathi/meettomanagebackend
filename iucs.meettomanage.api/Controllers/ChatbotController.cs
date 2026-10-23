@@ -144,6 +144,12 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<ActionResult<AiModelListDto>> AiModels(CancellationToken cancellationToken) =>
             Ok(await _chatbot.ListAiModelsAsync(cancellationToken));
 
+        [HttpGet("admin/ai-cost-monitor")]
+        [Authorize(Roles = nameof(UserRole.Admin))]
+        [HasPermission(PermissionModule.Settings, PermissionAction.View)]
+        public async Task<ActionResult<AiCostMonitorDto>> AiCostMonitor(CancellationToken cancellationToken) =>
+            Ok(await _chatbot.GetAiCostMonitorAsync(cancellationToken));
+
         [HttpGet("business-brief")]
         [HasPermission(PermissionModule.ReportsAnalytics, PermissionAction.View)]
         public async Task<ActionResult<BusinessAiBriefDto>> BusinessBrief(CancellationToken cancellationToken) =>
