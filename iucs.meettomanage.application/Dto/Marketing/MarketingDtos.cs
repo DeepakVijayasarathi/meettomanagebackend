@@ -193,6 +193,20 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public string? BookedName { get; set; }
     }
 
+    public class MarketingTranslationRequest
+    {
+        [Required, MinLength(1), MaxLength(30)]
+        public List<string> Texts { get; set; } = [];
+
+        [Required, StringLength(10)]
+        public string TargetLanguage { get; set; } = string.Empty;
+    }
+
+    public class MarketingTranslationResponse
+    {
+        public IReadOnlyList<string> Translations { get; set; } = [];
+    }
+
     /// <summary>Public — one anonymous marketing-site event, sent by the site itself.</summary>
     public class TrackMarketingEventRequest
     {
