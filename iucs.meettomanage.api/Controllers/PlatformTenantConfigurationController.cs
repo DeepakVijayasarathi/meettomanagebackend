@@ -34,6 +34,52 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
     public async Task<IActionResult> Configuration(Guid tenantId, CancellationToken ct) =>
         Ok(await InTenant(tenantId, sp => sp.GetRequiredService<ISettingsService>().GetAllAsync(ct), ct));
 
+    /// <summary>One bounded, tenant-scoped payload for the operator's health/usage/onboarding workspace.</summary>
+    [HttpGet("operations")]
+    public async Task<IActionResult> Operations(Guid tenantId, CancellationToken ct)
+    {
+        var tenant = await master.Tenants.AsNoTracking().SingleOrDefaultAsync(x => x.Id == tenantId, ct)
+            ?? throw new NotFoundException("Tenant", tenantId);
+        var subscription = await master.TenantSubscriptions.AsNoTracking().Include(x => x.Plan)
+            .SingleOrDefaultAsync(x => x.TenantId == tenantId, ct);
+        var snapshot = await master.TenantUsageSnapshots.AsNoTracking().Where(x => x.TenantId == tenantId)
+            .OrderByDescending(x => x.SnapshotDate).FirstOrDefaultAsync(ct);
+        var business = await InTenant(tenantId, async sp =>
+        {
+            var db = sp.GetRequiredService<MeetToManageDbContext>();
+            var settings = await db.AppSettings.AsNoTracking().ToDictionaryAsync(x => x.Key, x => x.Value, ct);
+            var recentAudit = await db.AuditLogs.AsNoTracking().OrderByDescending(x => x.CreatedAtUtc).Take(12)
+                .Select(x => new { action = x.Action.ToString(), x.EntityName, x.EntityId, x.CreatedAtUtc }).ToListAsync(ct);
+            return new
+            {
+                users = await db.Users.CountAsync(ct), students = await db.Children.CountAsync(ct),
+                courses = await db.Courses.CountAsync(ct), batches = await db.Batches.CountAsync(ct),
+                sessions = await db.ClassSessions.CountAsync(ct), resources = await db.Resources.CountAsync(ct),
+                hasBranding = settings.ContainsKey("brand.name") || settings.ContainsKey("brand.logoUrl"),
+                hasOrganization = settings.ContainsKey("org.name"),
+                hasIntegrations = await db.Integrations.AnyAsync(x => x.IsEnabled, ct), recentAudit,
+            };
+        }, ct);
+        return Ok(new
+        {
+            tenant = new { tenant.Id, tenant.Code, tenant.Name, tenant.CustomDomain, status = tenant.Status.ToString(), tenant.AppAccessGranted },
+            subscription = subscription is null ? null : new { plan = subscription.Plan.Name, status = subscription.Status.ToString(), subscription.TrialEndsAtUtc, subscription.CurrentPeriodEndUtc },
+            usage = snapshot is null ? new { students = business.students, staff = business.users } : new { students = snapshot.ActiveStudents, staff = snapshot.StaffCount },
+            business,
+            onboarding = new
+            {
+                provisioned = tenant.ProvisionedAtUtc is not null,
+                organization = business.hasOrganization,
+                branding = business.hasBranding,
+                firstUser = business.users > 0,
+                firstCourse = business.courses > 0,
+                firstBatch = business.batches > 0,
+                integration = business.hasIntegrations,
+                customDomain = tenant.CustomDomain is not null,
+            }
+        });
+    }
+
     [HttpPut("configuration")]
     public async Task<IActionResult> SaveConfiguration(Guid tenantId, List<UpdateSettingRequest> updates, CancellationToken ct) =>
         Ok(await InTenant(tenantId, sp => sp.GetRequiredService<ISettingsService>().UpsertAsync(updates, ct), ct));

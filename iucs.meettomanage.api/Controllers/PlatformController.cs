@@ -58,7 +58,27 @@ public sealed class PlatformController(IConfiguration configuration, IPasswordHa
 
     [HttpGet("tenants"), Authorize(Policy = "PlatformAdmin")]
     public async Task<IActionResult> List(CancellationToken ct) => Ok(await master.Tenants.AsNoTracking()
-        .OrderBy(x => x.CreatedAtUtc).Select(x => new { x.Id, x.Code, x.Name, x.Status, x.CreatedAtUtc, x.ProvisionedAtUtc, x.AppAccessGranted }).ToListAsync(ct));
+        .OrderBy(x => x.CreatedAtUtc).Select(x => new { x.Id, x.Code, x.Name, x.CustomDomain, x.Status, x.CreatedAtUtc, x.ProvisionedAtUtc, x.AppAccessGranted }).ToListAsync(ct));
+
+    public sealed class SetCustomDomainRequest
+    {
+        [MaxLength(253)] public string? Domain { get; set; }
+    }
+
+    [HttpPut("tenants/{id:guid}/custom-domain"), Authorize(Policy = "PlatformAdmin")]
+    public async Task<IActionResult> SetCustomDomain(Guid id, SetCustomDomainRequest request, CancellationToken ct)
+    {
+        var tenant = await master.Tenants.SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Tenant", id);
+        var domain = request.Domain?.Trim().TrimEnd('.').ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(domain)) domain = null;
+        if (domain is not null && (!Uri.CheckHostName(domain).Equals(UriHostNameType.Dns) || domain.Contains(':') || domain.Contains('/')))
+            throw new DomainValidationException("Enter a hostname only, for example academy.example.com.");
+        if (domain is not null && await master.Tenants.AnyAsync(x => x.Id != id && x.CustomDomain == domain, ct))
+            throw new ConflictException("That custom domain is already assigned to another tenant.");
+        tenant.CustomDomain = domain;
+        await master.SaveChangesAsync(ct);
+        return NoContent();
+    }
 
     [HttpPost("tenants"), Authorize(Policy = "PlatformAdmin")]
     public async Task<IActionResult> Create(CreateTenantRequest request, CancellationToken ct)

@@ -601,6 +601,22 @@ app.Use(async (http, next) =>
                 ? new PathString(remaining.Value[(segments[0].Length + 1)..]) : new PathString("/");
         }
     }
+    else if (tenantMode)
+    {
+        // A registered custom hostname is equivalent to /t/{code}. Host values are
+        // never trusted as database identifiers: only an exact master-registry match
+        // supplies the tenant code used by the normal resolver below.
+        var host = http.Request.Host.Host.TrimEnd('.').ToLowerInvariant();
+        if (host.Length > 0)
+        {
+            var master = http.RequestServices.GetRequiredService<MasterDbContext>();
+            var code = await master.Tenants.AsNoTracking()
+                .Where(x => x.CustomDomain == host)
+                .Select(x => x.Code)
+                .SingleOrDefaultAsync(http.RequestAborted);
+            if (code is not null) http.Items["TenantPathCode"] = code;
+        }
+    }
     await next(http);
 });
 app.UseRouting();

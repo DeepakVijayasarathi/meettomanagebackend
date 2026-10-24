@@ -851,6 +851,11 @@ namespace iucs.meettomanage.domain.Migrations.Master
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("CustomDomain")
+                        .HasMaxLength(253)
+                        .HasColumnType("character varying(253)")
+                        .HasColumnName("custom_domain");
+
                     b.Property<string>("DatabaseName")
                         .IsRequired()
                         .HasMaxLength(63)
@@ -875,6 +880,9 @@ namespace iucs.meettomanage.domain.Migrations.Master
                         .IsUnique();
 
                     b.HasIndex("DatabaseName")
+                        .IsUnique();
+
+                    b.HasIndex("CustomDomain")
                         .IsUnique();
 
                     b.ToTable("tenants", (string)null);
