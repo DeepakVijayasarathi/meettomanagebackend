@@ -20,7 +20,7 @@ namespace iucs.meettomanage.api.Controllers
         [
             "org.name", "org.supportEmail", "org.supportPhone",
             "brand.name", "brand.logoUrl", "brand.primaryColor", "brand.accentColor", "brand.fontFamily", "brand.headingFont",
-            "app.webBaseUrl", "app.announcement",
+            "app.webBaseUrl", "app.announcement", "app.joinOpensMinutesBefore",
         ];
 
         [HttpGet]
@@ -33,6 +33,8 @@ namespace iucs.meettomanage.api.Controllers
 
             // The portal address: the administrator's per-organisation override, else the server's own frontend address.
             var web = Value("app.webBaseUrl") ?? configuration["Frontend:BaseUrl"];
+            // How many minutes before a class starts the app enables Join Class; 10 unless the administrator sets another.
+            var joinOpens = int.TryParse(Value("app.joinOpensMinutesBefore"), out var minutes) ? Math.Clamp(minutes, 0, 1440) : 10;
             return Ok(new
             {
                 tenantCode = tenant.TenantCode,
@@ -42,6 +44,7 @@ namespace iucs.meettomanage.api.Controllers
                 supportEmail = Value("org.supportEmail"),
                 supportPhone = Value("org.supportPhone"),
                 announcement = Value("app.announcement"),
+                joinOpensMinutesBefore = joinOpens,
                 brand = new
                 {
                     name = Value("brand.name"),
