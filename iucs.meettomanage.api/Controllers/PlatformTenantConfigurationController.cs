@@ -52,19 +52,21 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
                 .Select(x => new { action = x.Action.ToString(), x.EntityName, x.EntityId, x.CreatedAtUtc }).ToListAsync(ct);
             return new
             {
-                users = await db.Users.CountAsync(ct), students = await db.Children.CountAsync(ct),
+                users = await db.Users.CountAsync(x => x.Status == domain.Enums.UserStatus.Active, ct), students = await db.Children.CountAsync(ct),
                 courses = await db.Courses.CountAsync(ct), batches = await db.Batches.CountAsync(ct),
                 sessions = await db.ClassSessions.CountAsync(ct), resources = await db.Resources.CountAsync(ct),
-                hasBranding = settings.ContainsKey("brand.name") || settings.ContainsKey("brand.logoUrl"),
-                hasOrganization = settings.ContainsKey("org.name"),
+                hasBranding = settings.Any(x => (x.Key == "brand.name" || x.Key == "brand.logoUrl") && !string.IsNullOrWhiteSpace(x.Value)),
+                hasOrganization = settings.TryGetValue("org.name", out var organizationName) && !string.IsNullOrWhiteSpace(organizationName),
                 hasIntegrations = await db.Integrations.AnyAsync(x => x.IsEnabled, ct), recentAudit,
             };
         }, ct);
         return Ok(new
         {
-            tenant = new { tenant.Id, tenant.Code, tenant.Name, tenant.CustomDomain, status = tenant.Status.ToString(), tenant.AppAccessGranted },
+            tenant = new { tenant.Id, tenant.Code, tenant.Name, tenant.CustomDomain, tenant.CustomDomainVerifiedAtUtc, status = tenant.Status.ToString(), tenant.AppAccessGranted },
             subscription = subscription is null ? null : new { plan = subscription.Plan.Name, status = subscription.Status.ToString(), subscription.TrialEndsAtUtc, subscription.CurrentPeriodEndUtc },
-            usage = snapshot is null ? new { students = business.students, staff = business.users } : new { students = snapshot.ActiveStudents, staff = snapshot.StaffCount },
+            usage = snapshot is null
+                ? new { students = business.students, staff = business.users, asOf = (DateOnly?)null }
+                : new { students = snapshot.ActiveStudents, staff = snapshot.StaffCount, asOf = (DateOnly?)snapshot.SnapshotDate },
             business,
             onboarding = new
             {
@@ -74,8 +76,6 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
                 firstUser = business.users > 0,
                 firstCourse = business.courses > 0,
                 firstBatch = business.batches > 0,
-                integration = business.hasIntegrations,
-                customDomain = tenant.CustomDomain is not null,
             }
         });
     }

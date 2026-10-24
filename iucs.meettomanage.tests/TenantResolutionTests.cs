@@ -162,6 +162,18 @@ public sealed class TenantResolutionTests : IDisposable
         Assert.Equal(expected, TenantResolver.NormalizeIdentifier(input));
 
     [Theory]
+    [InlineData(" Academy.Example.COM. ", "academy.example.com")]
+    [InlineData("bücher.example", "xn--bcher-kva.example")]
+    [InlineData("https://academy.example.com", null)]
+    [InlineData("academy.example.com/path", null)]
+    [InlineData("127.0.0.1", null)]
+    public void CustomDomainsAreCanonicalDnsHostnames(string input, string? expected)
+    {
+        if (expected is null) Assert.Throws<DomainValidationException>(() => TenantDomainResolver.Normalize(input));
+        else Assert.Equal(expected, TenantDomainResolver.Normalize(input));
+    }
+
+    [Theory]
     [InlineData("postgres")]
     [InlineData("mt_bad;Password=injected")]
     [InlineData("mt_../../another")]

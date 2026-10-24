@@ -38,6 +38,11 @@ public sealed class TenantRequestMiddleware(RequestDelegate next)
             catch (JsonException) { throw new DomainValidationException("The login request is invalid."); }
             finally { http.Request.Body.Position = 0; }
         }
+        else if (path == "/api/tenant/resolve")
+        {
+            await next(http);
+            return;
+        }
         else if (http.Items["TenantPathCode"] is string code)
         {
             if (tenant.TenantId is null) await resolver.ResolveCodeAsync(code, http.RequestAborted);
@@ -51,7 +56,7 @@ public sealed class TenantRequestMiddleware(RequestDelegate next)
             using var ambient = TenantExecution.Enter(id, tenant.TenantCode!);
             await next(http);
         }
-        else if (path.StartsWith("/api/platform", StringComparison.Ordinal) || path == "/health"
+        else if (path.StartsWith("/api/platform", StringComparison.Ordinal) || path == "/health" || path == "/api/tenant/resolve"
                  || path.StartsWith("/openapi", StringComparison.Ordinal) || path.StartsWith("/scalar", StringComparison.Ordinal))
             await next(http);
         else if (http.Request.Method == "OPTIONS") await next(http);

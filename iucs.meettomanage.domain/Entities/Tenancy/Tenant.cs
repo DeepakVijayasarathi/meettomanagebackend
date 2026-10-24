@@ -12,6 +12,7 @@ public sealed class Tenant
     [MaxLength(200)] public string Name { get; set; } = null!;
     /// <summary>Optional verified hostname used in addition to /t/{code}, without scheme or path.</summary>
     [MaxLength(253)] public string? CustomDomain { get; set; }
+    public DateTime? CustomDomainVerifiedAtUtc { get; set; }
     [MaxLength(63)] public string DatabaseName { get; set; } = null!;
     public TenantStatus Status { get; set; } = TenantStatus.Provisioning;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;

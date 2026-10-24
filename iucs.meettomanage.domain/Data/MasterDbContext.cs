@@ -38,6 +38,7 @@ public sealed class MasterDbContext(DbContextOptions<MasterDbContext> options) :
         tenant.HasIndex(x => x.DatabaseName).IsUnique();
         tenant.HasIndex(x => x.CustomDomain).IsUnique();
         tenant.Property(x => x.CustomDomain).HasColumnName("custom_domain");
+        tenant.Property(x => x.CustomDomainVerifiedAtUtc).HasColumnName("custom_domain_verified_at_utc");
         tenant.Property(x => x.Status).HasConversion<string>().HasMaxLength(24);
         tenant.Property(x => x.AppAccessGranted).HasColumnName("app_access_granted");
 

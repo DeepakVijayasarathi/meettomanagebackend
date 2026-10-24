@@ -7,6 +7,7 @@ using iucs.meettomanage.api.Middleware;
 using iucs.meettomanage.api.Services;
 using iucs.meettomanage.application;
 using iucs.meettomanage.application.Common.Interfaces;
+using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.application.Common.Options;
 using iucs.meettomanage.application.Services;
 using iucs.meettomanage.domain.Common;
@@ -589,32 +590,39 @@ app.Use(async (http, next) =>
         http.Response.StatusCode = 404;
         return;
     }
+    string? pathCode = null;
     if (tenantMode && http.Request.Path.StartsWithSegments("/t", out var remaining))
     {
         var segments = (remaining.Value ?? "").Split('/', 3, StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length >= 1)
         {
-            http.Items["TenantPathCode"] = segments[0];
+            pathCode = segments[0];
+            http.Items["TenantPathCode"] = pathCode;
             var prefix = new PathString("/t/" + segments[0]);
             http.Request.PathBase = http.Request.PathBase.Add(prefix);
             http.Request.Path = remaining.Value!.Length > segments[0].Length + 1
                 ? new PathString(remaining.Value[(segments[0].Length + 1)..]) : new PathString("/");
         }
     }
-    else if (tenantMode)
+    if (tenantMode)
     {
-        // A registered custom hostname is equivalent to /t/{code}. Host values are
-        // never trusted as database identifiers: only an exact master-registry match
-        // supplies the tenant code used by the normal resolver below.
-        var host = http.Request.Host.Host.TrimEnd('.').ToLowerInvariant();
-        if (host.Length > 0)
+        var domainCode = await http.RequestServices.GetRequiredService<TenantDomainResolver>()
+            .ResolveCodeAsync(http.Request, http.RequestAborted);
+        if (domainCode is not null)
         {
-            var master = http.RequestServices.GetRequiredService<MasterDbContext>();
-            var code = await master.Tenants.AsNoTracking()
-                .Where(x => x.CustomDomain == host)
-                .Select(x => x.Code)
-                .SingleOrDefaultAsync(http.RequestAborted);
-            if (code is not null) http.Items["TenantPathCode"] = code;
+            if (pathCode is not null && !string.Equals(pathCode, domainCode, StringComparison.Ordinal))
+                throw new ForbiddenException("This session URL belongs to a different tenant domain.");
+            http.Items["TenantPathCode"] = domainCode;
+            // Registered custom origins are dynamic and cannot be represented by the
+            // startup-only CORS list. Bearer tokens are still required for private data.
+            if (http.Request.Headers.Origin.FirstOrDefault() is { } origin)
+            {
+                http.Response.Headers.AccessControlAllowOrigin = origin;
+                http.Response.Headers.AccessControlAllowCredentials = "true";
+                http.Response.Headers.AccessControlAllowMethods = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
+                http.Response.Headers.AccessControlAllowHeaders = "Authorization,Content-Type";
+                http.Response.Headers.Vary = "Origin";
+            }
         }
     }
     await next(http);
@@ -657,6 +665,10 @@ app.UseRateLimiter();
 if (tenantMode) app.UseMiddleware<TenantRequestMiddleware>();
 
 app.MapControllers();
+app.MapGet("/api/tenant/resolve", (HttpContext http) => Results.Ok(new
+{
+    tenantCode = http.Items["TenantPathCode"] as string,
+})).AllowAnonymous();
 app.MapHub<iucs.meettomanage.api.Hubs.ClassroomHub>("/hubs/classroom");
 app.MapHub<iucs.meettomanage.api.Hubs.MonitoringHub>("/hubs/monitoring");
 

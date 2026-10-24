@@ -856,6 +856,10 @@ namespace iucs.meettomanage.domain.Migrations.Master
                         .HasColumnType("character varying(253)")
                         .HasColumnName("custom_domain");
 
+                    b.Property<DateTime?>("CustomDomainVerifiedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("custom_domain_verified_at_utc");
+
                     b.Property<string>("DatabaseName")
                         .IsRequired()
                         .HasMaxLength(63)

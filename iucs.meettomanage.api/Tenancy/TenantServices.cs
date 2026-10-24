@@ -35,6 +35,7 @@ public static class TenantServices
         services.AddDbContextFactory<MasterDbContext>(o => o.UseNpgsql(configuration.GetConnectionString("MasterDb")));
         services.AddScoped<TenantContext>();
         services.AddScoped<TenantResolver>();
+        services.AddScoped<TenantDomainResolver>();
         services.AddScoped<LoginDirectory>();
         services.AddScoped<LoginDirectoryInterceptor>();
         services.AddScoped<TenantProvisioner>();

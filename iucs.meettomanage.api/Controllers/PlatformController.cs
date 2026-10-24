@@ -21,7 +21,7 @@ namespace iucs.meettomanage.api.Controllers;
 [ApiController, Route("api/platform")]
 public sealed class PlatformController(IConfiguration configuration, IPasswordHasher hasher,
     IOptions<JwtOptions> jwt, MasterDbContext master, TenantProvisioner provisioner, TenantScopeFactory scopes,
-    SaasSubscriptionService subscriptions) : ControllerBase
+    SaasSubscriptionService subscriptions, TenantDomainResolver domains) : ControllerBase
 {
     [HttpPost("tenants/{id:guid}/synchronize-logins"), Authorize(Policy = "PlatformAdmin")]
     public async Task<IActionResult> SynchronizeLogins(Guid id, CancellationToken ct)
@@ -58,7 +58,7 @@ public sealed class PlatformController(IConfiguration configuration, IPasswordHa
 
     [HttpGet("tenants"), Authorize(Policy = "PlatformAdmin")]
     public async Task<IActionResult> List(CancellationToken ct) => Ok(await master.Tenants.AsNoTracking()
-        .OrderBy(x => x.CreatedAtUtc).Select(x => new { x.Id, x.Code, x.Name, x.CustomDomain, x.Status, x.CreatedAtUtc, x.ProvisionedAtUtc, x.AppAccessGranted }).ToListAsync(ct));
+        .OrderBy(x => x.CreatedAtUtc).Select(x => new { x.Id, x.Code, x.Name, x.CustomDomain, x.CustomDomainVerifiedAtUtc, x.Status, x.CreatedAtUtc, x.ProvisionedAtUtc, x.AppAccessGranted }).ToListAsync(ct));
 
     public sealed class SetCustomDomainRequest
     {
@@ -69,15 +69,46 @@ public sealed class PlatformController(IConfiguration configuration, IPasswordHa
     public async Task<IActionResult> SetCustomDomain(Guid id, SetCustomDomainRequest request, CancellationToken ct)
     {
         var tenant = await master.Tenants.SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Tenant", id);
-        var domain = request.Domain?.Trim().TrimEnd('.').ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(domain)) domain = null;
-        if (domain is not null && (!Uri.CheckHostName(domain).Equals(UriHostNameType.Dns) || domain.Contains(':') || domain.Contains('/')))
-            throw new DomainValidationException("Enter a hostname only, for example academy.example.com.");
+        var domain = TenantDomainResolver.Normalize(request.Domain);
+        if (domain is not null && domains.ReservedHosts().Contains(domain))
+            throw new DomainValidationException("That hostname is reserved by this deployment.");
         if (domain is not null && await master.Tenants.AnyAsync(x => x.Id != id && x.CustomDomain == domain, ct))
             throw new ConflictException("That custom domain is already assigned to another tenant.");
+        var previous = tenant.CustomDomain;
         tenant.CustomDomain = domain;
-        await master.SaveChangesAsync(ct);
+        tenant.CustomDomainVerifiedAtUtc = domain == previous ? tenant.CustomDomainVerifiedAtUtc : null;
+        domains.Invalidate(previous); domains.Invalidate(domain);
+        var sub = await master.TenantSubscriptions.SingleOrDefaultAsync(x => x.TenantId == id, ct);
+        if (sub is not null) master.TenantSubscriptionEvents.Add(new()
+        {
+            TenantId = id, SubscriptionId = sub.Id, EventType = "custom_domain_changed",
+            Detail = $"{previous ?? "(none)"} -> {domain ?? "(none)"}", Actor = "platform:" + User.Identity?.Name,
+        });
+        try { await master.SaveChangesAsync(ct); }
+        catch (DbUpdateException) { throw new ConflictException("That custom domain was assigned by another request. Refresh and try again."); }
         return NoContent();
+    }
+
+    [HttpPost("tenants/{id:guid}/custom-domain/verify"), Authorize(Policy = "PlatformAdmin")]
+    public async Task<IActionResult> VerifyCustomDomain(Guid id, CancellationToken ct)
+    {
+        var tenant = await master.Tenants.SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Tenant", id);
+        if (tenant.CustomDomain is null) throw new DomainValidationException("Save a custom domain before verifying it.");
+        var target = Uri.TryCreate(configuration["Frontend:BaseUrl"], UriKind.Absolute, out var frontend) ? frontend.IdnHost : null;
+        if (target is null) throw new InvalidOperationException("Frontend:BaseUrl must be configured before domains can be verified.");
+        System.Net.IPAddress[] customAddresses, targetAddresses;
+        try
+        {
+            customAddresses = await System.Net.Dns.GetHostAddressesAsync(tenant.CustomDomain, ct);
+            targetAddresses = await System.Net.Dns.GetHostAddressesAsync(target, ct);
+        }
+        catch (System.Net.Sockets.SocketException) { throw new ConflictException("DNS is not ready yet. Point the custom domain to this deployment and try again."); }
+        if (!customAddresses.Intersect(targetAddresses).Any())
+            throw new ConflictException("The custom domain does not resolve to this deployment yet.");
+        tenant.CustomDomainVerifiedAtUtc = DateTime.UtcNow;
+        await master.SaveChangesAsync(ct);
+        domains.Invalidate(tenant.CustomDomain);
+        return Ok(new { tenant.CustomDomain, tenant.CustomDomainVerifiedAtUtc });
     }
 
     [HttpPost("tenants"), Authorize(Policy = "PlatformAdmin")]
