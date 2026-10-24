@@ -6,6 +6,7 @@ using iucs.meettomanage.domain.Entities.Users;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Caching.Memory;
 using Npgsql;
 using Xunit;
 
@@ -171,6 +172,33 @@ public sealed class TenantResolutionTests : IDisposable
     {
         if (expected is null) Assert.Throws<DomainValidationException>(() => TenantDomainResolver.Normalize(input));
         else Assert.Equal(expected, TenantDomainResolver.Normalize(input));
+    }
+
+    [Fact]
+    public async Task CustomDomainResolverOnlyReturnsActiveVerifiedTenant()
+    {
+        _first.CustomDomain = "academy.example.test";
+        _first.CustomDomainVerifiedAtUtc = DateTime.UtcNow;
+        await _master.SaveChangesAsync();
+        var domains = new TenantDomainResolver(_master, new ConfigurationBuilder().Build(),
+            new MemoryCache(new MemoryCacheOptions()));
+
+        Assert.Equal(_first.Code, await domains.ResolveHostAsync("academy.example.test", default));
+        _first.Status = TenantStatus.Suspended;
+        await _master.SaveChangesAsync();
+        domains.Invalidate(_first.CustomDomain);
+        Assert.Null(await domains.ResolveHostAsync("academy.example.test", default));
+    }
+
+    [Fact]
+    public void DeploymentCanReserveAdditionalCustomHostnames()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["MultiTenancy:ReservedHosts:0"] = "CONTROL.Example.test.",
+        }).Build();
+        var domains = new TenantDomainResolver(_master, configuration, new MemoryCache(new MemoryCacheOptions()));
+        Assert.Contains("control.example.test", domains.ReservedHosts());
     }
 
     [Theory]

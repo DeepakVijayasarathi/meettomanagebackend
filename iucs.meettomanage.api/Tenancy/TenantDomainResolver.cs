@@ -20,9 +20,11 @@ public sealed class TenantDomainResolver(MasterDbContext master, IConfiguration 
 
     public HashSet<string> ReservedHosts()
     {
-        var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "localhost" };
+        var hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "localhost", "127.0.0.1", "::1" };
         foreach (var value in new[] { configuration["Frontend:BaseUrl"], configuration["Api:BaseUrl"] })
             if (Uri.TryCreate(value, UriKind.Absolute, out var uri)) hosts.Add(uri.IdnHost.TrimEnd('.').ToLowerInvariant());
+        foreach (var value in configuration.GetSection("MultiTenancy:ReservedHosts").Get<string[]>() ?? [])
+            if (Normalize(value) is { } host) hosts.Add(host);
         return hosts;
     }
 
@@ -37,16 +39,31 @@ public sealed class TenantDomainResolver(MasterDbContext master, IConfiguration 
         {
             if (cache.TryGetValue(CacheKey(host), out string? cached))
             {
-                if (!string.IsNullOrEmpty(cached)) return cached;
                 continue;
             }
             var code = await master.Tenants.AsNoTracking()
-                .Where(x => x.CustomDomainVerifiedAtUtc != null && x.CustomDomain == host)
+                .Where(x => x.Status == domain.Entities.Tenancy.TenantStatus.Active
+                    && x.CustomDomainVerifiedAtUtc != null && x.CustomDomain == host)
                 .Select(x => x.Code).SingleOrDefaultAsync(ct);
-            cache.Set(CacheKey(host), code ?? "", code is null ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(5));
+            // Cache misses briefly, but never cache a positive routing decision. Domain
+            // removal/suspension must take effect on every API instance immediately.
+            if (code is null) cache.Set(CacheKey(host), "", TimeSpan.FromSeconds(10));
             if (code is not null) return code;
         }
         return null;
+    }
+
+    public async Task<string?> ResolveHostAsync(string? rawHost, CancellationToken ct)
+    {
+        var host = rawHost?.Trim().TrimEnd('.').ToLowerInvariant();
+        if (string.IsNullOrEmpty(host)) return null;
+        if (cache.TryGetValue(CacheKey(host), out string? cached) && string.IsNullOrEmpty(cached)) return null;
+        var code = await master.Tenants.AsNoTracking()
+            .Where(x => x.Status == domain.Entities.Tenancy.TenantStatus.Active
+                && x.CustomDomainVerifiedAtUtc != null && x.CustomDomain == host)
+            .Select(x => x.Code).SingleOrDefaultAsync(ct);
+        if (code is null) cache.Set(CacheKey(host), "", TimeSpan.FromSeconds(10));
+        return code;
     }
 
     public void Invalidate(string? host) { if (host is not null) cache.Remove(CacheKey(host)); }

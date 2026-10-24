@@ -517,6 +517,8 @@ var allowedOrigins = (builder.Configuration
 // origin can make credentialed calls to this API — only use "*" where that's intended
 // (e.g. local development), never for a real production deployment.
 var allowAnyOrigin = allowedOrigins.Contains("*");
+if (!builder.Environment.IsDevelopment() && allowAnyOrigin)
+    throw new InvalidOperationException("Cors:AllowedOrigins cannot contain '*' outside Development.");
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy =>
     {
@@ -606,8 +608,31 @@ app.Use(async (http, next) =>
     }
     if (tenantMode)
     {
-        var domainCode = await http.RequestServices.GetRequiredService<TenantDomainResolver>()
-            .ResolveCodeAsync(http.Request, http.RequestAborted);
+        var resolver = http.RequestServices.GetRequiredService<TenantDomainResolver>();
+        var reservedHosts = resolver.ReservedHosts();
+        var requestHost = http.Request.Host.Host.TrimEnd('.').ToLowerInvariant();
+        var hostCode = await resolver.ResolveHostAsync(requestHost, http.RequestAborted);
+        string? originCode = null;
+        Uri? originUri = null;
+        if (http.Request.Headers.Origin.FirstOrDefault() is { } origin
+            && Uri.TryCreate(origin, UriKind.Absolute, out originUri))
+        {
+            var originHost = originUri.IdnHost.TrimEnd('.').ToLowerInvariant();
+            originCode = await resolver.ResolveHostAsync(originHost, http.RequestAborted);
+            var isKnownPlatformOrigin = reservedHosts.Contains(originHost)
+                || allowedOrigins.Any(x => Uri.TryCreate(x, UriKind.Absolute, out var allowed)
+                    && string.Equals(allowed.IdnHost, originHost, StringComparison.OrdinalIgnoreCase));
+            if (!app.Environment.IsDevelopment() && originCode is not null
+                && !string.Equals(originUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                throw new ForbiddenException("Custom tenant domains require HTTPS.");
+            if (pathCode is not null && !isKnownPlatformOrigin
+                && !string.Equals(originCode, pathCode, StringComparison.Ordinal))
+                throw new ForbiddenException("This origin is not authorized for the requested tenant.");
+        }
+        if (hostCode is not null && originCode is not null
+            && !string.Equals(hostCode, originCode, StringComparison.Ordinal))
+            throw new ForbiddenException("The request host and origin belong to different tenants.");
+        var domainCode = originCode ?? hostCode;
         if (domainCode is not null)
         {
             if (pathCode is not null && !string.Equals(pathCode, domainCode, StringComparison.Ordinal))
@@ -615,12 +640,12 @@ app.Use(async (http, next) =>
             http.Items["TenantPathCode"] = domainCode;
             // Registered custom origins are dynamic and cannot be represented by the
             // startup-only CORS list. Bearer tokens are still required for private data.
-            if (http.Request.Headers.Origin.FirstOrDefault() is { } origin)
+            if (originUri is not null && http.Request.Headers.Origin.FirstOrDefault() is { } responseOrigin)
             {
-                http.Response.Headers.AccessControlAllowOrigin = origin;
+                http.Response.Headers.AccessControlAllowOrigin = responseOrigin;
                 http.Response.Headers.AccessControlAllowCredentials = "true";
                 http.Response.Headers.AccessControlAllowMethods = "GET,POST,PUT,PATCH,DELETE,OPTIONS";
-                http.Response.Headers.AccessControlAllowHeaders = "Authorization,Content-Type";
+                http.Response.Headers.AccessControlAllowHeaders = "Authorization,Content-Type,X-App-Client,X-Requested-With";
                 http.Response.Headers.Vary = "Origin";
             }
         }
