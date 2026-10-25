@@ -2653,6 +2653,109 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("email_templates");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.MobileAppInstallation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AppVersion")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("app_version");
+
+                    b.Property<bool>("BiometricLockEnabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("biometric_lock_enabled");
+
+                    b.Property<string>("BuildNumber")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("build_number");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<int>("HeartbeatCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("heartbeat_count");
+
+                    b.Property<string>("InstallationId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("installation_id");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("LastErrorCategory")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("last_error_category");
+
+                    b.Property<DateTime>("LastSeenAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_seen_at_utc");
+
+                    b.Property<DateTime?>("LastSuccessfulSyncAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_successful_sync_at_utc");
+
+                    b.Property<bool>("NotificationsEnabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("notifications_enabled");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("platform");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("role");
+
+                    b.Property<string>("RuntimeVersion")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("runtime_version");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mobile_app_installations");
+
+                    b.HasIndex("InstallationId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_mobile_app_installations_installation_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("LastSeenAtUtc")
+                        .HasDatabaseName("ix_mobile_app_installations_last_seen_at_utc");
+
+                    b.HasIndex("UserId", "LastSeenAtUtc")
+                        .HasDatabaseName("ix_mobile_app_installations_user_id_last_seen_at_utc");
+
+                    b.ToTable("mobile_app_installations");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.Notification", b =>
                 {
                     b.Property<Guid>("Id")
@@ -6458,6 +6561,18 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasConstraintName("fk_chat_messages_users_user_id");
 
                     b.Navigation("MatchedFaq");
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.MobileAppInstallation", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_mobile_app_installations_users_user_id");
 
                     b.Navigation("User");
                 });

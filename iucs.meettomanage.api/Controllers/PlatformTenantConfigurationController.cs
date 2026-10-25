@@ -84,6 +84,75 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
     public async Task<IActionResult> SaveConfiguration(Guid tenantId, List<UpdateSettingRequest> updates, CancellationToken ct) =>
         Ok(await InTenant(tenantId, sp => sp.GetRequiredService<ISettingsService>().UpsertAsync(updates, ct), ct));
 
+    /// <summary>Aggregate, privacy-safe operational status for the selected tenant's family app.</summary>
+    [HttpGet("app-status")]
+    public async Task<IActionResult> AppStatus(Guid tenantId, CancellationToken ct, [FromQuery] int days = 30)
+    {
+        days = Math.Clamp(days, 7, 90);
+        var tenant = await master.Tenants.AsNoTracking().SingleOrDefaultAsync(x => x.Id == tenantId, ct)
+            ?? throw new NotFoundException("Tenant", tenantId);
+        var result = await InTenant(tenantId, async sp =>
+        {
+            var db = sp.GetRequiredService<MeetToManageDbContext>();
+            var now = DateTime.UtcNow;
+            var since = now.AddDays(-days);
+            var rows = await db.MobileAppInstallations.AsNoTracking().Where(x => x.LastSeenAtUtc >= since)
+                .Select(x => new { x.UserId, x.Platform, x.AppVersion, x.BuildNumber, x.NotificationsEnabled, x.BiometricLockEnabled, x.LastSeenAtUtc, x.LastSuccessfulSyncAtUtc, x.LastErrorCategory })
+                .ToListAsync(ct);
+            var settings = await db.AppSettings.AsNoTracking().ToDictionaryAsync(x => x.Key, x => x.Value, ct);
+            bool Has(string key) => settings.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value);
+            var eligible = await db.Users.CountAsync(x => x.Status == domain.Enums.UserStatus.Active && x.Role == domain.Enums.UserRole.Parent, ct);
+            var latestVersion = rows.GroupBy(x => x.AppVersion).OrderByDescending(g => ParseVersion(g.Key)).ThenByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
+            var active30Since = now.AddDays(-30);
+            var recent30 = rows.Where(x => x.LastSeenAtUtc >= active30Since).ToList();
+            var trend = Enumerable.Range(0, days).Select(offset =>
+            {
+                var date = DateOnly.FromDateTime(now.Date.AddDays(-(days - 1 - offset)));
+                var count = rows.Where(x => DateOnly.FromDateTime(x.LastSeenAtUtc) == date).Select(x => x.UserId).Distinct().Count();
+                return new { date, activeFamilies = count };
+            });
+            return new
+            {
+                generatedAtUtc = now,
+                windowDays = days,
+                health = !tenant.AppAccessGranted ? "disabled" : rows.Count == 0 ? "no-data" : rows.Max(x => x.LastSeenAtUtc) < now.AddHours(-24) ? "stale" : "operational",
+                accessGranted = tenant.AppAccessGranted,
+                eligibleFamilies = eligible,
+                active = new
+                {
+                    installations24h = rows.Count(x => x.LastSeenAtUtc >= now.AddHours(-24)),
+                    installations7d = rows.Count(x => x.LastSeenAtUtc >= now.AddDays(-7)),
+                    installations30d = recent30.Count,
+                    families30d = recent30.Select(x => x.UserId).Distinct().Count(),
+                    lastSeenAtUtc = rows.Count == 0 ? (DateTime?)null : rows.Max(x => x.LastSeenAtUtc),
+                    lastSuccessfulSyncAtUtc = rows.Where(x => x.LastSuccessfulSyncAtUtc != null).Select(x => x.LastSuccessfulSyncAtUtc).Max(),
+                },
+                adoption = new
+                {
+                    latestVersion,
+                    latestVersionPercent = recent30.Count == 0 || latestVersion is null ? 0 : Math.Round(recent30.Count(x => x.AppVersion == latestVersion) * 100d / recent30.Count, 1),
+                    notificationOptInPercent = recent30.Count == 0 ? 0 : Math.Round(recent30.Count(x => x.NotificationsEnabled) * 100d / recent30.Count, 1),
+                    biometricOptInPercent = recent30.Count == 0 ? 0 : Math.Round(recent30.Count(x => x.BiometricLockEnabled) * 100d / recent30.Count, 1),
+                },
+                platforms = recent30.GroupBy(x => x.Platform).Select(g => new { platform = g.Key, installations = g.Count() }).OrderByDescending(x => x.installations),
+                versions = recent30.GroupBy(x => new { x.AppVersion, x.Platform }).Select(g => new { version = g.Key.AppVersion, platform = g.Key.Platform, installations = g.Count(), lastSeenAtUtc = g.Max(x => x.LastSeenAtUtc) }).OrderByDescending(x => x.installations),
+                errors = recent30.Where(x => x.LastErrorCategory != null).GroupBy(x => x.LastErrorCategory!).Select(g => new { category = g.Key, installations = g.Count(), lastSeenAtUtc = g.Max(x => x.LastSeenAtUtc) }).OrderByDescending(x => x.installations),
+                trend,
+                readiness = new
+                {
+                    access = tenant.AppAccessGranted,
+                    branding = Has("brand.name") || Has("brand.logoUrl"),
+                    portal = Has("app.webBaseUrl") || !string.IsNullOrWhiteSpace(configuration["Frontend:BaseUrl"]),
+                    support = Has("org.supportEmail") || Has("org.supportPhone"),
+                    welcome = settings.TryGetValue("app.welcome.enabled", out var welcome) && welcome == "false" || Has("app.welcome.title") || Has("app.welcome.features"),
+                },
+            };
+        }, ct);
+        return Ok(result);
+    }
+
+    private static Version ParseVersion(string value) => Version.TryParse(value, out var version) ? version : new Version(0, 0);
+
     // seo.* settings are hidden from the normal settings list on purpose (the public site's SEO
     // belongs to the marketing scope), so the operator reads and writes them through the same
     // marketing-scope service methods.

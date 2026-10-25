@@ -22,6 +22,10 @@ namespace iucs.meettomanage.api.Controllers
             "brand.name", "brand.logoUrl", "brand.primaryColor", "brand.accentColor", "brand.fontFamily", "brand.headingFont",
             "app.webBaseUrl", "app.announcement", "app.joinOpensMinutesBefore",
             "app.welcome.enabled", "app.welcome.title", "app.welcome.subtitle", "app.welcome.features",
+            "app.maintenance.enabled", "app.maintenance.message", "app.maintenance.startsAtUtc", "app.maintenance.endsAtUtc",
+            "app.minimumVersion", "app.forceUpgrade", "app.quickActions",
+            "app.features.classes", "app.features.fees", "app.features.updates", "app.features.reports",
+            "app.features.resources", "app.features.recordings", "app.features.enrollment", "app.features.support", "app.features.feedback",
         ];
 
         [HttpGet]
@@ -31,6 +35,12 @@ namespace iucs.meettomanage.api.Controllers
                 .Where(x => Keys.Contains(x.Key))
                 .ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
             string? Value(string key) => values.TryGetValue(key, out var v) && !string.IsNullOrWhiteSpace(v) ? v.Trim() : null;
+            bool Enabled(string key) => !string.Equals(Value(key), "false", StringComparison.OrdinalIgnoreCase);
+            var now = DateTime.UtcNow;
+            DateTime? Date(string key) => DateTime.TryParse(Value(key), out var date) ? date.ToUniversalTime() : null;
+            var maintenanceStarts = Date("app.maintenance.startsAtUtc");
+            var maintenanceEnds = Date("app.maintenance.endsAtUtc");
+            var maintenanceActive = Enabled("app.maintenance.enabled") && (maintenanceStarts is null || maintenanceStarts <= now) && (maintenanceEnds is null || maintenanceEnds > now);
 
             // The portal address: the administrator's per-organisation override, else the server's own frontend address.
             var web = Value("app.webBaseUrl") ?? configuration["Frontend:BaseUrl"];
@@ -46,6 +56,16 @@ namespace iucs.meettomanage.api.Controllers
                 supportPhone = Value("org.supportPhone"),
                 announcement = Value("app.announcement"),
                 joinOpensMinutesBefore = joinOpens,
+                maintenance = new { active = maintenanceActive, message = Value("app.maintenance.message"), startsAtUtc = maintenanceStarts, endsAtUtc = maintenanceEnds },
+                minimumVersion = Value("app.minimumVersion"),
+                forceUpgrade = string.Equals(Value("app.forceUpgrade"), "true", StringComparison.OrdinalIgnoreCase),
+                quickActions = Value("app.quickActions"),
+                features = new
+                {
+                    classes = Enabled("app.features.classes"), fees = Enabled("app.features.fees"), updates = Enabled("app.features.updates"),
+                    reports = Enabled("app.features.reports"), resources = Enabled("app.features.resources"), recordings = Enabled("app.features.recordings"),
+                    enrollment = Enabled("app.features.enrollment"), support = Enabled("app.features.support"), feedback = Enabled("app.features.feedback"),
+                },
                 // First-launch welcome tour. Shown unless the administrator switches it off; the app supplies its own
                 // wording for any field left empty. Features are one "Title | Description" per line.
                 welcome = new

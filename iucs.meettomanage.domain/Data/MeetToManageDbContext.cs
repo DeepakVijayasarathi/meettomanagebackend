@@ -117,6 +117,7 @@ namespace iucs.meettomanage.domain.Data
 
         // Communication & auditing
         public DbSet<Notification> Notifications => Set<Notification>();
+        public DbSet<MobileAppInstallation> MobileAppInstallations => Set<MobileAppInstallation>();
         public DbSet<BulkEmailBlast> BulkEmailBlasts => Set<BulkEmailBlast>();
         public DbSet<BulkEmailRecipient> BulkEmailRecipients => Set<BulkEmailRecipient>();
         public DbSet<BulkEmailReply> BulkEmailReplies => Set<BulkEmailReply>();
