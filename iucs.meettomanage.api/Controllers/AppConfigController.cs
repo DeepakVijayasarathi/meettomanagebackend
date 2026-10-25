@@ -21,6 +21,7 @@ namespace iucs.meettomanage.api.Controllers
             "org.name", "org.supportEmail", "org.supportPhone",
             "brand.name", "brand.logoUrl", "brand.primaryColor", "brand.accentColor", "brand.fontFamily", "brand.headingFont",
             "app.webBaseUrl", "app.announcement", "app.joinOpensMinutesBefore",
+            "app.welcome.enabled", "app.welcome.title", "app.welcome.subtitle", "app.welcome.features",
         ];
 
         [HttpGet]
@@ -45,6 +46,15 @@ namespace iucs.meettomanage.api.Controllers
                 supportPhone = Value("org.supportPhone"),
                 announcement = Value("app.announcement"),
                 joinOpensMinutesBefore = joinOpens,
+                // First-launch welcome tour. Shown unless the administrator switches it off; the app supplies its own
+                // wording for any field left empty. Features are one "Title | Description" per line.
+                welcome = new
+                {
+                    enabled = !string.Equals(Value("app.welcome.enabled"), "false", StringComparison.OrdinalIgnoreCase),
+                    title = Value("app.welcome.title"),
+                    subtitle = Value("app.welcome.subtitle"),
+                    features = Value("app.welcome.features"),
+                },
                 brand = new
                 {
                     name = Value("brand.name"),
