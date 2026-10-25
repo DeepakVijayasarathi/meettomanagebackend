@@ -64,7 +64,7 @@ namespace iucs.meettomanage.api.Controllers
         }
 
         /// <summary>
-        /// The marketing site's chat assistant (Gemini). It can also book a platform demo into the
+        /// The marketing site's Hetzner AI assistant. It can also book a platform demo into the
         /// same queue as <see cref="RequestDemo"/>. Anonymous, so rate-limited per IP.
         /// </summary>
         [HttpPost("chat")]
@@ -72,6 +72,14 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<ActionResult<SalesChatResponse>> Chat(SalesChatRequest request, CancellationToken cancellationToken)
         {
             return Ok(await _salesAssistant.ReplyAsync(request.Messages, cancellationToken));
+        }
+
+        [HttpPost("translate")]
+        [EnableRateLimiting("marketing-chat")]
+        public async Task<ActionResult<MarketingTranslationResponse>> Translate(MarketingTranslationRequest request, CancellationToken cancellationToken)
+        {
+            var translations = await _salesAssistant.TranslateAsync(request.Texts, request.TargetLanguage, cancellationToken);
+            return Ok(new MarketingTranslationResponse { Translations = translations });
         }
     }
 

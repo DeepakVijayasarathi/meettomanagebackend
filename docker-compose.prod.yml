@@ -70,7 +70,7 @@ services:
       Storage__S3__SecretKey: ${STORAGE_S3_SECRET_KEY:-}
       Storage__S3__BucketName: ${STORAGE_S3_BUCKET_NAME:-}
       Storage__LocalPath: /app/uploads
-      Gemini__ApiKey: ${GEMINI_API_KEY:-}
+      HetznerAi__ApiKey: ${HETZNER_AI_API_KEY:-}
     volumes:
       - reader_nest_uploads:/app/uploads
     ports:

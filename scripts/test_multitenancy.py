@@ -68,7 +68,7 @@ def main():
             "Storage__LocalPath": tempfile.mkdtemp(prefix="mtm-uploads-"),
             "Storage__S3__Endpoint": "", "Storage__S3__AccessKey": "", "Storage__S3__SecretKey": "", "Storage__S3__BucketName": "",
             "Frontend__BaseUrl": "http://frontend.example.test", "Api__BaseUrl": base,
-            "Crm__WebhookUrl": "", "Integrations__CrmWebhookUrl": "", "Gemini__ApiKey": "",
+            "Crm__WebhookUrl": "", "Integrations__CrmWebhookUrl": "", "HetznerAi__ApiKey": "",
         })
         process = subprocess.Popen(["dotnet", str(dll), "--urls", base], cwd=api, env=env,
                                    stdout=log, stderr=subprocess.STDOUT)

@@ -74,14 +74,14 @@ pipeline {
         stage('Run Container') {
             steps {
               script {
-              // The marketing-site chat assistant (Gemini) is optional: a missing credential must
+              // The marketing-site Hetzner AI assistant is optional: a missing credential must
               // not take the API down after the old container is already gone.
               def optionalCredentials = []
               try {
-                  withCredentials([string(credentialsId: 'meettomanage-gemini-api-key', variable: 'GEMINI_PROBE')]) {}
-                  optionalCredentials << string(credentialsId: 'meettomanage-gemini-api-key', variable: 'GEMINI_API_KEY')
+                  withCredentials([string(credentialsId: 'meettomanage-hetzner-ai-api-key', variable: 'HETZNER_AI_PROBE')]) {}
+                  optionalCredentials << string(credentialsId: 'meettomanage-hetzner-ai-api-key', variable: 'HETZNER_AI_API_KEY')
               } catch (err) {
-                  echo "WARNING: credential 'meettomanage-gemini-api-key' not found -- deploying without the chat assistant."
+                  echo "WARNING: credential 'meettomanage-hetzner-ai-api-key' not found -- deploying without the chat assistant."
               }
               withCredentials([
                   string(credentialsId: 'meettomanage-db-password',          variable: 'DB_PASS'),
@@ -108,7 +108,7 @@ pipeline {
                       -e Storage__S3__BucketName="${STORAGE_S3_BUCKET_NAME}" \
                       -e Monitoring__Servers__0__SshPassword="\${SSH_PASS_0}" \
                       -e Monitoring__Servers__1__SshPassword="\${SSH_PASS_1}" \
-                      -e Gemini__ApiKey="\${GEMINI_API_KEY:-}" \
+                      -e HetznerAi__ApiKey="\${HETZNER_AI_API_KEY:-}" \
                       -e Seed__MarketingEmail="marketing@meettomanage.cloud" \
                       -e Seed__MarketingPin="1234" \
                       -e MultiTenancy__Enabled=true \
@@ -167,5 +167,5 @@ pipeline {
 //   meettomanage-ssh-password-server1  (Monitoring server 1)
 //   meettomanage-platform-admin-hash   (BCrypt hash from
 //                                       `dotnet iucs.meettomanage.api.dll platform-password-hash`)
-//   meettomanage-gemini-api-key        (optional)
+//   meettomanage-hetzner-ai-api-key    (optional)
 // ---------------------------------------------------------------------------------------

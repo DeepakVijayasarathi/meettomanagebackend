@@ -110,10 +110,10 @@ builder.Services.AddScoped<IEmailSender>(sp => sp.GetRequiredService<SmtpEmailSe
 builder.Services.AddScoped<IWhatsAppSender, WhatsAppSender>();
 // SMS delivery (MSG91/Twilio), driven by the DB "sms" integration.
 builder.Services.AddScoped<ISmsSender, SmsSender>();
-// Marketing-site chat assistant (Gemini). Key from Gemini:ApiKey — user-secrets locally,
-// Gemini__ApiKey env var in prod, never committed.
-builder.Services.AddHttpClient(nameof(GeminiSalesAssistant), client => client.Timeout = TimeSpan.FromSeconds(30));
-builder.Services.AddScoped<ISalesAssistant, GeminiSalesAssistant>();
+// Marketing-site chat assistant (Hetzner AI). Key from HetznerAi:ApiKey — user-secrets locally,
+// HetznerAi__ApiKey env var in prod, never committed.
+builder.Services.AddHttpClient(nameof(HetznerSalesAssistant), client => client.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddScoped<ISalesAssistant, HetznerSalesAssistant>();
 builder.Services.AddHttpClient(nameof(OllamaChatClient), client => client.Timeout = TimeSpan.FromSeconds(45));
 builder.Services.AddScoped<IAiChatClient, OllamaChatClient>();
 // S3-compatible object storage (Hetzner Object Storage) everywhere — dev and prod both, so
@@ -195,7 +195,7 @@ builder.Services.AddTenantWorker<LeaveCancellationReportBackgroundService>(tenan
 // Authentication: JWT bearer
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 builder.Services.Configure<MonitoringOptions>(builder.Configuration.GetSection(MonitoringOptions.SectionName));
-builder.Services.Configure<GeminiOptions>(builder.Configuration.GetSection(GeminiOptions.SectionName));
+builder.Services.Configure<HetznerAiOptions>(builder.Configuration.GetSection(HetznerAiOptions.SectionName));
 builder.Services.Configure<iucs.meettomanage.application.Helper.PinVaultOptions>(o =>
 {
     o.Key = builder.Configuration["PinVault:Key"];
