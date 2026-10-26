@@ -72,8 +72,12 @@ public static class TenantServices
         if (app.Configuration.GetValue<bool>("Database:MigrateOnStartup")) await master.Database.MigrateAsync();
         // Plans, e-mail templates and a legacy subscription for pre-billing tenants.
         await app.Services.SeedSaasAsync();
+        // Suspended tenants remain available to platform operations/configuration and must keep
+        // their schema current too. Skipping them makes those endpoints fail after a deployment
+        // that introduces a new business-table migration.
         var tenants = await master.Tenants.AsNoTracking()
-            .Where(x => x.Status == domain.Entities.Tenancy.TenantStatus.Active).ToListAsync();
+            .Where(x => x.Status == domain.Entities.Tenancy.TenantStatus.Active
+                || x.Status == domain.Entities.Tenancy.TenantStatus.Suspended).ToListAsync();
         var seedValues = new Dictionary<string, string?> { ["Seed:AdminEmail"] = "", ["Seed:AdminPin"] = "" };
         foreach (var (name, value) in await MarketingSeedOverridesAsync(master, app.Configuration)) seedValues[name] = value;
         var seed = new ConfigurationBuilder().AddConfiguration(app.Configuration).AddInMemoryCollection(seedValues).Build();
