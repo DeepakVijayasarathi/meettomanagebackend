@@ -5,6 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- Keep local/CI tests runnable on a machine that has only the next major .NET runtime installed. -->
+    <RollForward>Major</RollForward>
   </PropertyGroup>
 
   <ItemGroup>

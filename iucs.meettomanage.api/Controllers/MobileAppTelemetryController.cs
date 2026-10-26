@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace iucs.meettomanage.api.Controllers;
 
@@ -69,10 +70,29 @@ public sealed class MobileAppTelemetryController(MeetToManageDbContext db) : Con
         if (request.SuccessfulSync) installation.LastSuccessfulSyncAtUtc = now;
         installation.LastErrorCategory = request.ErrorCategory?.ToLowerInvariant();
         installation.HeartbeatCount++;
+        var today = DateOnly.FromDateTime(now);
+        MobileAppDailyActivity? activity = null;
+        if (!await db.MobileAppDailyActivities.AnyAsync(x => x.UserId == userId && x.ActivityDate == today, ct))
+        {
+            activity = new MobileAppDailyActivity { UserId = userId, ActivityDate = today, Role = role };
+            db.MobileAppDailyActivities.Add(activity);
+        }
         // Opportunistic privacy retention: the indexed delete is cheap and means no raw installation record survives
         // more than 90 days without activity, even if a background scheduler is unavailable.
         await db.MobileAppInstallations.Where(x => x.LastSeenAtUtc < now.AddDays(-90)).ExecuteDeleteAsync(ct);
-        await db.SaveChangesAsync(ct);
+        await db.MobileAppDailyActivities.Where(x => x.ActivityDate < today.AddDays(-90)).ExecuteDeleteAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (activity is not null
+            && ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation, ConstraintName: "ix_mobile_app_daily_activities_user_id_activity_date" })
+        {
+            // Two startup heartbeats can race. The other request already recorded today's presence;
+            // detach only that duplicate and persist the installation update normally.
+            db.Entry(activity).State = EntityState.Detached;
+            await db.SaveChangesAsync(ct);
+        }
         return Ok(new { installation.Id, installation.LastSeenAtUtc });
     }
 

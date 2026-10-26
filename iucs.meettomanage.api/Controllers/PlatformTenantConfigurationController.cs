@@ -97,20 +97,20 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
             var now = DateTime.UtcNow;
             var since = now.AddDays(-days);
             var rows = await db.MobileAppInstallations.AsNoTracking().Where(x => x.LastSeenAtUtc >= since)
-                .Select(x => new { x.UserId, x.Platform, x.AppVersion, x.BuildNumber, x.NotificationsEnabled, x.BiometricLockEnabled, x.LastSeenAtUtc, x.LastSuccessfulSyncAtUtc, x.LastErrorCategory })
+                .Select(x => new { x.UserId, x.Role, x.Platform, x.AppVersion, x.BuildNumber, x.NotificationsEnabled, x.BiometricLockEnabled, x.LastSeenAtUtc, x.LastSuccessfulSyncAtUtc, x.LastErrorCategory })
                 .ToListAsync(ct);
+            var sinceDate = DateOnly.FromDateTime(since);
+            var daily = await db.MobileAppDailyActivities.AsNoTracking()
+                .Where(x => x.ActivityDate >= sinceDate && x.Role == "Parent")
+                .Select(x => new { x.UserId, x.ActivityDate }).ToListAsync(ct);
             var settings = await db.AppSettings.AsNoTracking().ToDictionaryAsync(x => x.Key, x => x.Value, ct);
             bool Has(string key) => settings.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value);
             var eligible = await db.Users.CountAsync(x => x.Status == domain.Enums.UserStatus.Active && x.Role == domain.Enums.UserRole.Parent, ct);
-            var latestVersion = rows.GroupBy(x => x.AppVersion).OrderByDescending(g => ParseVersion(g.Key)).ThenByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
             var active30Since = now.AddDays(-30);
             var recent30 = rows.Where(x => x.LastSeenAtUtc >= active30Since).ToList();
-            var trend = Enumerable.Range(0, days).Select(offset =>
-            {
-                var date = DateOnly.FromDateTime(now.Date.AddDays(-(days - 1 - offset)));
-                var count = rows.Where(x => DateOnly.FromDateTime(x.LastSeenAtUtc) == date).Select(x => x.UserId).Distinct().Count();
-                return new { date, activeFamilies = count };
-            });
+            var parentRecent30 = recent30.Where(x => string.Equals(x.Role, "Parent", StringComparison.OrdinalIgnoreCase)).ToList();
+            var latestVersion = LatestVersion(recent30.Select(x => x.AppVersion));
+            var trend = BuildTrend(daily.Select(x => (x.UserId, x.ActivityDate)), now, days);
             return new
             {
                 generatedAtUtc = now,
@@ -123,7 +123,7 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
                     installations24h = rows.Count(x => x.LastSeenAtUtc >= now.AddHours(-24)),
                     installations7d = rows.Count(x => x.LastSeenAtUtc >= now.AddDays(-7)),
                     installations30d = recent30.Count,
-                    families30d = recent30.Select(x => x.UserId).Distinct().Count(),
+                    families30d = parentRecent30.Select(x => x.UserId).Distinct().Count(),
                     lastSeenAtUtc = rows.Count == 0 ? (DateTime?)null : rows.Max(x => x.LastSeenAtUtc),
                     lastSuccessfulSyncAtUtc = rows.Where(x => x.LastSuccessfulSyncAtUtc != null).Select(x => x.LastSuccessfulSyncAtUtc).Max(),
                 },
@@ -150,6 +150,22 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
         }, ct);
         return Ok(result);
     }
+
+    public sealed record MobileAppTrendPoint(DateOnly Date, int ActiveFamilies);
+
+    public static IReadOnlyList<MobileAppTrendPoint> BuildTrend(IEnumerable<(Guid UserId, DateOnly ActivityDate)> activity, DateTime nowUtc, int days)
+    {
+        days = Math.Clamp(days, 1, 90);
+        var counts = activity.GroupBy(x => x.ActivityDate).ToDictionary(g => g.Key, g => g.Select(x => x.UserId).Distinct().Count());
+        return Enumerable.Range(0, days).Select(offset =>
+        {
+            var date = DateOnly.FromDateTime(nowUtc.Date.AddDays(-(days - 1 - offset)));
+            return new MobileAppTrendPoint(date, counts.GetValueOrDefault(date));
+        }).ToList();
+    }
+
+    public static string? LatestVersion(IEnumerable<string> versions) => versions
+        .GroupBy(x => x).OrderByDescending(g => ParseVersion(g.Key)).ThenByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
 
     private static Version ParseVersion(string value) => Version.TryParse(value, out var version) ? version : new Version(0, 0);
 

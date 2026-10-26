@@ -2653,6 +2653,57 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("email_templates");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.MobileAppDailyActivity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateOnly>("ActivityDate")
+                        .HasColumnType("date")
+                        .HasColumnName("activity_date");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("role");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mobile_app_daily_activities");
+
+                    b.HasIndex("ActivityDate")
+                        .HasDatabaseName("ix_mobile_app_daily_activities_activity_date");
+
+                    b.HasIndex("UserId", "ActivityDate")
+                        .IsUnique()
+                        .HasDatabaseName("ix_mobile_app_daily_activities_user_id_activity_date")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("mobile_app_daily_activities");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.MobileAppInstallation", b =>
                 {
                     b.Property<Guid>("Id")
@@ -6561,6 +6612,18 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasConstraintName("fk_chat_messages_users_user_id");
 
                     b.Navigation("MatchedFaq");
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.MobileAppDailyActivity", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_mobile_app_daily_activities_users_user_id");
 
                     b.Navigation("User");
                 });

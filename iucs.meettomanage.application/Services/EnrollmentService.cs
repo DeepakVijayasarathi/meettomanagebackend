@@ -273,7 +273,7 @@ namespace iucs.meettomanage.application.Services
                         {
                             ParentProfileId = form.ParentProfileId,
                             FirstName = firstName,
-                            LastName = lastName,
+                            LastName = lastName ?? string.Empty,
                             DateOfBirth = request.ChildDateOfBirth,
                         };
                         await _unitOfWork.Repository<Child>().AddAsync(child, cancellationToken);
