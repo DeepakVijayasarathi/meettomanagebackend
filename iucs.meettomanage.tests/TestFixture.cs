@@ -35,6 +35,17 @@ namespace iucs.meettomanage.tests
         }
     }
 
+    public class FakePushSender : IPushSender
+    {
+        public List<(Guid UserId, string Title, string Body)> Sent { get; } = [];
+
+        public Task SendToUserAsync(Guid userId, string title, string body, IReadOnlyDictionary<string, string>? data = null, CancellationToken cancellationToken = default)
+        {
+            Sent.Add((userId, title, body));
+            return Task.CompletedTask;
+        }
+    }
+
     /// <summary>Simulates an SMTP failure (e.g. a sender account's daily limit) to prove a
     /// caller treats email delivery as best-effort rather than letting it fail the request.</summary>
     public class ThrowingEmailSender : IEmailSender

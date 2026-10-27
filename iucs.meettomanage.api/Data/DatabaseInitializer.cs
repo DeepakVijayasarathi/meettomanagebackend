@@ -70,6 +70,7 @@ namespace iucs.meettomanage.api.Data
             await SeedIntegrationsAsync(context);
             await EnsureCashPaymentMethodAsync(context);
             await EnsureSmsIntegrationAsync(context);
+            await EnsureFcmIntegrationAsync(context);
             await EnsureJitsiAutoRecordConfigAsync(context);
             await SeedEmailTemplatesAsync(context);
             await ReconcileJoinLinkEmailTemplatesAsync(context);
@@ -1960,6 +1961,34 @@ namespace iucs.meettomanage.api.Data
             IsSystem = true,
             ConfigJson = "{}",
         };
+
+        /// <summary>
+        /// Push notifications for the family app (Firebase Cloud Messaging). Per-tenant master data: projectId plus the
+        /// service-account JSON the sender signs with. Insert-if-absent every startup, like the other system integrations.
+        /// </summary>
+        private static async Task EnsureFcmIntegrationAsync(MeetToManageDbContext context)
+        {
+            if (context.Integrations.Local.Any(i => i.Key == "fcm") ||
+                await context.Integrations.AnyAsync(i => i.Key == "fcm"))
+            {
+                return;
+            }
+
+            context.Integrations.Add(new Integration
+            {
+                Key = "fcm",
+                Name = "Push notifications (Firebase)",
+                Category = IntegrationCategory.Messaging,
+                Description = "Push notifications to the family app through Firebase Cloud Messaging (FCM v1).",
+                IsEnabled = false,
+                IsSystem = true,
+                ConfigJson = JsonSerializer.Serialize(new Dictionary<string, string?>
+                {
+                    ["projectId"] = "",
+                    ["serviceAccountKey"] = "",
+                }),
+            });
+        }
 
         /// <summary>
         /// SMS reminders/credentials channel (MSG91 or Twilio). Insert-if-absent every

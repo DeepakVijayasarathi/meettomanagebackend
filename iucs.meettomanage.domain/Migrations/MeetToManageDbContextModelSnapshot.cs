@@ -2771,6 +2771,15 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(16)")
                         .HasColumnName("platform");
 
+                    b.Property<string>("PushToken")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("push_token");
+
+                    b.Property<DateTime?>("PushTokenUpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("push_token_updated_at_utc");
+
                     b.Property<string>("Role")
                         .IsRequired()
                         .HasMaxLength(24)

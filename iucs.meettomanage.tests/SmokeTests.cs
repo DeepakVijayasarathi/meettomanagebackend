@@ -55,7 +55,7 @@ namespace iucs.meettomanage.tests
         {
             _auditLog = new AuditLogService(_db.UnitOfWork, _db.CurrentUser);
             _emailTemplates = new EmailTemplateService(_db.UnitOfWork, _auditLog, new MemoryCache(new MemoryCacheOptions()));
-            _notifications = new NotificationService(_db.UnitOfWork, _emailSender, _emailTemplates, NullLogger<NotificationService>.Instance);
+            _notifications = new NotificationService(_db.UnitOfWork, _emailSender, _emailTemplates, new FakePushSender(), NullLogger<NotificationService>.Instance);
         }
 
         private AuthService CreateAuthService() =>
@@ -2779,7 +2779,7 @@ namespace iucs.meettomanage.tests
             var (context2, uow2) = _db.CreateConcurrentSession();
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
             var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
-            var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, NullLogger<NotificationService>.Instance);
+            var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, new FakePushSender(), NullLogger<NotificationService>.Instance);
             var billing2 = new BillingService(uow2, auditLog2, new FakePaymentGateway(), notifications2, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
 
             var task1 = billing1.RecordPaymentAsync(invoice.Id, new RecordPaymentRequest { Amount = 500, Method = PaymentMethod.Card });
@@ -7583,7 +7583,7 @@ namespace iucs.meettomanage.tests
             var (context2, uow2) = _db.CreateConcurrentSession();
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
             var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
-            var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, NullLogger<NotificationService>.Instance);
+            var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, new FakePushSender(), NullLogger<NotificationService>.Instance);
             var userService2 = new UserService(
                 uow2, _hasher, notifications2, emailTemplates2, auditLog2, _emailSender, _whatsAppSender, _smsSender, _bulkFileReader, new AesGcmPinVault(Microsoft.Extensions.Options.Options.Create(new PinVaultOptions { Key = "test-key-test-key-test-key-test-key" })), NullLogger<UserService>.Instance);
             var sessionService2 = new SessionService(
@@ -8443,7 +8443,7 @@ namespace iucs.meettomanage.tests
             var (context2, uow2) = _db.CreateConcurrentSession();
             var auditLog2 = new AuditLogService(uow2, _db.CurrentUser);
             var emailTemplates2 = new EmailTemplateService(uow2, auditLog2, new MemoryCache(new MemoryCacheOptions()));
-            var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, NullLogger<NotificationService>.Instance);
+            var notifications2 = new NotificationService(uow2, _emailSender, emailTemplates2, new FakePushSender(), NullLogger<NotificationService>.Instance);
             var billing2 = new BillingService(uow2, auditLog2, gateway, notifications2, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
 
             var request = () => new RequestRefundRequest

@@ -31,6 +31,7 @@ public sealed class MobileAppTelemetryController(MeetToManageDbContext db) : Con
         public bool BiometricLockEnabled { get; set; }
         public bool SuccessfulSync { get; set; }
         [StringLength(64)] public string? ErrorCategory { get; set; }
+        [StringLength(512)] public string? PushToken { get; set; }
     }
 
     [HttpPost("heartbeat"), EnableRateLimiting("mobile-heartbeat")]
@@ -56,6 +57,7 @@ public sealed class MobileAppTelemetryController(MeetToManageDbContext db) : Con
             // retaining a cross-family association.
             installation.UserId = userId;
             installation.LastErrorCategory = null;
+            installation.PushToken = null;
             installation.HeartbeatCount = 0;
         }
 
@@ -67,6 +69,12 @@ public sealed class MobileAppTelemetryController(MeetToManageDbContext db) : Con
         installation.NotificationsEnabled = request.NotificationsEnabled;
         installation.BiometricLockEnabled = request.BiometricLockEnabled;
         installation.LastSeenAtUtc = now;
+        if (!request.NotificationsEnabled) installation.PushToken = null;
+        else if (NullIfBlank(request.PushToken) is { } pushToken && pushToken != installation.PushToken)
+        {
+            installation.PushToken = pushToken;
+            installation.PushTokenUpdatedAtUtc = now;
+        }
         if (request.SuccessfulSync) installation.LastSuccessfulSyncAtUtc = now;
         installation.LastErrorCategory = request.ErrorCategory?.ToLowerInvariant();
         installation.HeartbeatCount++;

@@ -110,6 +110,9 @@ builder.Services.AddScoped<IEmailSender>(sp => sp.GetRequiredService<SmtpEmailSe
 builder.Services.AddScoped<IWhatsAppSender, WhatsAppSender>();
 // SMS delivery (MSG91/Twilio), driven by the DB "sms" integration.
 builder.Services.AddScoped<ISmsSender, SmsSender>();
+// Push delivery (Firebase Cloud Messaging v1), driven by the DB "fcm" integration.
+builder.Services.AddHttpClient(nameof(FcmPushSender), client => client.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddScoped<IPushSender, FcmPushSender>();
 // Marketing-site chat assistant (Hetzner AI). Key from HetznerAi:ApiKey — user-secrets locally,
 // HetznerAi__ApiKey env var in prod, never committed.
 builder.Services.AddHttpClient(nameof(HetznerSalesAssistant), client => client.Timeout = TimeSpan.FromSeconds(30));

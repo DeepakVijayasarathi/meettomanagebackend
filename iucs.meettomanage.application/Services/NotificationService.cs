@@ -14,17 +14,20 @@ namespace iucs.meettomanage.application.Services
         private readonly IUnitOfWork _unitOfWork;
         private readonly IEmailSender _emailSender;
         private readonly IEmailTemplateService _emailTemplateService;
+        private readonly IPushSender _pushSender;
         private readonly ILogger<NotificationService> _logger;
 
         public NotificationService(
             IUnitOfWork unitOfWork,
             IEmailSender emailSender,
             IEmailTemplateService emailTemplateService,
+            IPushSender pushSender,
             ILogger<NotificationService> logger)
         {
             _unitOfWork = unitOfWork;
             _emailSender = emailSender;
             _emailTemplateService = emailTemplateService;
+            _pushSender = pushSender;
             _logger = logger;
         }
 
@@ -100,6 +103,11 @@ namespace iucs.meettomanage.application.Services
             // already run (e.g. as a side effect once the business entity is committed), so
             // this row must persist itself rather than rely on a save that may never come.
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            // Companion push for the family app; the sender no-ops unless the tenant enabled its FCM integration.
+            var preview = notification.Body.Length > 180 ? notification.Body[..177] + "..." : notification.Body;
+            await _pushSender.SendToUserAsync(recipientUserId, subject, preview,
+                new Dictionary<string, string> { ["notificationId"] = notification.Id.ToString(), ["kind"] = "notification" }, cancellationToken);
 
             return notification.Status;
         }

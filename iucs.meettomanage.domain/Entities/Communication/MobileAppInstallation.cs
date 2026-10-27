@@ -7,7 +7,7 @@ namespace iucs.meettomanage.domain.Entities.Communication;
 
 /// <summary>
 /// Privacy-limited operational heartbeat for one app installation. InstallationId is an app-generated random UUID,
-/// never a hardware identifier. No token, contact detail, device model, message, or form content is stored here.
+/// never a hardware identifier. The only token held is the FCM push registration token; no contact detail, device model, message, or form content is stored here.
 /// </summary>
 [Index(nameof(InstallationId), IsUnique = true)]
 [Index(nameof(LastSeenAtUtc))]
@@ -28,4 +28,7 @@ public sealed class MobileAppInstallation : BaseEntity
     public DateTime? LastSuccessfulSyncAtUtc { get; set; }
     [MaxLength(64)] public string? LastErrorCategory { get; set; }
     public int HeartbeatCount { get; set; }
+    /// <summary>FCM registration token the push sender targets. Cleared when FCM reports it unregistered.</summary>
+    [MaxLength(512)] public string? PushToken { get; set; }
+    public DateTime? PushTokenUpdatedAtUtc { get; set; }
 }
