@@ -114,6 +114,7 @@ builder.Services.AddScoped<ISmsSender, SmsSender>();
 // HetznerAi__ApiKey env var in prod, never committed.
 builder.Services.AddHttpClient(nameof(HetznerSalesAssistant), client => client.Timeout = TimeSpan.FromSeconds(30));
 builder.Services.AddScoped<ISalesAssistant, HetznerSalesAssistant>();
+builder.Services.AddScoped<IMitoAssistant, HetznerMitoAssistant>();
 builder.Services.AddHttpClient(nameof(OllamaChatClient), client => client.Timeout = TimeSpan.FromSeconds(45));
 builder.Services.AddScoped<IAiChatClient, OllamaChatClient>();
 // S3-compatible object storage (Hetzner Object Storage) everywhere — dev and prod both, so
@@ -465,6 +466,17 @@ builder.Services.AddRateLimiter(options =>
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(10),
+                QueueLimit = 0,
+            }));
+    // Authenticated learning requests are partitioned per family account. This bounds model
+    // spend without making students behind a shared school/network IP block each other.
+    options.AddPolicy("mito-chat", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
                 Window = TimeSpan.FromMinutes(10),
                 QueueLimit = 0,
             }));
