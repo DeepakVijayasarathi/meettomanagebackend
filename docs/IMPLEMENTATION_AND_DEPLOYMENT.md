@@ -69,8 +69,8 @@ fallback to another client database.
 | `/login` | Client email/mobile and PIN login; tenant is resolved automatically. |
 | `/t/client-code/...` | Tenant-bound anonymous pages and links. |
 
-The client Admin profile menu has a **Tenant administration** entry. Opening it
-requires a separate platform login: a client Admin token does not grant platform
+The client profile menu has no **Tenant administration** entry; operators open
+`/platform/tenants` directly. It requires a separate platform login: a client Admin token does not grant platform
 permissions. The operator's own profile menu links to all three console pages.
 Active and Suspended tenants can have their menus/configuration managed.
 

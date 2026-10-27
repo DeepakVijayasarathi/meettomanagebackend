@@ -83,8 +83,8 @@ redeployment is required. Failed setups remain visible and retryable; provisioni
 never drops databases. Retry using the intended original administrator details.
 Tenant code/database mappings are immutable through the API.
 
-The client Admin profile menu includes **Tenant administration**, opening the
-separate Tenant Admin sign-in. Tenant Admins have a dedicated console navigation
+The client profile menu does not show **Tenant administration**; operators open
+`/platform/tenants` directly, which shows the separate Tenant Admin sign-in. Tenant Admins have a dedicated console navigation
 and profile dropdown with **Tenant management**, **Menu management**, and **Tenant
 configuration**. A client Admin token does not grant platform access.
 
