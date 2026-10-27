@@ -40,7 +40,7 @@ namespace iucs.meettomanage.api.Controllers
             DateTime? Date(string key) => DateTime.TryParse(Value(key), out var date) ? date.ToUniversalTime() : null;
             var maintenanceStarts = Date("app.maintenance.startsAtUtc");
             var maintenanceEnds = Date("app.maintenance.endsAtUtc");
-            var maintenanceActive = Enabled("app.maintenance.enabled") && (maintenanceStarts is null || maintenanceStarts <= now) && (maintenanceEnds is null || maintenanceEnds > now);
+            var maintenanceActive = IsMaintenanceActive(Value("app.maintenance.enabled"), maintenanceStarts, maintenanceEnds, now);
 
             // The portal address: the administrator's per-organisation override, else the server's own frontend address.
             var web = Value("app.webBaseUrl") ?? configuration["Frontend:BaseUrl"];
@@ -90,5 +90,11 @@ namespace iucs.meettomanage.api.Controllers
         /// <summary>Only an absolute http(s) address is handed to the app; anything else (e.g. javascript:) is dropped.</summary>
         public static bool IsHttpUrl(string? value) =>
             Uri.TryCreate(value, UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp);
+
+        /// <summary>Maintenance is opt-in: a missing setting must never block every tenant's app.</summary>
+        public static bool IsMaintenanceActive(string? enabled, DateTime? startsAtUtc, DateTime? endsAtUtc, DateTime nowUtc) =>
+            string.Equals(enabled?.Trim(), "true", StringComparison.OrdinalIgnoreCase)
+            && (startsAtUtc is null || startsAtUtc <= nowUtc)
+            && (endsAtUtc is null || endsAtUtc > nowUtc);
     }
 }

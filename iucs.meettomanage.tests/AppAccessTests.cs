@@ -40,6 +40,27 @@ public sealed class AppAccessTests
     public void OnlyAbsoluteWebAddressesAreSentToTheApp(string? value, bool allowed) =>
         Assert.Equal(allowed, AppConfigController.IsHttpUrl(value));
 
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData("false", false)]
+    [InlineData("true", true)]
+    [InlineData(" TRUE ", true)]
+    public void MaintenanceModeMustBeExplicitlyEnabled(string? setting, bool active)
+    {
+        var now = new DateTime(2026, 10, 27, 12, 0, 0, DateTimeKind.Utc);
+        Assert.Equal(active, AppConfigController.IsMaintenanceActive(setting, null, null, now));
+    }
+
+    [Fact]
+    public void MaintenanceModeHonoursItsSchedule()
+    {
+        var now = new DateTime(2026, 10, 27, 12, 0, 0, DateTimeKind.Utc);
+        Assert.False(AppConfigController.IsMaintenanceActive("true", now.AddMinutes(1), null, now));
+        Assert.True(AppConfigController.IsMaintenanceActive("true", now.AddMinutes(-1), now.AddMinutes(1), now));
+        Assert.False(AppConfigController.IsMaintenanceActive("true", null, now, now));
+    }
+
     [Fact]
     public async Task ATenantCreatedWithoutAppAccessStaysWithoutIt()
     {
