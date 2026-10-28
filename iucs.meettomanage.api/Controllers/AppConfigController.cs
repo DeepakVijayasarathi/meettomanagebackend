@@ -25,7 +25,9 @@ namespace iucs.meettomanage.api.Controllers
             "app.maintenance.enabled", "app.maintenance.message", "app.maintenance.startsAtUtc", "app.maintenance.endsAtUtc",
             "app.minimumVersion", "app.forceUpgrade", "app.quickActions",
             "app.features.classes", "app.features.fees", "app.features.updates", "app.features.reports",
-            "app.features.resources", "app.features.recordings", "app.features.enrollment", "app.features.support", "app.features.feedback",
+            "app.features.resources", "app.features.recordings", "app.features.enrollment", "app.features.support", "app.features.feedback", "app.features.mito",
+            "app.mito.chatEnabled", "app.mito.quizEnabled", "app.mito.voiceEnabled", "app.mito.modes.doubt", "app.mito.modes.plan",
+            "app.mito.modes.review", "app.mito.displayName", "app.mito.welcomeMessage",
         ];
 
         [HttpGet]
@@ -64,7 +66,14 @@ namespace iucs.meettomanage.api.Controllers
                 {
                     classes = Enabled("app.features.classes"), fees = Enabled("app.features.fees"), updates = Enabled("app.features.updates"),
                     reports = Enabled("app.features.reports"), resources = Enabled("app.features.resources"), recordings = Enabled("app.features.recordings"),
-                    enrollment = Enabled("app.features.enrollment"), support = Enabled("app.features.support"), feedback = Enabled("app.features.feedback"),
+                    enrollment = Enabled("app.features.enrollment"), support = Enabled("app.features.support"), feedback = Enabled("app.features.feedback"), mito = Enabled("app.features.mito"),
+                },
+                mito = new
+                {
+                    chatEnabled = Enabled("app.mito.chatEnabled"), quizEnabled = Enabled("app.mito.quizEnabled"), voiceEnabled = Enabled("app.mito.voiceEnabled"),
+                    doubtModeEnabled = Enabled("app.mito.modes.doubt"), planModeEnabled = Enabled("app.mito.modes.plan"), reviewModeEnabled = Enabled("app.mito.modes.review"),
+                    displayName = Value("app.mito.displayName") is { Length: <= 40 } mitoName ? mitoName : "Mito",
+                    welcomeMessage = Value("app.mito.welcomeMessage") is { Length: <= 240 } mitoWelcome ? mitoWelcome : null,
                 },
                 // First-launch welcome tour. Shown unless the administrator switches it off; the app supplies its own
                 // wording for any field left empty. Features are one "Title | Description" per line.

@@ -22,18 +22,26 @@ public class MitoController : ControllerBase
     private readonly IParentPortalService _portal;
     private readonly IMitoAssistant _mito;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ISettingsService _settings;
 
-    public MitoController(IParentPortalService portal, IMitoAssistant mito, IUnitOfWork unitOfWork)
+    public MitoController(IParentPortalService portal, IMitoAssistant mito, IUnitOfWork unitOfWork, ISettingsService settings)
     {
         _portal = portal;
         _mito = mito;
         _unitOfWork = unitOfWork;
+        _settings = settings;
     }
+
+    [HttpGet("config")]
+    public async Task<ActionResult<MitoConfigurationResponse>> Configuration(CancellationToken cancellationToken) =>
+        Ok(await GetConfigurationAsync(cancellationToken));
 
     [HttpPost("chat")]
     [EnableRateLimiting("mito-chat")]
     public async Task<ActionResult<MitoChatResponse>> Chat(MitoChatRequest request, CancellationToken cancellationToken)
     {
+        var configuration = await GetConfigurationAsync(cancellationToken);
+        RequireEnabled(configuration, chat: true, mode: request.Mode);
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
         var dashboard = await _portal.GetDashboardAsync(userId, cancellationToken);
         var child = dashboard.Children.SingleOrDefault(x => x.ChildId == request.ChildId)
@@ -55,6 +63,7 @@ public class MitoController : ControllerBase
     [HttpGet("today")]
     public async Task<ActionResult<MitoTodayResponse>> Today([FromQuery] Guid childId, CancellationToken cancellationToken)
     {
+        RequireEnabled(await GetConfigurationAsync(cancellationToken));
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
         var dashboard = await _portal.GetDashboardAsync(userId, cancellationToken);
         var child = dashboard.Children.SingleOrDefault(x => x.ChildId == childId)
@@ -79,6 +88,7 @@ public class MitoController : ControllerBase
     [HttpGet("progress")]
     public async Task<ActionResult<MitoProgressResponse>> Progress([FromQuery] Guid childId, CancellationToken cancellationToken)
     {
+        RequireEnabled(await GetConfigurationAsync(cancellationToken));
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
         var dashboard = await _portal.GetDashboardAsync(userId, cancellationToken);
         var child = dashboard.Children.SingleOrDefault(x => x.ChildId == childId)
@@ -99,6 +109,7 @@ public class MitoController : ControllerBase
     [EnableRateLimiting("mito-chat")]
     public async Task<ActionResult<IReadOnlyList<MitoQuizQuestionDto>>> Quiz(MitoQuizRequest request, CancellationToken cancellationToken)
     {
+        RequireEnabled(await GetConfigurationAsync(cancellationToken), quiz: true);
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
         await RequireChildAsync(userId, request.ChildId, cancellationToken);
         var scopes = await _unitOfWork.Repository<BatchEnrollment>().Query()
@@ -124,6 +135,7 @@ public class MitoController : ControllerBase
     [EnableRateLimiting("mito-chat")]
     public async Task<ActionResult<MitoQuizAnswerResponse>> AnswerQuiz(MitoQuizAnswerRequest request, CancellationToken cancellationToken)
     {
+        RequireEnabled(await GetConfigurationAsync(cancellationToken), quiz: true);
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
         await RequireChildAsync(userId, request.ChildId, cancellationToken);
         var scopes = await _unitOfWork.Repository<BatchEnrollment>().Query()
@@ -151,5 +163,34 @@ public class MitoController : ControllerBase
     {
         var dashboard = await _portal.GetDashboardAsync(userId, cancellationToken);
         if (dashboard.Children.All(x => x.ChildId != childId)) throw new NotFoundException("Student not found.");
+    }
+
+    private async Task<MitoConfigurationResponse> GetConfigurationAsync(CancellationToken cancellationToken)
+    {
+        var values = (await _settings.GetAllAsync(cancellationToken)).ToDictionary(x => x.Key, x => x.Value, StringComparer.Ordinal);
+        string? Value(string key) => values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value.Trim() : null;
+        bool Enabled(string key) => !string.Equals(Value(key), "false", StringComparison.OrdinalIgnoreCase);
+        return new MitoConfigurationResponse
+        {
+            Enabled = Enabled("app.features.mito"),
+            ChatEnabled = Enabled("app.mito.chatEnabled"),
+            QuizEnabled = Enabled("app.mito.quizEnabled"),
+            VoiceEnabled = Enabled("app.mito.voiceEnabled"),
+            DoubtModeEnabled = Enabled("app.mito.modes.doubt"),
+            PlanModeEnabled = Enabled("app.mito.modes.plan"),
+            ReviewModeEnabled = Enabled("app.mito.modes.review"),
+            DisplayName = Value("app.mito.displayName") is { Length: <= 40 } name ? name : "Mito",
+            WelcomeMessage = Value("app.mito.welcomeMessage") is { Length: <= 240 } message ? message : null,
+        };
+    }
+
+    private static void RequireEnabled(MitoConfigurationResponse configuration, bool chat = false, bool quiz = false, string? mode = null)
+    {
+        if (!configuration.Enabled) throw new ForbiddenException("The AI learning companion is not enabled for this academy.");
+        if (chat && !configuration.ChatEnabled) throw new ForbiddenException("AI chat is not enabled for this academy.");
+        if (quiz && !configuration.QuizEnabled) throw new ForbiddenException("AI practice quizzes are not enabled for this academy.");
+        if (mode == "doubt" && !configuration.DoubtModeEnabled) throw new ForbiddenException("Doubt support is not enabled for this academy.");
+        if (mode == "plan" && !configuration.PlanModeEnabled) throw new ForbiddenException("Study planning is not enabled for this academy.");
+        if (mode == "review" && !configuration.ReviewModeEnabled) throw new ForbiddenException("Mistake review is not enabled for this academy.");
     }
 }

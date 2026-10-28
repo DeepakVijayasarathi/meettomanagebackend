@@ -2,6 +2,19 @@ using System.ComponentModel.DataAnnotations;
 
 namespace iucs.meettomanage.application.Dto.Mito;
 
+public class MitoConfigurationResponse
+{
+    public bool Enabled { get; set; } = true;
+    public bool ChatEnabled { get; set; } = true;
+    public bool QuizEnabled { get; set; } = true;
+    public bool VoiceEnabled { get; set; } = true;
+    public bool DoubtModeEnabled { get; set; } = true;
+    public bool PlanModeEnabled { get; set; } = true;
+    public bool ReviewModeEnabled { get; set; } = true;
+    public string DisplayName { get; set; } = "Mito";
+    public string? WelcomeMessage { get; set; }
+}
+
 public class MitoChatTurn
 {
     [Required, RegularExpression("user|assistant")]
