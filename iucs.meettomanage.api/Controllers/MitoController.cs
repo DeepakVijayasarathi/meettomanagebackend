@@ -4,6 +4,10 @@ using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Mito;
 using iucs.meettomanage.application.Services;
 using iucs.meettomanage.domain.Enums;
+using iucs.meettomanage.domain.Entities.Academics;
+using iucs.meettomanage.domain.Entities.Quizzes;
+using iucs.meettomanage.domain.Repository;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -17,11 +21,13 @@ public class MitoController : ControllerBase
 {
     private readonly IParentPortalService _portal;
     private readonly IMitoAssistant _mito;
+    private readonly IUnitOfWork _unitOfWork;
 
-    public MitoController(IParentPortalService portal, IMitoAssistant mito)
+    public MitoController(IParentPortalService portal, IMitoAssistant mito, IUnitOfWork unitOfWork)
     {
         _portal = portal;
         _mito = mito;
+        _unitOfWork = unitOfWork;
     }
 
     [HttpPost("chat")]
@@ -86,5 +92,64 @@ public class MitoController : ControllerBase
             AttendancePercent = child.AttendancePercent,
             Summary = $"{child.ClassesCompleted} classes completed and {child.ClassesRemaining} upcoming. {attendance}",
         });
+    }
+
+    /// <summary>Returns only teacher/admin-authored questions from this student's enrolled courses. Correct answers stay server-side.</summary>
+    [HttpPost("quiz")]
+    [EnableRateLimiting("mito-chat")]
+    public async Task<ActionResult<IReadOnlyList<MitoQuizQuestionDto>>> Quiz(MitoQuizRequest request, CancellationToken cancellationToken)
+    {
+        var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        await RequireChildAsync(userId, request.ChildId, cancellationToken);
+        var scopes = await _unitOfWork.Repository<BatchEnrollment>().Query()
+            .Where(x => x.ChildId == request.ChildId && x.Status == EnrollmentStatus.Active)
+            .Select(x => new { x.Batch.CourseId, x.Batch.Course.DepartmentId }).ToListAsync(cancellationToken);
+        var courseIds = scopes.Select(x => x.CourseId).Distinct().ToList();
+        var departmentIds = scopes.Select(x => x.DepartmentId).Distinct().ToList();
+        var bank = await _unitOfWork.Repository<QuizQuestion>().Query()
+            .Include(x => x.Course).Include(x => x.Options)
+            .Where(x => (x.CourseId != null && courseIds.Contains(x.CourseId.Value))
+                || (x.CourseId == null && departmentIds.Contains(x.DepartmentId)))
+            .ToListAsync(cancellationToken);
+        var selected = bank.OrderBy(_ => Random.Shared.Next()).Take(request.Count).Select(x => new MitoQuizQuestionDto
+        {
+            Id = x.Id, Prompt = x.Prompt, CourseName = x.Course?.Name,
+            Options = x.Options.OrderBy(o => o.DisplayOrder).Select(o => new MitoQuizOptionDto { Id = o.Id, Text = o.Text }).ToList(),
+        }).ToList();
+        return Ok(selected);
+    }
+
+    /// <summary>Grades one approved-bank answer on the server, revealing the answer only after submission.</summary>
+    [HttpPost("quiz/answer")]
+    [EnableRateLimiting("mito-chat")]
+    public async Task<ActionResult<MitoQuizAnswerResponse>> AnswerQuiz(MitoQuizAnswerRequest request, CancellationToken cancellationToken)
+    {
+        var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        await RequireChildAsync(userId, request.ChildId, cancellationToken);
+        var scopes = await _unitOfWork.Repository<BatchEnrollment>().Query()
+            .Where(x => x.ChildId == request.ChildId && x.Status == EnrollmentStatus.Active)
+            .Select(x => new { x.Batch.CourseId, x.Batch.Course.DepartmentId }).ToListAsync(cancellationToken);
+        var courseIds = scopes.Select(x => x.CourseId).Distinct().ToList();
+        var departmentIds = scopes.Select(x => x.DepartmentId).Distinct().ToList();
+        var question = await _unitOfWork.Repository<QuizQuestion>().Query().Include(x => x.Options)
+            .FirstOrDefaultAsync(x => x.Id == request.QuestionId
+                && ((x.CourseId != null && courseIds.Contains(x.CourseId.Value))
+                    || (x.CourseId == null && departmentIds.Contains(x.DepartmentId))), cancellationToken)
+            ?? throw new NotFoundException("Quiz question not found.");
+        if (!question.Options.Any(x => x.Id == request.OptionId))
+            throw new DomainValidationException("That answer option does not belong to this question.");
+        var correct = question.Options.Single(x => x.IsCorrect);
+        var isCorrect = correct.Id == request.OptionId;
+        return Ok(new MitoQuizAnswerResponse
+        {
+            Correct = isCorrect, CorrectOptionId = correct.Id, CorrectAnswer = correct.Text,
+            Feedback = isCorrect ? "Correct — well done!" : $"Not quite. The correct answer is {correct.Text}. Ask Mito to explain the concept if you want help.",
+        });
+    }
+
+    private async Task RequireChildAsync(Guid userId, Guid childId, CancellationToken cancellationToken)
+    {
+        var dashboard = await _portal.GetDashboardAsync(userId, cancellationToken);
+        if (dashboard.Children.All(x => x.ChildId != childId)) throw new NotFoundException("Student not found.");
     }
 }

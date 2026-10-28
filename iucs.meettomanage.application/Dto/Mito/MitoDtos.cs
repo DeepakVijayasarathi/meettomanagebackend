@@ -57,6 +57,47 @@ public class MitoProgressResponse
     public string Summary { get; set; } = string.Empty;
 }
 
+public class MitoQuizRequest
+{
+    [Required]
+    public Guid ChildId { get; set; }
+
+    [Range(1, 10)]
+    public int Count { get; set; } = 5;
+}
+
+public class MitoQuizQuestionDto
+{
+    public Guid Id { get; set; }
+    public string Prompt { get; set; } = string.Empty;
+    public string? CourseName { get; set; }
+    public IReadOnlyList<MitoQuizOptionDto> Options { get; set; } = [];
+}
+
+public class MitoQuizOptionDto
+{
+    public Guid Id { get; set; }
+    public string Text { get; set; } = string.Empty;
+}
+
+public class MitoQuizAnswerRequest
+{
+    [Required]
+    public Guid ChildId { get; set; }
+    [Required]
+    public Guid QuestionId { get; set; }
+    [Required]
+    public Guid OptionId { get; set; }
+}
+
+public class MitoQuizAnswerResponse
+{
+    public bool Correct { get; set; }
+    public Guid CorrectOptionId { get; set; }
+    public string CorrectAnswer { get; set; } = string.Empty;
+    public string Feedback { get; set; } = string.Empty;
+}
+
 public record MitoStudentContext(
     string StudentName,
     string? AcademicLevel,
