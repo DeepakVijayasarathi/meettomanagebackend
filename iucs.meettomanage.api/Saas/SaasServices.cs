@@ -18,6 +18,7 @@ public static class SaasServices
         services.AddSingleton<IPlatformPaymentGateway>(sp => string.Equals(sp.GetRequiredService<IOptions<SaasOptions>>().Value.Gateway, "Razorpay", StringComparison.OrdinalIgnoreCase)
             ? ActivatorUtilities.CreateInstance<RazorpayPlatformGateway>(sp)
             : new ManualPlatformGateway());
+        services.AddSingleton<PlatformAuditWriter>();
         services.AddSingleton<SaasUsageService>();
         services.AddSingleton<SaasReminderService>();
         services.AddSingleton<SaasSubscriptionService>();

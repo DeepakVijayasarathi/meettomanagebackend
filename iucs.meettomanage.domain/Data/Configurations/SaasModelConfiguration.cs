@@ -144,6 +144,14 @@ public static class SaasModelConfiguration
             e.HasIndex(x => x.Key).IsUnique();
         });
 
+        modelBuilder.Entity<PlatformAuditLog>(e =>
+        {
+            e.ToTable("platform_audit_log");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.OccurredAtUtc);
+            e.HasIndex(x => new { x.TenantId, x.OccurredAtUtc });
+        });
+
         ApplySnakeCaseNames(modelBuilder);
     }
 

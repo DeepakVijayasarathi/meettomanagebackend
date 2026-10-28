@@ -88,6 +88,13 @@ The client profile menu does not show **Tenant administration**; operators open
 and profile dropdown with **Tenant management**, **Menu management**, and **Tenant
 configuration**. A client Admin token does not grant platform access.
 
+Every state-changing request made with a platform token, and every platform sign-in
+attempt (success or failure), is recorded in the master table `platform_audit_log`
+(operator, action, client, HTTP status, IP address). Request bodies are never
+stored. The **Audit log** page in the console (`/platform/audit-log`) lists it with
+operator and failures-only filters; `GET /api/platform/audit-log` backs it. A
+failure to write an entry is logged and does not block the operator's action.
+
 Select a tenant on `/platform/menus` to create, edit, hide or remove portal menu
 entries and set their permission gates and ordering. `/platform/configuration`
 manages that tenant's organization, branding, notification, widget and SEO

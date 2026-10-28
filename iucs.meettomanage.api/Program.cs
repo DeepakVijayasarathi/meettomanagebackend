@@ -61,7 +61,11 @@ if (tenantMode)
     builder.Services.AddSaasServices(builder.Configuration);
 }
 
-builder.Services.AddControllers()
+builder.Services.AddControllers(options =>
+    {
+        // Operator audit trail; the filter ignores every request that is not made with a platform-admin token.
+        if (tenantMode) options.Filters.Add<PlatformAuditFilter>();
+    })
     .AddJsonOptions(options =>
         // Enums travel as their names ("Teacher", "Overdue"), matching how they are stored
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));

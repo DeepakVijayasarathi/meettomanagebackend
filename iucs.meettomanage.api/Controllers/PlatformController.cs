@@ -21,7 +21,8 @@ namespace iucs.meettomanage.api.Controllers;
 [ApiController, Route("api/platform")]
 public sealed class PlatformController(IConfiguration configuration, IPasswordHasher hasher,
     IOptions<JwtOptions> jwt, MasterDbContext master, TenantProvisioner provisioner, TenantScopeFactory scopes,
-    SaasSubscriptionService subscriptions, TenantDomainResolver domains, IEntitlementService entitlements) : ControllerBase
+    SaasSubscriptionService subscriptions, TenantDomainResolver domains, IEntitlementService entitlements,
+    PlatformAuditWriter audit) : ControllerBase
 {
     [HttpPost("tenants/{id:guid}/synchronize-logins"), Authorize(Policy = "PlatformAdmin")]
     public async Task<IActionResult> SynchronizeLogins(Guid id, CancellationToken ct)
@@ -41,13 +42,20 @@ public sealed class PlatformController(IConfiguration configuration, IPasswordHa
     }
 
     [HttpPost("login"), AllowAnonymous, EnableRateLimiting("login")]
-    public IActionResult Login(PlatformLogin request)
+    public async Task<IActionResult> Login(PlatformLogin request)
     {
         var email = configuration["MultiTenancy:PlatformAdmin:Email"];
         var hash = configuration["MultiTenancy:PlatformAdmin:PasswordHash"];
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
         if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(hash)
             || !string.Equals(request.Email.Trim(), email, StringComparison.OrdinalIgnoreCase)
-            || !hasher.Verify(request.Password, hash)) throw new UnauthorizedException("Invalid platform credentials.");
+            || !hasher.Verify(request.Password, hash))
+        {
+            // Failed attempts are the signal worth auditing; the attempted email is stored, never the password.
+            await audit.WriteAsync(request.Email.Trim(), "Platform.LoginFailed", "POST", Request.Path.Value ?? "", 401, null, ip);
+            throw new UnauthorizedException("Invalid platform credentials.");
+        }
+        await audit.WriteAsync(email, "Platform.LoginSucceeded", "POST", Request.Path.Value ?? "", 200, null, ip);
         var options = jwt.Value;
         var expires = DateTime.UtcNow.AddMinutes(30);
         var token = new JwtSecurityToken(options.Issuer, options.Audience,

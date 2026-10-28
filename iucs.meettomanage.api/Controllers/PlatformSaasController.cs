@@ -430,6 +430,31 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
         return Ok(new { billingRan = billing, usageRan = usage });
     }
 
+    /// <summary>Operator audit trail, newest first. Filter by client, actor or a failed/successful outcome.</summary>
+    [HttpGet("audit-log")]
+    public async Task<IActionResult> AuditLog([FromQuery] Guid? tenantId, [FromQuery] string? actor, [FromQuery] bool? failedOnly,
+        [FromQuery] int page = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
+    {
+        pageSize = Math.Clamp(pageSize, 1, 200); page = Math.Max(page, 1);
+        var query = master.PlatformAuditLogs.AsNoTracking().AsQueryable();
+        if (tenantId is { } t) query = query.Where(x => x.TenantId == t);
+        if (!string.IsNullOrWhiteSpace(actor)) { var a = actor.Trim().ToLower(); query = query.Where(x => x.Actor.ToLower().Contains(a)); }
+        if (failedOnly == true) query = query.Where(x => x.StatusCode >= 400);
+        var total = await query.CountAsync(ct);
+        var items = await query.OrderByDescending(x => x.OccurredAtUtc).Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
+        var names = await master.Tenants.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        return Ok(new
+        {
+            total, page, pageSize,
+            items = items.Select(x => new
+            {
+                x.Id, x.OccurredAtUtc, x.Actor, x.Action, x.HttpMethod, x.Path, x.TenantId,
+                tenantName = x.TenantId is { } id && names.TryGetValue(id, out var n) ? n : null,
+                x.StatusCode, x.IpAddress, x.Detail,
+            }),
+        });
+    }
+
     [HttpGet("billing/settings")]
     public IActionResult Settings() => Ok(new
     {

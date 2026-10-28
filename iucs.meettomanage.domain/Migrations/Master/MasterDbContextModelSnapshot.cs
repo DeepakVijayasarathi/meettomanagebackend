@@ -167,6 +167,71 @@ namespace iucs.meettomanage.domain.Migrations.Master
                     b.ToTable("plan_price", (string)null);
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Saas.PlatformAuditLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("action");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)")
+                        .HasColumnName("actor");
+
+                    b.Property<string>("Detail")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("detail");
+
+                    b.Property<string>("HttpMethod")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasColumnName("http_method");
+
+                    b.Property<string>("IpAddress")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("ip_address");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at_utc");
+
+                    b.Property<string>("Path")
+                        .IsRequired()
+                        .HasMaxLength(400)
+                        .HasColumnType("character varying(400)")
+                        .HasColumnName("path");
+
+                    b.Property<int>("StatusCode")
+                        .HasColumnType("integer")
+                        .HasColumnName("status_code");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_platform_audit_log");
+
+                    b.HasIndex("OccurredAtUtc")
+                        .HasDatabaseName("ix_platform_audit_log_occurred_at_utc");
+
+                    b.HasIndex("TenantId", "OccurredAtUtc")
+                        .HasDatabaseName("ix_platform_audit_log_tenant_id_occurred_at_utc");
+
+                    b.ToTable("platform_audit_log", (string)null);
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Saas.PlatformEmailTemplate", b =>
                 {
                     b.Property<Guid>("Id")
@@ -883,10 +948,10 @@ namespace iucs.meettomanage.domain.Migrations.Master
                     b.HasIndex("Code")
                         .IsUnique();
 
-                    b.HasIndex("DatabaseName")
+                    b.HasIndex("CustomDomain")
                         .IsUnique();
 
-                    b.HasIndex("CustomDomain")
+                    b.HasIndex("DatabaseName")
                         .IsUnique();
 
                     b.ToTable("tenants", (string)null);
