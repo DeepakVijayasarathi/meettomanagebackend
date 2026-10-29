@@ -12,6 +12,8 @@ public static class EntitlementKeys
     public const string MaxStaff = "max_staff";
     public const string MaxStorageMb = "max_storage_mb";
     public const string MaxSessionMinutesPerMonth = "max_session_minutes_per_month";
+    public const string MaxSessionsPerMonth = "max_sessions_per_month";
+    public const string MaxRecordingsPerMonth = "max_recordings_per_month";
     public const string RecordingRetentionDays = "recording_retention_days";
 
     // Features (Bool, 0/1).
@@ -30,6 +32,8 @@ public static class EntitlementKeys
         new(MaxStaff, "Staff & teacher accounts", EntitlementValueType.Number, "accounts"),
         new(MaxStorageMb, "File storage", EntitlementValueType.Number, "MB"),
         new(MaxSessionMinutesPerMonth, "Live-session minutes per month", EntitlementValueType.Number, "minutes"),
+        new(MaxSessionsPerMonth, "Sessions per month", EntitlementValueType.Number, "sessions"),
+        new(MaxRecordingsPerMonth, "Recordings per month", EntitlementValueType.Number, "recordings"),
         new(RecordingRetentionDays, "Recording retention", EntitlementValueType.Number, "days"),
         new(WhiteLabel, "White-label branding", EntitlementValueType.Bool, ""),
         new(ApiAccess, "API & webhook access", EntitlementValueType.Bool, ""),

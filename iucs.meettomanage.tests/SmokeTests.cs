@@ -12263,9 +12263,9 @@ namespace iucs.meettomanage.tests
             const string desktop = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0";
             const string phone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Mobile/15E148";
 
-            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/", VisitorId = "visitor-aaaa", ReferrerHost = "www.google.com" }, desktop);
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/", VisitorId = "visitor-aaaa", ReferrerHost = "www.google.com", UtmMedium = "cpc", Country = "in" }, desktop);
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/pricing?x=1", VisitorId = "visitor-aaaa" }, desktop);
-            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/blog/five-signs/", VisitorId = "visitor-bbbb", UtmSource = "Instagram", UtmCampaign = "launch" }, phone);
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/blog/five-signs/", VisitorId = "visitor-bbbb", UtmSource = "Instagram", UtmMedium = "social", UtmCampaign = "launch", Country = "US" }, phone);
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "chat_started", Path = "/", VisitorId = "visitor-bbbb" }, phone);
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/", VisitorId = "visitor-cccc" }, "Googlebot/2.1 (+http://www.google.com/bot.html)");
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/<script>", VisitorId = "visitor-dddd" }, desktop);
@@ -12286,6 +12286,11 @@ namespace iucs.meettomanage.tests
             Assert.Equal(2, dashboard.Totals.DemoRequests);
             Assert.Equal(1, dashboard.Totals.ChatBookings);
             Assert.Equal(100, dashboard.Totals.ConversionRate);
+            Assert.Equal(1.5, dashboard.Totals.PagesPerVisitor);
+            Assert.Equal(50, dashboard.Totals.ChatStartRate);
+            Assert.Equal(0, dashboard.Totals.DemoPipelineConversionRate);
+            Assert.False(string.IsNullOrWhiteSpace(dashboard.StartDate));
+            Assert.False(string.IsNullOrWhiteSpace(dashboard.EndDate));
             Assert.Equal(30, dashboard.Daily.Count);
             Assert.Equal(3, dashboard.Daily.Sum(d => d.PageViews));
             Assert.Contains(dashboard.TopPages, p => p.Name == "/pricing");
@@ -12293,6 +12298,10 @@ namespace iucs.meettomanage.tests
             Assert.Contains(dashboard.Sources, s => s.Name == "Google" && s.Count == 1);
             Assert.Contains(dashboard.Sources, s => s.Name == "Instagram" && s.Count == 1);
             Assert.Contains(dashboard.Campaigns, c => c.Name == "launch");
+            Assert.Contains(dashboard.Mediums, m => m.Name == "cpc" && m.Count == 1);
+            Assert.Contains(dashboard.Mediums, m => m.Name == "social" && m.Count == 1);
+            Assert.Contains(dashboard.Countries, c => c.Name == "IN" && c.Count == 1);
+            Assert.Contains(dashboard.Countries, c => c.Name == "US" && c.Count == 1);
             Assert.Contains(dashboard.Devices, d => d.Name == "mobile" && d.Count == 1);
             Assert.Contains(dashboard.Devices, d => d.Name == "desktop" && d.Count == 1);
         }

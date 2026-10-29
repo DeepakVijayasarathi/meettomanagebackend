@@ -24,20 +24,20 @@ public static class SaasSeeder
         {
             db.Plans.AddRange(
                 NewPlan("trial", "Free Trial", "Try everything for a limited time.", false, options.Value.DefaultTrialDays, 0,
-                    new Limits(25, 5, 2 * 1024, 600, 7), Features(recordings: true, whiteLabel: false, gateway: false), []),
+                    new Limits(25, 5, 2 * 1024, 600, 100, 100, 7), Features(recordings: true, whiteLabel: false, gateway: false), []),
                 NewPlan("starter", "Starter", "For a single academy getting started.", true, 0, 1,
-                    new Limits(100, 15, 20 * 1024, 6_000, 16), Features(recordings: true, whiteLabel: true, gateway: true),
+                    new Limits(100, 15, 20 * 1024, 6_000, 1_000, 1_000, 16), Features(recordings: true, whiteLabel: true, gateway: true),
                     [(BillingInterval.Month, 2999m), (BillingInterval.Year, 29990m)]),
                 NewPlan("growth", "Growth", "For growing academies with more learners and automation.", true, 0, 2,
-                    new Limits(500, 50, 200 * 1024, 30_000, 30), Features(recordings: true, whiteLabel: true, gateway: true, whatsapp: true, api: true),
+                    new Limits(500, 50, 200 * 1024, 30_000, 5_000, 5_000, 30), Features(recordings: true, whiteLabel: true, gateway: true, whatsapp: true, api: true),
                     [(BillingInterval.Month, 7999m), (BillingInterval.Year, 79990m)]),
                 NewPlan("enterprise", "Enterprise", "Custom limits, custom domain and dedicated support. Contact sales.", false, 0, 3,
-                    new Limits(-1, -1, -1, -1, -1), Features(true, true, true, true, true, true), []));
+                    new Limits(-1, -1, -1, -1, -1, -1, -1), Features(true, true, true, true, true, true), []));
         }
         if (!await db.Plans.AnyAsync(x => x.Code == LegacyPlanCode, ct))
         {
             db.Plans.Add(NewPlan(LegacyPlanCode, "Legacy (unlimited)", "Clients that existed before billing. No limits, never renews.", false, 0, 99,
-                new Limits(-1, -1, -1, -1, -1), Features(true, true, true, true, true, true), []));
+                new Limits(-1, -1, -1, -1, -1, -1, -1), Features(true, true, true, true, true, true), []));
         }
         await db.SaveChangesAsync(ct);
 
@@ -62,7 +62,8 @@ public static class SaasSeeder
         if (unmanaged.Count > 0) logger.LogInformation("{Count} existing tenant(s) were placed on the legacy plan.", unmanaged.Count);
     }
 
-    private sealed record Limits(long Students, long Staff, long StorageMb, long SessionMinutes, long RetentionDays);
+    private sealed record Limits(long Students, long Staff, long StorageMb, long SessionMinutes,
+        long Sessions, long Recordings, long RetentionDays);
 
     private static Dictionary<string, long> Features(bool recordings = false, bool whiteLabel = false, bool gateway = false,
         bool whatsapp = false, bool api = false, bool customDomain = false) => new()
@@ -85,6 +86,8 @@ public static class SaasSeeder
         Number(EntitlementKeys.MaxStaff, limits.Staff);
         Number(EntitlementKeys.MaxStorageMb, limits.StorageMb);
         Number(EntitlementKeys.MaxSessionMinutesPerMonth, limits.SessionMinutes);
+        Number(EntitlementKeys.MaxSessionsPerMonth, limits.Sessions);
+        Number(EntitlementKeys.MaxRecordingsPerMonth, limits.Recordings);
         Number(EntitlementKeys.RecordingRetentionDays, limits.RetentionDays);
         foreach (var (key, value) in features)
             plan.Entitlements.Add(new PlanEntitlement { Key = key, ValueType = EntitlementValueType.Bool, Value = value });

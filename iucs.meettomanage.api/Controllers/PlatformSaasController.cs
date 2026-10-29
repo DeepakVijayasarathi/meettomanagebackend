@@ -198,7 +198,7 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
             s.TrialEndsAtUtc, s.CurrentPeriodEndUtc, s.GraceEndsAtUtc, s.CancelAtPeriodEnd, s.SuspendedByBilling,
             mrr = s.Status is SaasSubscriptionStatus.Active or SaasSubscriptionStatus.PastDue && s.PlanPrice is not null && s.CurrentPeriodEndUtc is not null
                 ? SaasRules.MonthlyEquivalent(s.PlanPrice.Amount, s.PlanPrice.BillingInterval) : 0m,
-            usage = latest.TryGetValue(s.TenantId, out var u) ? new { u.ActiveStudents, u.StaffCount, storageMb = (u.StorageBytes + 1048575) / 1048576, u.SessionMinutesMonth, date = u.SnapshotDate } : null,
+            usage = latest.TryGetValue(s.TenantId, out var u) ? new { u.ActiveStudents, u.StaffCount, storageMb = (u.StorageBytes + 1048575) / 1048576, u.SessionMinutesMonth, u.SessionsMonth, u.RecordingsMonth, date = u.SnapshotDate } : null,
             openInvoices = open.TryGetValue(s.TenantId, out var o) ? o.Count : 0,
             openAmount = open.TryGetValue(s.TenantId, out var o2) ? o2.Total : 0m,
         }));

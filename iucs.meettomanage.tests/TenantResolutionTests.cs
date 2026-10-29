@@ -44,6 +44,7 @@ public sealed class TenantResolutionTests : IDisposable
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ConnectionStrings:TenantServer"] = "Host=db.internal;Username=app;Password=test-secret;Database=postgres",
+            ["Seed:MarketingEmail"] = "one@example.test",
         }).Build();
         _resolver = new TenantResolver(_master, _current, configuration);
     }
@@ -58,6 +59,14 @@ public sealed class TenantResolutionTests : IDisposable
         Assert.Equal(_first.DatabaseName, connection.Database);
         Assert.Equal("db.internal", connection.Host);
         Assert.False(connection.IncludeErrorDetail);
+    }
+
+    [Fact]
+    public async Task PublicMarketingSiteResolvesConfiguredMarketingAccountsTenant()
+    {
+        await _resolver.ResolveMarketingAsync();
+        Assert.Equal(_first.Id, _current.TenantId);
+        Assert.Equal(_first.Code, _current.TenantCode);
     }
 
     [Fact]

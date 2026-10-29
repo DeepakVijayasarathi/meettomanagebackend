@@ -15,6 +15,18 @@ namespace iucs.meettomanage.tests;
 
 public sealed class SaasNamingTests
 {
+    [Fact]
+    public void UsageLimitCatalogIncludesSessionsRecordingsAndStorage()
+    {
+        var keys = EntitlementKeys.Catalog.Select(x => x.Key).ToHashSet();
+        Assert.Contains(EntitlementKeys.MaxSessionsPerMonth, keys);
+        Assert.Contains(EntitlementKeys.MaxSessionMinutesPerMonth, keys);
+        Assert.Contains(EntitlementKeys.MaxRecordingsPerMonth, keys);
+        Assert.Contains(EntitlementKeys.RecordingRetentionDays, keys);
+        Assert.Contains(EntitlementKeys.MaxStorageMb, keys);
+        Assert.Equal(keys.Count, EntitlementKeys.Catalog.Count);
+    }
+
     [Theory]
     [InlineData("Id", "id")]
     [InlineData("TenantId", "tenant_id")]

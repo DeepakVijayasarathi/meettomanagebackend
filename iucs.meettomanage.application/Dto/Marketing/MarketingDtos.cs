@@ -235,6 +235,10 @@ namespace iucs.meettomanage.application.Dto.Marketing
 
         [MaxLength(100)]
         public string? UtmCampaign { get; set; }
+
+        /// <summary>Browser-locale ISO country/region code. This is self-reported, not IP geolocation.</summary>
+        [RegularExpression("^[A-Za-z]{2}$")]
+        public string? Country { get; set; }
     }
 
     public class NamedCountDto
@@ -271,12 +275,22 @@ namespace iucs.meettomanage.application.Dto.Marketing
 
         /// <summary>Demo requests per 100 unique visitors.</summary>
         public double ConversionRate { get; set; }
+
+        public double PagesPerVisitor { get; set; }
+
+        public double ChatStartRate { get; set; }
+
+        public double DemoPipelineConversionRate { get; set; }
     }
 
     /// <summary>The marketing console's analytics dashboard for the last <see cref="Days"/> days.</summary>
     public class MarketingDashboardDto
     {
         public int Days { get; set; }
+
+        public string StartDate { get; set; } = null!;
+
+        public string EndDate { get; set; } = null!;
 
         public MarketingTotalsDto Totals { get; set; } = new();
 
@@ -292,6 +306,10 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public List<NamedCountDto> Sources { get; set; } = new();
 
         public List<NamedCountDto> Campaigns { get; set; } = new();
+
+        public List<NamedCountDto> Mediums { get; set; } = new();
+
+        public List<NamedCountDto> Countries { get; set; } = new();
 
         public List<NamedCountDto> Devices { get; set; } = new();
 

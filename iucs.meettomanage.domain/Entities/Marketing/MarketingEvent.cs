@@ -40,5 +40,9 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         /// <summary>"mobile", "tablet" or "desktop", from the request's user agent.</summary>
         [MaxLength(16)]
         public string Device { get; set; } = "desktop";
+
+        /// <summary>ISO 3166-1 alpha-2 region reported by the browser locale; no IP address is stored.</summary>
+        [MaxLength(2)]
+        public string? Country { get; set; }
     }
 }

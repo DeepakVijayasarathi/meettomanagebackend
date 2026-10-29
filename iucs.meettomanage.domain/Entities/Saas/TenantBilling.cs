@@ -29,6 +29,8 @@ public class TenantUsageSnapshot
     public long StorageBytes { get; set; }
     /// <summary>Live-session minutes in the calendar month up to the snapshot date.</summary>
     public int SessionMinutesMonth { get; set; }
+    public int SessionsMonth { get; set; }
+    public int RecordingsMonth { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
 

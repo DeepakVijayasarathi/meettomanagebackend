@@ -49,6 +49,12 @@ public sealed class TenantRequestMiddleware(RequestDelegate next)
             else if (tenant.TenantCode != code) throw new ForbiddenException("The URL does not belong to this tenant.");
         }
 
+        // The platform marketing site deliberately lives at clean root URLs such as /blog,
+        // not a client portal URL. Bind its public data (and Marketing-role admin calls before
+        // controller construction) to the owner of the configured Marketing account.
+        if (tenant.TenantId is null && IsMarketingSiteApi(path))
+            await resolver.ResolveMarketingAsync(http.RequestAborted);
+
         if (tenant.TenantId is { } id)
         {
             if (AppAccessPolicy.IsDenied(http.Request.Headers, tenant.AppAccessGranted))
@@ -66,4 +72,11 @@ public sealed class TenantRequestMiddleware(RequestDelegate next)
         else
             throw new DomainValidationException("Open this page using the client's /t/{tenantCode} URL.");
     }
+
+    private static bool IsMarketingSiteApi(string path) =>
+        path.Equals("/api/settings/public", StringComparison.OrdinalIgnoreCase)
+        || path.Equals("/api/blog", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith("/api/blog/", StringComparison.OrdinalIgnoreCase)
+        || path.Equals("/api/marketing", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith("/api/marketing/", StringComparison.OrdinalIgnoreCase);
 }

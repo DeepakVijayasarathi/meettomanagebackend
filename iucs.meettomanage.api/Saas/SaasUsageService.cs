@@ -8,7 +8,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace iucs.meettomanage.api.Saas;
 
-public sealed record UsageFigures(int ActiveStudents, int StaffCount, long StorageBytes, int SessionMinutesMonth)
+public sealed record UsageFigures(int ActiveStudents, int StaffCount, long StorageBytes, int SessionMinutesMonth,
+    int SessionsMonth, int RecordingsMonth)
 {
     public long StorageMb => (StorageBytes + 1024 * 1024 - 1) / (1024 * 1024);
 
@@ -19,6 +20,8 @@ public sealed record UsageFigures(int ActiveStudents, int StaffCount, long Stora
         EntitlementKeys.MaxStaff => StaffCount,
         EntitlementKeys.MaxStorageMb => StorageMb,
         EntitlementKeys.MaxSessionMinutesPerMonth => SessionMinutesMonth,
+        EntitlementKeys.MaxSessionsPerMonth => SessionsMonth,
+        EntitlementKeys.MaxRecordingsPerMonth => RecordingsMonth,
         _ => null,
     };
 }
@@ -29,7 +32,9 @@ public sealed class SaasUsageService(IDbContextFactory<MasterDbContext> factory,
     private static readonly UserRole[] StaffRoles = [UserRole.Admin, UserRole.SubAdmin, UserRole.AdmissionTeam, UserRole.Teacher];
 
     public static readonly string[] MeteredKeys =
-        [EntitlementKeys.MaxStudents, EntitlementKeys.MaxStaff, EntitlementKeys.MaxStorageMb, EntitlementKeys.MaxSessionMinutesPerMonth];
+        [EntitlementKeys.MaxStudents, EntitlementKeys.MaxStaff, EntitlementKeys.MaxStorageMb,
+            EntitlementKeys.MaxSessionMinutesPerMonth, EntitlementKeys.MaxSessionsPerMonth,
+            EntitlementKeys.MaxRecordingsPerMonth];
 
     /// <summary>Runs inside an already-bound tenant scope (a request or <see cref="GetLiveAsync"/>).</summary>
     public static async Task<UsageFigures> ComputeAsync(MeetToManageDbContext db, DateTime now, CancellationToken ct)
@@ -44,7 +49,14 @@ public sealed class SaasUsageService(IDbContextFactory<MasterDbContext> factory,
             .Select(x => new { Start = x.ActualStartAtUtc ?? x.ScheduledStartAtUtc, End = x.ActualEndAtUtc ?? x.ScheduledEndAtUtc })
             .ToListAsync(ct);
         var minutes = (int)sessions.Sum(x => Math.Max(0, (x.End - x.Start).TotalMinutes));
-        return new UsageFigures(students, staff, storage, minutes);
+        var nextMonth = monthStart.AddMonths(1);
+        var sessionCount = await db.ClassSessions.CountAsync(x => x.ScheduledStartAtUtc >= monthStart
+            && x.ScheduledStartAtUtc < nextMonth && !x.IsDeleted, ct);
+        var recordingCount = await db.SessionRecordings.CountAsync(x => x.CreatedAtUtc >= monthStart
+            && x.CreatedAtUtc < nextMonth && !x.IsDeleted, ct)
+            + await db.PersonalRoomRecordings.CountAsync(x => x.CreatedAtUtc >= monthStart
+                && x.CreatedAtUtc < nextMonth && !x.IsDeleted, ct);
+        return new UsageFigures(students, staff, storage, minutes, sessionCount, recordingCount);
     }
 
     public async Task<UsageFigures> GetLiveAsync(Guid tenantId, CancellationToken ct)
@@ -79,6 +91,7 @@ public sealed class SaasUsageService(IDbContextFactory<MasterDbContext> factory,
                 {
                     TenantId = tenant.Id, SnapshotDate = today, ActiveStudents = figures.ActiveStudents, StaffCount = figures.StaffCount,
                     StorageBytes = figures.StorageBytes, SessionMinutesMonth = figures.SessionMinutesMonth,
+                    SessionsMonth = figures.SessionsMonth, RecordingsMonth = figures.RecordingsMonth,
                 });
                 await master.SaveChangesAsync(ct);
                 results.Add((tenant.Id, figures));

@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using iucs.meettomanage.application.Dto.Marketing;
 using iucs.meettomanage.domain.Entities.Marketing;
+using iucs.meettomanage.domain.Enums;
 using iucs.meettomanage.domain.Repository;
 using Microsoft.EntityFrameworkCore;
 
@@ -42,6 +43,7 @@ namespace iucs.meettomanage.application.Services
                 Medium = Clean(request.UtmMedium),
                 Campaign = Clean(request.UtmCampaign),
                 Device = DeviceOf(userAgent),
+                Country = CleanCountry(request.Country),
             }, cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
@@ -64,7 +66,7 @@ namespace iucs.meettomanage.application.Services
 
             var events = await _unitOfWork.Repository<MarketingEvent>().Query()
                 .Where(e => e.CreatedAtUtc >= previousStartUtc)
-                .Select(e => new { e.CreatedAtUtc, e.Type, e.Path, e.VisitorId, e.Source, e.Campaign, e.Device })
+                .Select(e => new { e.CreatedAtUtc, e.Type, e.Path, e.VisitorId, e.Source, e.Medium, e.Campaign, e.Device, e.Country })
                 .ToListAsync(cancellationToken);
             var requests = await _unitOfWork.Repository<PlatformDemoRequest>().Query()
                 .Where(r => r.CreatedAtUtc >= previousStartUtc)
@@ -78,19 +80,23 @@ namespace iucs.meettomanage.application.Services
 
             MarketingTotalsDto Totals(
                 IEnumerable<(string Type, string VisitorId)> evts,
-                IEnumerable<string?> requestMessages)
+                IEnumerable<(string? Message, StoreInquiryStatus Status)> demoRequests)
             {
                 var list = evts.ToList();
-                var messages = requestMessages.ToList();
+                var requestsList = demoRequests.ToList();
                 var visitors = list.Where(e => e.Type == MarketingEvent.PageView).Select(e => e.VisitorId).Distinct().Count();
                 return new MarketingTotalsDto
                 {
                     PageViews = list.Count(e => e.Type == MarketingEvent.PageView),
                     Visitors = visitors,
                     ChatsStarted = list.Count(e => e.Type == MarketingEvent.ChatStarted),
-                    DemoRequests = messages.Count,
-                    ChatBookings = messages.Count(m => m != null && m.StartsWith(ChatBookingMarker)),
-                    ConversionRate = visitors == 0 ? 0 : Math.Round(messages.Count * 100.0 / visitors, 1),
+                    DemoRequests = requestsList.Count,
+                    ChatBookings = requestsList.Count(r => r.Message != null && r.Message.StartsWith(ChatBookingMarker)),
+                    ConversionRate = visitors == 0 ? 0 : Math.Round(requestsList.Count * 100.0 / visitors, 1),
+                    PagesPerVisitor = visitors == 0 ? 0 : Math.Round(list.Count(e => e.Type == MarketingEvent.PageView) * 1.0 / visitors, 1),
+                    ChatStartRate = visitors == 0 ? 0 : Math.Round(list.Count(e => e.Type == MarketingEvent.ChatStarted) * 100.0 / visitors, 1),
+                    DemoPipelineConversionRate = requestsList.Count == 0 ? 0 : Math.Round(
+                        requestsList.Count(r => r.Status == StoreInquiryStatus.Converted) * 100.0 / requestsList.Count, 1),
                 };
             }
 
@@ -126,13 +132,17 @@ namespace iucs.meettomanage.application.Services
             return new MarketingDashboardDto
             {
                 Days = days,
-                Totals = Totals(current.Select(e => (e.Type, e.VisitorId)), currentRequests.Select(r => r.Message)),
-                Previous = Totals(previous.Select(e => (e.Type, e.VisitorId)), previousRequests.Select(r => r.Message)),
+                StartDate = startLocal.ToString("yyyy-MM-dd"),
+                EndDate = todayLocal.ToString("yyyy-MM-dd"),
+                Totals = Totals(current.Select(e => (e.Type, e.VisitorId)), currentRequests.Select(r => (r.Message, r.Status))),
+                Previous = Totals(previous.Select(e => (e.Type, e.VisitorId)), previousRequests.Select(r => (r.Message, r.Status))),
                 Daily = daily,
                 TopPages = Top(views.Select(e => e.Path), 10),
                 TopBlogPosts = Top(views.Where(e => e.Path.StartsWith("/blog/")).Select(e => e.Path), 10),
                 Sources = Top(firstTouch.Select(e => SourceLabel(e.Source)), 10),
                 Campaigns = Top(firstTouch.Where(e => e.Campaign != null).Select(e => e.Campaign!), 10),
+                Mediums = Top(firstTouch.Where(e => e.Medium != null).Select(e => e.Medium!), 10),
+                Countries = Top(firstTouch.Where(e => e.Country != null).Select(e => e.Country!), 20),
                 Devices = Top(firstTouch.Select(e => e.Device), 3),
                 DemoRequestsByStatus = Top(currentRequests.Select(r => r.Status.ToString()), 10),
             };
@@ -170,6 +180,12 @@ namespace iucs.meettomanage.application.Services
         {
             var cleaned = Clean(host);
             return cleaned is null ? null : cleaned.StartsWith("www.") ? cleaned[4..] : cleaned;
+        }
+
+        private static string? CleanCountry(string? country)
+        {
+            var value = country?.Trim().ToUpperInvariant();
+            return value is { Length: 2 } && value.All(char.IsAsciiLetter) ? value : null;
         }
 
         private static string DeviceOf(string userAgent)

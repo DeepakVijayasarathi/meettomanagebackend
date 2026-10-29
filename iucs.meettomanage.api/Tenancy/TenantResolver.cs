@@ -28,6 +28,19 @@ public sealed class TenantResolver(MasterDbContext master, TenantContext current
         BindActive(tenant);
     }
 
+    /// <summary>
+    /// Public pages on the platform hostname have no /t/{code} segment. Their content belongs
+    /// to the same tenant as the configured Marketing account, so resolve that owner through
+    /// the server-side login directory instead of exposing or hard-coding its tenant code.
+    /// </summary>
+    public async Task ResolveMarketingAsync(CancellationToken cancellationToken = default)
+    {
+        var email = configuration["Seed:MarketingEmail"]?.Trim();
+        if (string.IsNullOrWhiteSpace(email))
+            throw new InvalidOperationException("Seed:MarketingEmail is required for the public marketing site.");
+        await ResolveLoginAsync(email, cancellationToken);
+    }
+
     public async Task ResolveTokenAsync(Guid tenantId, string tenantCode, CancellationToken cancellationToken = default)
     {
         var tenant = await master.Tenants.AsNoTracking()

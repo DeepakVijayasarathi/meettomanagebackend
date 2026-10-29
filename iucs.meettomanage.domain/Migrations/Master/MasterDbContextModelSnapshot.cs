@@ -868,9 +868,17 @@ namespace iucs.meettomanage.domain.Migrations.Master
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at_utc");
 
+                    b.Property<int>("RecordingsMonth")
+                        .HasColumnType("integer")
+                        .HasColumnName("recordings_month");
+
                     b.Property<int>("SessionMinutesMonth")
                         .HasColumnType("integer")
                         .HasColumnName("session_minutes_month");
+
+                    b.Property<int>("SessionsMonth")
+                        .HasColumnType("integer")
+                        .HasColumnName("sessions_month");
 
                     b.Property<DateOnly>("SnapshotDate")
                         .HasColumnType("date")

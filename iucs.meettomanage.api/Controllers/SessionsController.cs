@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using iucs.meettomanage.api.Auth;
+using iucs.meettomanage.api.Saas;
 using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Academics;
 using iucs.meettomanage.application.Dto.Sessions;
@@ -356,6 +357,7 @@ namespace iucs.meettomanage.api.Controllers
         /// <summary>Registers a finished recording; parent visibility expires after 15 days.</summary>
         [HttpPost("{id:guid}/recordings")]
         [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.Teacher)}")]
+        [RequiresFeature(EntitlementKeys.Recordings)]
         public async Task<ActionResult<SessionRecordingDto>> AddRecording(
             Guid id,
             RegisterRecordingRequest request,
@@ -377,6 +379,7 @@ namespace iucs.meettomanage.api.Controllers
         /// </summary>
         [HttpPost("recordings/finalize")]
         [AllowAnonymous]
+        [RequiresFeature(EntitlementKeys.Recordings)]
         public async Task<ActionResult<SessionRecordingDto>> FinalizeJibriRecording(
             FinalizeJibriRecordingRequest request,
             CancellationToken cancellationToken)
