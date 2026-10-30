@@ -180,6 +180,13 @@ namespace iucs.meettomanage.api.Services
             return _fallback is null ? null : await _fallback.OpenReadAsync(relativePath, cancellationToken);
         }
 
+        public async Task<long?> GetSizeAsync(string relativePath, CancellationToken cancellationToken = default)
+        {
+            var path = TryPathFor(relativePath);
+            if (path is not null && File.Exists(path)) return new FileInfo(path).Length;
+            return _fallback is null ? null : await _fallback.GetSizeAsync(relativePath, cancellationToken);
+        }
+
         /// <summary>The file's absolute path when it exists, for range-capable serving.</summary>
         public string? ExistingFilePath(string key)
         {

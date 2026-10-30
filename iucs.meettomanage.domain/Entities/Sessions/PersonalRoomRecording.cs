@@ -21,5 +21,7 @@ namespace iucs.meettomanage.domain.Entities.Sessions
         public string StorageUrl { get; set; } = null!;
 
         public int? DurationSeconds { get; set; }
+
+        public long? FileSizeBytes { get; set; }
     }
 }

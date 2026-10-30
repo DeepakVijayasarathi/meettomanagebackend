@@ -25,6 +25,12 @@ namespace iucs.meettomanage.application.Dto.Marketing
 
         [MaxLength(1000)]
         public string? Message { get; set; }
+
+        [MaxLength(100)] public string? VisitorId { get; set; }
+        [MaxLength(100)] public string? Source { get; set; }
+        [MaxLength(100)] public string? Medium { get; set; }
+        [MaxLength(100)] public string? Campaign { get; set; }
+        [MaxLength(200)] public string? LandingPath { get; set; }
     }
 
     public class PlatformDemoRequestDto
@@ -44,12 +50,32 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public StoreInquiryStatus Status { get; set; }
 
         public DateTime CreatedAtUtc { get; set; }
+
+        public string? Source { get; set; }
+        public string? Medium { get; set; }
+        public string? Campaign { get; set; }
+        public string? LandingPath { get; set; }
+        public string? AssignedTo { get; set; }
+        public DateTime? NextFollowUpAtUtc { get; set; }
+        public DateTime? LastContactedAtUtc { get; set; }
+        public string? InternalNotes { get; set; }
+        public int LeadScore { get; set; }
+        public string LeadTemperature { get; set; } = null!;
+        public bool IsDuplicate { get; set; }
     }
 
     public class UpdatePlatformDemoRequestStatusRequest
     {
         [Required]
         public StoreInquiryStatus Status { get; set; }
+    }
+
+    public class UpdatePlatformDemoRequestRequest
+    {
+        public StoreInquiryStatus? Status { get; set; }
+        [MaxLength(150)] public string? AssignedTo { get; set; }
+        public DateTime? NextFollowUpAtUtc { get; set; }
+        [MaxLength(1000)] public string? InternalNotes { get; set; }
     }
 
     // --- Blog ---
@@ -248,6 +274,14 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int Count { get; set; }
     }
 
+    public class MarketingPerformanceDto
+    {
+        public string Name { get; set; } = null!;
+        public int Leads { get; set; }
+        public int Converted { get; set; }
+        public double ConversionRate { get; set; }
+    }
+
     public class MarketingDailyPointDto
     {
         /// <summary>Local calendar day (yyyy-MM-dd) in the caller's time zone offset.</summary>
@@ -258,6 +292,12 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int Visitors { get; set; }
 
         public int DemoRequests { get; set; }
+
+        public int ChatsStarted { get; set; }
+
+        public double ConversionRate { get; set; }
+
+        public double PagesPerVisitor { get; set; }
     }
 
     public class MarketingTotalsDto
@@ -314,5 +354,17 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public List<NamedCountDto> Devices { get; set; } = new();
 
         public List<NamedCountDto> DemoRequestsByStatus { get; set; } = new();
+        public List<MarketingPerformanceDto> SourceQuality { get; set; } = new();
+        public List<MarketingPerformanceDto> CampaignPerformance { get; set; } = new();
+        public List<MarketingPerformanceDto> LandingPagePerformance { get; set; } = new();
+    }
+
+    public class MarketingAiInsightsDto
+    {
+        public string Summary { get; set; } = null!;
+        public List<string> Observations { get; set; } = new();
+        public List<string> NextActions { get; set; } = new();
+        public bool AiPowered { get; set; }
+        public DateTime GeneratedAtUtc { get; set; }
     }
 }

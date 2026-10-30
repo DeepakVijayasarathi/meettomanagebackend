@@ -9,6 +9,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace iucs.meettomanage.tests;
@@ -57,7 +59,7 @@ public sealed class SaasNamingTests
         }
         Assert.Contains("tenant_subscription", checkedTables);
         Assert.Contains("plan_price", checkedTables);
-        Assert.Equal(14, checkedTables.Count);
+        Assert.Equal(15, checkedTables.Count);
     }
 
     [Fact]
@@ -243,6 +245,50 @@ public sealed class SaasRulesTests
         Assert.Equal("warning", SaasRules.Banner(Sub(SaasSubscriptionStatus.Trialing, s => s.TrialEndsAtUtc = Now.AddDays(2)), Now)!.Value.Level);
         Assert.Equal("info", SaasRules.Banner(Sub(SaasSubscriptionStatus.Trialing, s => s.TrialEndsAtUtc = Now.AddDays(10)), Now)!.Value.Level);
     }
+}
+
+public sealed class SaasSeederTests : IDisposable
+{
+    private readonly SqliteConnection _connection = new("Data Source=:memory:");
+    private readonly TestFactory _factory;
+
+    private sealed class TestFactory(DbContextOptions<MasterDbContext> options) : IDbContextFactory<MasterDbContext>
+    {
+        public MasterDbContext CreateDbContext() => new(options);
+    }
+
+    public SaasSeederTests()
+    {
+        _connection.Open();
+        _factory = new TestFactory(new DbContextOptionsBuilder<MasterDbContext>().UseSqlite(_connection).Options);
+        using var db = _factory.CreateDbContext();
+        db.Database.EnsureCreated();
+    }
+
+    [Fact]
+    public async Task ExistingPlansReceiveNewUsageLimitsWithoutOverwritingOperatorValues()
+    {
+        var options = Options.Create(new SaasOptions());
+        await SaasSeeder.SeedAsync(_factory, options, NullLogger.Instance);
+
+        await using (var db = _factory.CreateDbContext())
+        {
+            var starter = await db.Plans.Include(x => x.Entitlements).SingleAsync(x => x.Code == "starter");
+            Assert.Equal(1_000, starter.Entitlements.Single(x => x.Key == EntitlementKeys.MaxSessionsPerMonth).Value);
+            Assert.Equal(1_000, starter.Entitlements.Single(x => x.Key == EntitlementKeys.MaxRecordingsPerMonth).Value);
+            starter.Entitlements.Single(x => x.Key == EntitlementKeys.MaxSessionsPerMonth).Value = 321;
+            await db.SaveChangesAsync();
+        }
+
+        await SaasSeeder.SeedAsync(_factory, options, NullLogger.Instance);
+
+        await using var check = _factory.CreateDbContext();
+        var saved = await check.PlanEntitlements.SingleAsync(x => x.Plan.Code == "starter"
+            && x.Key == EntitlementKeys.MaxSessionsPerMonth);
+        Assert.Equal(321, saved.Value);
+    }
+
+    public void Dispose() => _connection.Dispose();
 }
 
 public sealed class SaasEntitlementServiceTests : IDisposable

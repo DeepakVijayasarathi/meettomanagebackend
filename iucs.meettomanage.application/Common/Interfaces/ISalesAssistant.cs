@@ -13,5 +13,6 @@ namespace iucs.meettomanage.application.Common.Interfaces
     {
         Task<SalesChatResponse> ReplyAsync(IReadOnlyList<SalesChatTurn> conversation, CancellationToken cancellationToken = default);
         Task<IReadOnlyList<string>> TranslateAsync(IReadOnlyList<string> texts, string targetLanguage, CancellationToken cancellationToken = default);
+        Task<MarketingAiInsightsDto> AnalyzeMarketingAsync(MarketingDashboardDto dashboard, CancellationToken cancellationToken = default);
     }
 }

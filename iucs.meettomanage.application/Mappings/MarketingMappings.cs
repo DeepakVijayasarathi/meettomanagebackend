@@ -17,7 +17,29 @@ namespace iucs.meettomanage.application.Mappings
                 Message = request.Message,
                 Status = request.Status,
                 CreatedAtUtc = request.CreatedAtUtc,
+                Source = request.Source,
+                Medium = request.Medium,
+                Campaign = request.Campaign,
+                LandingPath = request.LandingPath,
+                AssignedTo = request.AssignedTo,
+                NextFollowUpAtUtc = request.NextFollowUpAtUtc,
+                LastContactedAtUtc = request.LastContactedAtUtc,
+                InternalNotes = request.InternalNotes,
+                LeadScore = LeadScore(request),
+                LeadTemperature = LeadScore(request) >= 70 ? "Hot" : LeadScore(request) >= 40 ? "Warm" : "Cold",
             };
+        }
+
+        private static int LeadScore(PlatformDemoRequest request)
+        {
+            var score = 20;
+            if (!string.IsNullOrWhiteSpace(request.Message)) score += 15;
+            if (request.Message?.StartsWith("Booked by the website chat assistant.") == true) score += 20;
+            if (!string.IsNullOrWhiteSpace(request.Campaign)) score += 10;
+            if (request.Status == iucs.meettomanage.domain.Enums.StoreInquiryStatus.Contacted) score += 15;
+            if (request.Status == iucs.meettomanage.domain.Enums.StoreInquiryStatus.Converted) score = 100;
+            if (request.Status == iucs.meettomanage.domain.Enums.StoreInquiryStatus.Closed) score = 0;
+            return Math.Clamp(score, 0, 100);
         }
 
         public static BlogPostDto ToDto(this BlogPost post)

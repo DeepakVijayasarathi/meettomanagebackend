@@ -57,6 +57,22 @@ namespace iucs.meettomanage.api.Services
             return File.OpenRead(localPath);
         }
 
+        public async Task<long?> GetSizeAsync(string relativePath, CancellationToken cancellationToken = default)
+        {
+            if (!UseS3) return await _local.GetSizeAsync(relativePath, cancellationToken);
+            try
+            {
+                var size = await _s3!.GetSizeAsync(relativePath, cancellationToken);
+                if (size is not null) return size;
+            }
+            catch (ExternalServiceException) when (_local.ExistingFilePath(relativePath) is not null)
+            {
+                // A local copy remains authoritative while object storage is temporarily unavailable.
+            }
+            var localPath = _local.ExistingFilePath(relativePath);
+            return localPath is null ? null : new FileInfo(localPath).Length;
+        }
+
         // ---- IDirectUploadStorage ----
 
         public Task<DirectUploadSession> StartMultipartAsync(string originalFileName, string? contentType, CancellationToken cancellationToken = default) =>

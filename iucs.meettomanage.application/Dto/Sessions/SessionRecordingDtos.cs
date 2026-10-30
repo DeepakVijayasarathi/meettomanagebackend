@@ -13,6 +13,8 @@ namespace iucs.meettomanage.application.Dto.Sessions
 
         public int? DurationSeconds { get; set; }
 
+        public long? FileSizeBytes { get; set; }
+
         public DateTime? ExpiresAtUtc { get; set; }
 
         public DateTime CreatedAtUtc { get; set; }
@@ -30,6 +32,8 @@ namespace iucs.meettomanage.application.Dto.Sessions
         public string StorageUrl { get; set; } = null!;
 
         public int? DurationSeconds { get; set; }
+
+        public long? FileSizeBytes { get; set; }
 
         public DateTime? ExpiresAtUtc { get; set; }
 
@@ -60,6 +64,8 @@ namespace iucs.meettomanage.application.Dto.Sessions
 
         public int? DurationSeconds { get; set; }
 
+        public long? FileSizeBytes { get; set; }
+
         public DateTime CreatedAtUtc { get; set; }
     }
 
@@ -71,6 +77,9 @@ namespace iucs.meettomanage.application.Dto.Sessions
         public string StorageUrl { get; set; } = null!;
 
         public int? DurationSeconds { get; set; }
+
+        [Range(0, long.MaxValue)]
+        public long? FileSizeBytes { get; set; }
     }
 
     /// <summary>
@@ -90,6 +99,9 @@ namespace iucs.meettomanage.application.Dto.Sessions
         public string StorageUrl { get; set; } = null!;
 
         public int? DurationSeconds { get; set; }
+
+        [Range(0, long.MaxValue)]
+        public long? FileSizeBytes { get; set; }
     }
 
     public class EngagementEntryDto

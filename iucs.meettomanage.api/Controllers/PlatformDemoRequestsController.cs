@@ -53,6 +53,18 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _analytics.GetDashboardAsync(days, tzOffsetMinutes, cancellationToken));
         }
 
+        /// <summary>Hetzner AI analysis of the same anonymous, aggregate marketing dashboard data.</summary>
+        [HttpGet("analytics/insights")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingAiInsightsDto>> AnalyticsInsights(
+            [FromQuery] int days = 30,
+            [FromQuery] int tzOffsetMinutes = 0,
+            CancellationToken cancellationToken = default)
+        {
+            var dashboard = await _analytics.GetDashboardAsync(days, tzOffsetMinutes, cancellationToken);
+            return Ok(await _salesAssistant.AnalyzeMarketingAsync(dashboard, cancellationToken));
+        }
+
         [HttpPost("demo-requests")]
         [EnableRateLimiting("store-inquiry")]
         public async Task<ActionResult<PlatformDemoRequestDto>> RequestDemo(
@@ -113,5 +125,18 @@ namespace iucs.meettomanage.api.Controllers
         {
             return Ok(await _platformDemoRequestService.UpdateStatusAsync(id, request, cancellationToken));
         }
+
+        [HttpDelete("{id:guid}")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
+        {
+            await _platformDemoRequestService.DeleteAsync(id, cancellationToken);
+            return NoContent();
+        }
+
+        [HttpPut("{id:guid}")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<PlatformDemoRequestDto>> Update(Guid id, UpdatePlatformDemoRequestRequest request, CancellationToken cancellationToken) =>
+            Ok(await _platformDemoRequestService.UpdateAsync(id, request, cancellationToken));
     }
 }

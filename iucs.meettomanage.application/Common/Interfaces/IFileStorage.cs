@@ -22,5 +22,9 @@ namespace iucs.meettomanage.application.Common.Interfaces
         /// caller needs to work with either. Callers must dispose the returned stream.
         /// </summary>
         Task<Stream?> OpenReadAsync(string relativePath, CancellationToken cancellationToken = default);
+
+        /// <summary>Returns the stored object's size without downloading it, or null when it is missing/unknown.</summary>
+        Task<long?> GetSizeAsync(string relativePath, CancellationToken cancellationToken = default) =>
+            Task.FromResult<long?>(null);
     }
 }

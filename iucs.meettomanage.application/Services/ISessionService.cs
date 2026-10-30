@@ -142,7 +142,8 @@ namespace iucs.meettomanage.application.Services
             string? bearerToken,
             string storageUrl,
             int? durationSeconds,
-            CancellationToken cancellationToken = default);
+            CancellationToken cancellationToken = default,
+            long? fileSizeBytes = null);
 
         /// <summary>Recordings made in this user's own Personal Meeting Room, newest first.</summary>
         Task<IReadOnlyList<PersonalRoomRecordingDto>> ListPersonalRoomRecordingsAsync(

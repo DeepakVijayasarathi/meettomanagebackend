@@ -289,6 +289,63 @@ namespace iucs.meettomanage.api.Services
             throw new ExternalServiceException("Translation couldn't be completed right now.");
         }
 
+        public async Task<MarketingAiInsightsDto> AnalyzeMarketingAsync(MarketingDashboardDto dashboard, CancellationToken cancellationToken = default)
+        {
+            var fallback = BuildMarketingFallback(dashboard);
+            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            var evidence = JsonSerializer.Serialize(new { dashboard.Days, dashboard.StartDate, dashboard.EndDate, dashboard.Totals, dashboard.Previous, dashboard.Daily, dashboard.TopPages, dashboard.TopBlogPosts, dashboard.Sources, dashboard.Campaigns, dashboard.Mediums, dashboard.Countries, dashboard.Devices, dashboard.DemoRequestsByStatus });
+            var messages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] = "You are a growth analyst for an academy-management SaaS. Use only supplied aggregate evidence. Never invent causes, revenue, demographics, or attribution. Return strict JSON: summary string, observations array (2-4), nextActions array (3-5). Prioritize specific actions and mention uncertainty for small samples. No markdown." },
+                new JsonObject { ["role"] = "user", ["content"] = evidence },
+            };
+            try
+            {
+                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
+                {
+                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.2, ["max_tokens"] = 1200, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
+                    var (status, body) = await SendAsync(model, payload, cancellationToken);
+                    if (status != 200) continue;
+                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+                    var parsed = string.IsNullOrWhiteSpace(content) ? null : JsonNode.Parse(content) as JsonObject;
+                    var summary = parsed?["summary"]?.GetValue<string>()?.Trim();
+                    var observations = ReadStringArray(parsed?["observations"]);
+                    var actions = ReadStringArray(parsed?["nextActions"] ?? parsed?["next_actions"]);
+                    if (!string.IsNullOrWhiteSpace(summary) && observations.Count > 0 && actions.Count > 0)
+                        return new MarketingAiInsightsDto { Summary = summary[..Math.Min(summary.Length, 800)], Observations = observations.Take(4).ToList(), NextActions = actions.Take(5).ToList(), AiPowered = true, GeneratedAtUtc = DateTime.UtcNow };
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException)
+            {
+                _logger.LogWarning(ex, "Hetzner marketing analysis unavailable; using measured-data fallback.");
+            }
+            return fallback;
+        }
+
+        private static List<string> ReadStringArray(JsonNode? node)
+        {
+            if (node is not JsonArray values) return [];
+            var result = new List<string>();
+            foreach (var value in values)
+            {
+                var text = value?.GetValue<string>()?.Trim();
+                if (!string.IsNullOrWhiteSpace(text)) result.Add(text[..Math.Min(text.Length, 500)]);
+            }
+            return result;
+        }
+
+        private static MarketingAiInsightsDto BuildMarketingFallback(MarketingDashboardDto dashboard)
+        {
+            var t = dashboard.Totals;
+            var actions = new List<string>();
+            if (t.Visitors < 50) actions.Add("Increase qualified traffic with UTM-tagged links before drawing strong conversion conclusions.");
+            if (t.ChatStartRate < 10) actions.Add("Test a clearer chat call-to-action on the highest-traffic page and compare the next equal period.");
+            if (t.DemoRequests > 0 && t.DemoPipelineConversionRate == 0) actions.Add("Follow up every open demo request and record its status so the sales conversion gap is measurable.");
+            if (dashboard.TopPages.FirstOrDefault() is { } page) actions.Add($"Review the demo CTA and mobile experience on {page.Name}, the highest-traffic page.");
+            if (actions.Count < 3) actions.Add("Repeat the strongest source and content combination, changing one variable at a time.");
+            return new MarketingAiInsightsDto { Summary = $"{t.Visitors} visitors produced {t.DemoRequests} demo requests ({t.ConversionRate:0.#}%) during this {dashboard.Days}-day period.", Observations = [$"Visitors viewed {t.PagesPerVisitor:0.#} pages each on average.", $"{t.ChatStartRate:0.#}% started chat; {t.ChatBookings} demo requests came through chat."], NextActions = actions, AiPowered = false, GeneratedAtUtc = DateTime.UtcNow };
+        }
+
         /// <summary>
         /// Runs the model's book_demo call against the platform-demo queue. Validates what the model
         /// passed (it relays visitor-typed text) and reports problems back to the model as data, so it

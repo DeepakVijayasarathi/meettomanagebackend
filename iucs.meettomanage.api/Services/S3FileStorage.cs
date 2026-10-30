@@ -376,5 +376,23 @@ namespace iucs.meettomanage.api.Services
                     "Check the Storage:S3 configuration (endpoint, credentials, bucket).");
             }
         }
+
+        public async Task<long?> GetSizeAsync(string relativePath, CancellationToken cancellationToken = default)
+        {
+            RequireOwnedKey(relativePath);
+            try
+            {
+                var response = await _client.GetObjectMetadataAsync(_bucket, relativePath, cancellationToken);
+                return response.ContentLength;
+            }
+            catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                return null;
+            }
+            catch (AmazonServiceException ex)
+            {
+                throw new ExternalServiceException($"Could not inspect object storage ({ex.StatusCode}): {ex.Message}.");
+            }
+        }
     }
 }

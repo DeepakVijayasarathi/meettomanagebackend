@@ -21,6 +21,8 @@ namespace iucs.meettomanage.domain.Entities.Sessions
 
         public int? DurationSeconds { get; set; }
 
+        public long? FileSizeBytes { get; set; }
+
         public DateTime? ExpiresAtUtc { get; set; }
     }
 }

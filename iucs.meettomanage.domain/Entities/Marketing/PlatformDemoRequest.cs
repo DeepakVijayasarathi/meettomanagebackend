@@ -28,5 +28,15 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         public string? Message { get; set; }
 
         public StoreInquiryStatus Status { get; set; } = StoreInquiryStatus.New;
+
+        [MaxLength(100)] public string? VisitorId { get; set; }
+        [MaxLength(100)] public string? Source { get; set; }
+        [MaxLength(100)] public string? Medium { get; set; }
+        [MaxLength(100)] public string? Campaign { get; set; }
+        [MaxLength(200)] public string? LandingPath { get; set; }
+        [MaxLength(150)] public string? AssignedTo { get; set; }
+        public DateTime? NextFollowUpAtUtc { get; set; }
+        public DateTime? LastContactedAtUtc { get; set; }
+        [MaxLength(1000)] public string? InternalNotes { get; set; }
     }
 }

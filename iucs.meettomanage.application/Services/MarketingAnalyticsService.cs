@@ -70,7 +70,7 @@ namespace iucs.meettomanage.application.Services
                 .ToListAsync(cancellationToken);
             var requests = await _unitOfWork.Repository<PlatformDemoRequest>().Query()
                 .Where(r => r.CreatedAtUtc >= previousStartUtc)
-                .Select(r => new { r.CreatedAtUtc, r.Message, r.Status })
+                .Select(r => new { r.CreatedAtUtc, r.Message, r.Status, r.Source, r.Campaign, r.LandingPath })
                 .ToListAsync(cancellationToken);
 
             var current = events.Where(e => e.CreatedAtUtc >= startUtc).ToList();
@@ -111,8 +111,15 @@ namespace iucs.meettomanage.application.Services
                     PageViews = views.Count(e => LocalDay(e.CreatedAtUtc) == day),
                     Visitors = views.Where(e => LocalDay(e.CreatedAtUtc) == day).Select(e => e.VisitorId).Distinct().Count(),
                     DemoRequests = currentRequests.Count(r => LocalDay(r.CreatedAtUtc) == day),
+                    ChatsStarted = current.Count(e => e.Type == MarketingEvent.ChatStarted && LocalDay(e.CreatedAtUtc) == day),
                 })
                 .ToList();
+
+            foreach (var point in daily)
+            {
+                point.ConversionRate = point.Visitors == 0 ? 0 : Math.Round(point.DemoRequests * 100.0 / point.Visitors, 1);
+                point.PagesPerVisitor = point.Visitors == 0 ? 0 : Math.Round(point.PageViews * 1.0 / point.Visitors, 1);
+            }
 
             static List<NamedCountDto> Top(IEnumerable<string> names, int take) =>
                 names.GroupBy(n => n)
@@ -120,6 +127,13 @@ namespace iucs.meettomanage.application.Services
                     .OrderByDescending(n => n.Count).ThenBy(n => n.Name)
                     .Take(take)
                     .ToList();
+
+            static List<MarketingPerformanceDto> Performance(IEnumerable<(string Name, StoreInquiryStatus Status)> rows) =>
+                rows.GroupBy(x => x.Name).Select(g => new MarketingPerformanceDto
+                {
+                    Name = g.Key, Leads = g.Count(), Converted = g.Count(x => x.Status == StoreInquiryStatus.Converted),
+                    ConversionRate = Math.Round(g.Count(x => x.Status == StoreInquiryStatus.Converted) * 100.0 / g.Count(), 1),
+                }).OrderByDescending(x => x.Converted).ThenByDescending(x => x.Leads).Take(10).ToList();
 
             // Sources and devices count visitors (first-touch per visitor in the window), not raw
             // page views, so one visitor clicking around doesn't inflate a channel.
@@ -145,6 +159,9 @@ namespace iucs.meettomanage.application.Services
                 Countries = Top(firstTouch.Where(e => e.Country != null).Select(e => e.Country!), 20),
                 Devices = Top(firstTouch.Select(e => e.Device), 3),
                 DemoRequestsByStatus = Top(currentRequests.Select(r => r.Status.ToString()), 10),
+                SourceQuality = Performance(currentRequests.Select(r => (r.Source ?? "Direct", r.Status))),
+                CampaignPerformance = Performance(currentRequests.Where(r => r.Campaign != null).Select(r => (r.Campaign!, r.Status))),
+                LandingPagePerformance = Performance(currentRequests.Select(r => (r.LandingPath ?? "Unknown", r.Status))),
             };
         }
 

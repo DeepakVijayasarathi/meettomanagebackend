@@ -37,9 +37,12 @@ public sealed class EntitlementInterceptor(IEntitlementService entitlements, Ten
             && x.Entity.Status == SessionStatus.InProgress).Select(x => x.Entity).ToList();
         var newSessionRecordingEntries = db.ChangeTracker.Entries<SessionRecording>().Where(x => x.State == EntityState.Added).ToList();
         var newSessionRecordings = newSessionRecordingEntries.Count;
-        var newPersonalRecordings = db.ChangeTracker.Entries<PersonalRoomRecording>().Count(x => x.State == EntityState.Added);
+        var newPersonalRecordingEntries = db.ChangeTracker.Entries<PersonalRoomRecording>().Where(x => x.State == EntityState.Added).ToList();
+        var newPersonalRecordings = newPersonalRecordingEntries.Count;
         var addedStorageBytes = db.ChangeTracker.Entries<Resource>().Where(x => x.State == EntityState.Added)
-            .Sum(x => Math.Max(0, x.Entity.FileSizeBytes ?? 0));
+            .Sum(x => Math.Max(0, x.Entity.FileSizeBytes ?? 0))
+            + newSessionRecordingEntries.Sum(x => Math.Max(0, x.Entity.FileSizeBytes ?? 0))
+            + newPersonalRecordingEntries.Sum(x => Math.Max(0, x.Entity.FileSizeBytes ?? 0));
         if (newStudents == 0 && newStaff == 0 && newSessions.Count == 0 && startingSessions.Count == 0
             && newSessionRecordings == 0 && newPersonalRecordings == 0 && addedStorageBytes == 0) return result;
 
@@ -132,7 +135,9 @@ public sealed class EntitlementInterceptor(IEntitlementService entitlements, Ten
             var limitMb = granted.Limit(EntitlementKeys.MaxStorageMb);
             if (limitMb != EntitlementKeys.Unlimited)
             {
-                var currentBytes = await db.Resources.SumAsync(x => x.FileSizeBytes ?? 0L, cancellationToken);
+                var currentBytes = await db.Resources.SumAsync(x => x.FileSizeBytes ?? 0L, cancellationToken)
+                    + await db.SessionRecordings.SumAsync(x => x.FileSizeBytes ?? 0L, cancellationToken)
+                    + await db.PersonalRoomRecordings.SumAsync(x => x.FileSizeBytes ?? 0L, cancellationToken);
                 var limitBytes = limitMb > long.MaxValue / (1024L * 1024L) ? long.MaxValue : limitMb * 1024L * 1024L;
                 if (currentBytes > limitBytes - addedStorageBytes)
                     throw new PlanLimitException($"Your {granted.PlanName} plan includes {limitMb} MB of file storage. Remove files, increase the tenant limit, or upgrade the plan.");

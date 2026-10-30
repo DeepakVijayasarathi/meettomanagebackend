@@ -48,6 +48,28 @@ public class HetznerSalesAssistantTests
         Assert.Equal("fallback", payload.RootElement.GetProperty("model").GetString());
     }
 
+    [Fact]
+    public async Task Marketing_analysis_returns_structured_hetzner_recommendations()
+    {
+        const string body = """{"choices":[{"message":{"content":"{\"summary\":\"Traffic is growing.\",\"observations\":[\"Chat is strong.\"],\"nextActions\":[\"Improve the demo CTA.\"]}"}}]}""";
+        var result = await Create(new FakeHandler((HttpStatusCode.OK, body)), new() { ApiKey = "key", Model = "primary" })
+            .AnalyzeMarketingAsync(new MarketingDashboardDto { Days = 30, Totals = new() { Visitors = 32, DemoRequests = 3 } });
+
+        Assert.True(result.AiPowered);
+        Assert.Equal("Traffic is growing.", result.Summary);
+        Assert.Contains("Improve the demo CTA.", result.NextActions);
+    }
+
+    [Fact]
+    public async Task Marketing_analysis_has_measured_fallback_without_api_key()
+    {
+        var result = await Create(new FakeHandler((HttpStatusCode.OK, OkBody)), new())
+            .AnalyzeMarketingAsync(new MarketingDashboardDto { Days = 7, Totals = new() { Visitors = 10, DemoRequests = 1, ConversionRate = 10 } });
+
+        Assert.False(result.AiPowered);
+        Assert.NotEmpty(result.NextActions);
+    }
+
     private static HetznerSalesAssistant Create(FakeHandler handler, HetznerAiOptions options) =>
         new(new FakeHttpClientFactory(handler), new FakeDemoRequests(), Microsoft.Extensions.Options.Options.Create(options), NullLogger<HetznerSalesAssistant>.Instance);
 
@@ -56,6 +78,8 @@ public class HetznerSalesAssistantTests
         public Task<PlatformDemoRequestDto> CreateAsync(CreatePlatformDemoRequestRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<PlatformDemoRequestDto>> ListAsync(StoreInquiryStatus? status, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<PlatformDemoRequestDto> UpdateStatusAsync(Guid id, UpdatePlatformDemoRequestStatusRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task DeleteAsync(Guid id, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<PlatformDemoRequestDto> UpdateAsync(Guid id, UpdatePlatformDemoRequestRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class FakeHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory

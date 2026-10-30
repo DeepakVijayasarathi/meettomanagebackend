@@ -14,5 +14,8 @@ namespace iucs.meettomanage.application.Services
             Guid id,
             UpdatePlatformDemoRequestStatusRequest request,
             CancellationToken cancellationToken = default);
+
+        Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
+        Task<PlatformDemoRequestDto> UpdateAsync(Guid id, UpdatePlatformDemoRequestRequest request, CancellationToken cancellationToken = default);
     }
 }

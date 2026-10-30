@@ -3354,6 +3354,15 @@ namespace iucs.meettomanage.domain.Migrations
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.PlatformDemoRequest", b =>
                 {
+                    b.Property<string>("AssignedTo").HasMaxLength(150).HasColumnType("character varying(150)").HasColumnName("assigned_to");
+                    b.Property<string>("Campaign").HasMaxLength(100).HasColumnType("character varying(100)").HasColumnName("campaign");
+                    b.Property<string>("InternalNotes").HasMaxLength(1000).HasColumnType("character varying(1000)").HasColumnName("internal_notes");
+                    b.Property<DateTime?>("LastContactedAtUtc").HasColumnType("timestamp with time zone").HasColumnName("last_contacted_at_utc");
+                    b.Property<string>("LandingPath").HasMaxLength(200).HasColumnType("character varying(200)").HasColumnName("landing_path");
+                    b.Property<string>("Medium").HasMaxLength(100).HasColumnType("character varying(100)").HasColumnName("medium");
+                    b.Property<DateTime?>("NextFollowUpAtUtc").HasColumnType("timestamp with time zone").HasColumnName("next_follow_up_at_utc");
+                    b.Property<string>("Source").HasMaxLength(100).HasColumnType("character varying(100)").HasColumnName("source");
+                    b.Property<string>("VisitorId").HasMaxLength(100).HasColumnType("character varying(100)").HasColumnName("visitor_id");
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")
@@ -4804,6 +4813,10 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("duration_seconds");
 
+                    b.Property<long?>("FileSizeBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("file_size_bytes");
+
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean")
                         .HasColumnName("is_deleted");
@@ -4985,6 +4998,10 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Property<DateTime?>("ExpiresAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("expires_at_utc");
+
+                    b.Property<long?>("FileSizeBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("file_size_bytes");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean")

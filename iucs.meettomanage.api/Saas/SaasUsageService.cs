@@ -41,7 +41,9 @@ public sealed class SaasUsageService(IDbContextFactory<MasterDbContext> factory,
     {
         var students = await db.Children.CountAsync(x => x.IsActive, ct);
         var staff = await db.Users.CountAsync(x => StaffRoles.Contains(x.Role) && x.Status != UserStatus.Inactive, ct);
-        var storage = await db.Resources.SumAsync(x => x.FileSizeBytes ?? 0L, ct);
+        var storage = await db.Resources.SumAsync(x => x.FileSizeBytes ?? 0L, ct)
+            + await db.SessionRecordings.SumAsync(x => x.FileSizeBytes ?? 0L, ct)
+            + await db.PersonalRoomRecordings.SumAsync(x => x.FileSizeBytes ?? 0L, ct);
         var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var sessions = await db.ClassSessions.AsNoTracking()
             .Where(x => x.ScheduledStartAtUtc >= monthStart && x.ScheduledStartAtUtc <= now

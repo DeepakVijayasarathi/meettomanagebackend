@@ -41,6 +41,17 @@ public static class SaasSeeder
         }
         await db.SaveChangesAsync(ct);
 
+        // Plans created before session/recording metering was introduced do not have these
+        // catalogue rows. Backfill only missing values: operator-edited limits are never
+        // overwritten, and custom plans remain unlimited until the operator chooses a value.
+        var existingPlans = await db.Plans.Include(x => x.Entitlements).ToListAsync(ct);
+        foreach (var plan in existingPlans)
+        {
+            AddMissingLimit(plan, EntitlementKeys.MaxSessionsPerMonth, DefaultUsageLimit(plan.Code));
+            AddMissingLimit(plan, EntitlementKeys.MaxRecordingsPerMonth, DefaultUsageLimit(plan.Code));
+        }
+        await db.SaveChangesAsync(ct);
+
         var present = await db.PlatformEmailTemplates.Select(x => x.Key).ToListAsync(ct);
         foreach (var template in DefaultEmailTemplates.All.Where(x => !present.Contains(x.Key)))
             db.PlatformEmailTemplates.Add(new PlatformEmailTemplate { Key = template.Key, Subject = template.Subject, Body = template.Body });
@@ -64,6 +75,26 @@ public static class SaasSeeder
 
     private sealed record Limits(long Students, long Staff, long StorageMb, long SessionMinutes,
         long Sessions, long Recordings, long RetentionDays);
+
+    private static long DefaultUsageLimit(string planCode) => planCode switch
+    {
+        "trial" => 100,
+        "starter" => 1_000,
+        "growth" => 5_000,
+        _ => EntitlementKeys.Unlimited,
+    };
+
+    private static void AddMissingLimit(Plan plan, string key, long value)
+    {
+        if (plan.Entitlements.Any(x => x.Key == key)) return;
+        plan.Entitlements.Add(new PlanEntitlement
+        {
+            PlanId = plan.Id,
+            Key = key,
+            ValueType = EntitlementValueType.Number,
+            Value = value,
+        });
+    }
 
     private static Dictionary<string, long> Features(bool recordings = false, bool whiteLabel = false, bool gateway = false,
         bool whatsapp = false, bool api = false, bool customDomain = false) => new()

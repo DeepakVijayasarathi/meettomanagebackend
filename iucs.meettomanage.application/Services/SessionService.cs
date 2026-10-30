@@ -1064,7 +1064,9 @@ namespace iucs.meettomanage.application.Services
                 ClassSessionId = sessionId,
                 StorageUrl = request.StorageUrl,
                 DurationSeconds = request.DurationSeconds,
-                // Parent access is view-only for 15 days; the expiry job hides it afterwards
+                FileSizeBytes = request.FileSizeBytes,
+                // Safe legacy default; the entitlement interceptor applies the configured
+                // tenant retention value before the row is saved.
                 ExpiresAtUtc = DateTime.UtcNow.AddDays(15),
             };
             await _unitOfWork.Repository<SessionRecording>().AddAsync(recording, cancellationToken);
@@ -1079,7 +1081,8 @@ namespace iucs.meettomanage.application.Services
             string? bearerToken,
             string storageUrl,
             int? durationSeconds,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            long? fileSizeBytes = null)
         {
             var jitsiConfigJson = await _unitOfWork.Repository<Integration>().Query()
                 .Where(i => i.Key == "jitsi")
@@ -1135,6 +1138,7 @@ namespace iucs.meettomanage.application.Services
                         OwnerId = ownerId,
                         StorageUrl = storageUrl,
                         DurationSeconds = durationSeconds,
+                        FileSizeBytes = fileSizeBytes,
                     };
                     await _unitOfWork.Repository<PersonalRoomRecording>().AddAsync(personalRecording, cancellationToken);
                     await _auditLog.StageAsync(AuditAction.Create, nameof(PersonalRoomRecording), personalRecording.Id.ToString(), cancellationToken: cancellationToken);
@@ -1162,6 +1166,11 @@ namespace iucs.meettomanage.application.Services
                 .FirstOrDefaultAsync(r => r.ClassSessionId == session.Id && r.StorageUrl == storageUrl, cancellationToken);
             if (existing is not null)
             {
+                if (existing.FileSizeBytes is null && fileSizeBytes is not null)
+                {
+                    existing.FileSizeBytes = fileSizeBytes;
+                    await _unitOfWork.SaveChangesAsync(cancellationToken);
+                }
                 return ToRecordingDto(existing);
             }
 
@@ -1170,8 +1179,9 @@ namespace iucs.meettomanage.application.Services
                 ClassSessionId = session.Id,
                 StorageUrl = storageUrl,
                 DurationSeconds = durationSeconds,
-                // Same 15-day parent visibility window as AddRecordingAsync (the teacher-facing
-                // manual-upload path) — one policy regardless of how the recording got attached.
+                FileSizeBytes = fileSizeBytes,
+                // Safe legacy default as in AddRecordingAsync; the entitlement interceptor
+                // applies the configured tenant retention value before the row is saved.
                 ExpiresAtUtc = DateTime.UtcNow.AddDays(15),
             };
             await _unitOfWork.Repository<SessionRecording>().AddAsync(recording, cancellationToken);
@@ -1240,6 +1250,7 @@ namespace iucs.meettomanage.application.Services
                 OwnerName = (r.Owner.FirstName + " " + r.Owner.LastName).Trim(),
                 StorageUrl = r.StorageUrl,
                 DurationSeconds = r.DurationSeconds,
+                FileSizeBytes = r.FileSizeBytes,
                 CreatedAtUtc = r.CreatedAtUtc,
             });
 
@@ -1327,6 +1338,7 @@ namespace iucs.meettomanage.application.Services
                     ClassSessionId = r.ClassSessionId,
                     StorageUrl = r.StorageUrl,
                     DurationSeconds = r.DurationSeconds,
+                    FileSizeBytes = r.FileSizeBytes,
                     ExpiresAtUtc = r.ExpiresAtUtc,
                     CreatedAtUtc = r.CreatedAtUtc,
                     BatchName = r.ClassSession.Batch?.Name,
@@ -2800,6 +2812,7 @@ namespace iucs.meettomanage.application.Services
                 ClassSessionId = recording.ClassSessionId,
                 StorageUrl = recording.StorageUrl,
                 DurationSeconds = recording.DurationSeconds,
+                FileSizeBytes = recording.FileSizeBytes,
                 ExpiresAtUtc = recording.ExpiresAtUtc,
                 CreatedAtUtc = recording.CreatedAtUtc,
             };

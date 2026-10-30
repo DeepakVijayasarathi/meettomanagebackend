@@ -354,7 +354,7 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _sessionService.MarkNoShowAsync(id, request, cancellationToken));
         }
 
-        /// <summary>Registers a finished recording; parent visibility expires after 15 days.</summary>
+        /// <summary>Registers a finished recording; parent visibility follows the tenant's configured retention limit.</summary>
         [HttpPost("{id:guid}/recordings")]
         [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.Teacher)}")]
         [RequiresFeature(EntitlementKeys.Recordings)]
@@ -363,6 +363,7 @@ namespace iucs.meettomanage.api.Controllers
             RegisterRecordingRequest request,
             CancellationToken cancellationToken)
         {
+            request.FileSizeBytes = await ResolveRecordingSizeAsync(request.StorageUrl, request.FileSizeBytes, cancellationToken);
             return Ok(await _sessionService.AddRecordingAsync(id, request, cancellationToken));
         }
 
@@ -391,9 +392,24 @@ namespace iucs.meettomanage.api.Controllers
                 bearerToken = header["Bearer ".Length..];
             }
 
+            var fileSizeBytes = await ResolveRecordingSizeAsync(request.StorageUrl, request.FileSizeBytes, cancellationToken);
             var recording = await _sessionService.FinalizeJibriRecordingAsync(
-                request.RoomName, bearerToken, request.StorageUrl, request.DurationSeconds, cancellationToken);
+                request.RoomName, bearerToken, request.StorageUrl, request.DurationSeconds, cancellationToken, fileSizeBytes);
             return recording is null ? NoContent() : Ok(recording);
+        }
+
+        private async Task<long?> ResolveRecordingSizeAsync(string storageUrl, long? reportedSize, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var storedSize = await _fileStorage.GetSizeAsync(storageUrl, cancellationToken);
+                if (storedSize is not null) return storedSize;
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Registration must still succeed if object storage is temporarily unavailable.
+            }
+            return reportedSize is >= 0 ? reportedSize : null;
         }
 
         /// <summary>
