@@ -12257,6 +12257,66 @@ namespace iucs.meettomanage.tests
         }
 
         [Fact]
+        public async Task MarketingChatLog_SavesEachConversationInOrder_AndListsIt()
+        {
+            var log = new MarketingChatLogService(_db.UnitOfWork);
+            static SalesChatTurn U(string t) => new() { Role = "user", Text = t };
+            static SalesChatTurn A(string t) => new() { Role = "assistant", Text = t };
+            var attribution = new MarketingLeadAttributionDto { VisitorId = "visitor-1", Source = "google", Campaign = "launch", LandingPath = "/pricing" };
+
+            // First save: the turns the browser already had come along with it.
+            await log.RecordTurnAsync("conv-aaaa-1111", [U("Hi"), A("Hello!"), U("How much does it cost?")], "Plans start at ...", null, attribution);
+            // Later turns add only the newest visitor message and the reply.
+            await log.RecordTurnAsync("conv-aaaa-1111", [U("Hi"), A("Hello!"), U("How much does it cost?"), A("Plans start at ..."), U("Book a demo for Asha")], "Booked!", "Asha", attribution);
+            // A failed reply still keeps the visitor's question.
+            await log.RecordTurnAsync("conv-bbbb-2222", [U("Do you support abacus classes?")], null, null, null);
+
+            var all = await log.ListAsync(1, 25, null, false);
+            Assert.Equal(2, all.TotalCount);
+            var booked = Assert.Single((await log.ListAsync(1, 25, null, true)).Items);
+            Assert.Equal("Asha", booked.BookedName);
+            Assert.Equal("Hi", booked.FirstMessage);
+            Assert.Equal("google", booked.Source);
+            Assert.Equal(6, booked.MessageCount);
+
+            var detail = await log.GetAsync(booked.Id);
+            Assert.Equal(["Hi", "Hello!", "How much does it cost?", "Plans start at ...", "Book a demo for Asha", "Booked!"], detail.Messages.Select(m => m.Text).ToArray());
+            Assert.Equal(["user", "assistant", "user", "assistant", "user", "assistant"], detail.Messages.Select(m => m.Role).ToArray());
+
+            // Search looks inside the whole transcript.
+            Assert.Single((await log.ListAsync(1, 25, "abacus", false)).Items);
+            Assert.Single((await log.ListAsync(1, 25, "cost", false)).Items);
+        }
+
+        [Fact]
+        public async Task PlatformDemoRequest_EmailsTheLeadAlert_AndSurvivesAMailFailure()
+        {
+            var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Marketing:LeadAlertEmail"] = "marketing@meettomanage.cloud, sales@meettomanage.cloud; Marketing@meettomanage.cloud" })
+                .Build();
+            var mail = new FakeEmailSender();
+            var demos = new PlatformDemoRequestService(_db.UnitOfWork, _auditLog, mail, config);
+
+            await demos.CreateAsync(new CreatePlatformDemoRequestRequest
+            {
+                FullName = "Priya <b>", WorkEmail = "priya@x.com", Phone = "9000000003", AcademyName = "Sunrise Abacus", Message = "200 students", Campaign = "launch",
+            });
+
+            // Every listed address gets its own copy; a repeated address only one.
+            Assert.Equal(["marketing@meettomanage.cloud", "sales@meettomanage.cloud"], mail.Sent.Select(m => m.To).ToArray());
+            var (_, subject, body) = mail.Sent[0];
+            Assert.Contains("Sunrise Abacus", subject);
+            Assert.Contains("200 students", body);
+            Assert.Contains("Priya &lt;b&gt;", body); // visitor input is HTML-encoded
+            Assert.DoesNotContain("Priya <b>", body);
+
+            // A mail failure never loses the lead.
+            var failing = new PlatformDemoRequestService(_db.UnitOfWork, _auditLog, new ThrowingEmailSender(), config);
+            var saved = await failing.CreateAsync(new CreatePlatformDemoRequestRequest { FullName = "Ravi", WorkEmail = "ravi@x.com", Phone = "9000000004", AcademyName = "Ravi Tuition" });
+            Assert.NotNull(await _db.UnitOfWork.Repository<iucs.meettomanage.domain.Entities.Marketing.PlatformDemoRequest>().FirstOrDefaultAsync(r => r.Id == saved.Id));
+        }
+
+        [Fact]
         public async Task MarketingAnalytics_CountsVisitorsSourcesAndBookings_AndDropsBots()
         {
             var analytics = new MarketingAnalyticsService(_db.UnitOfWork);
@@ -12279,6 +12339,20 @@ namespace iucs.meettomanage.tests
             });
 
             var dashboard = await analytics.GetDashboardAsync(30, 330);
+
+            // Custom from–to range: today (IST) holds everything; an earlier range holds nothing,
+            // a reversed range is swapped, and a future end date is capped at today.
+            var todayIst = DateOnly.FromDateTime(DateTime.UtcNow.AddMinutes(330));
+            var todayOnly = await analytics.GetDashboardAsync(30, 330, default, todayIst, todayIst);
+            Assert.Equal(3, todayOnly.Totals.PageViews);
+            Assert.Single(todayOnly.Daily);
+            var lastWeek = await analytics.GetDashboardAsync(30, 330, default, todayIst.AddDays(-1), todayIst.AddDays(-7));
+            Assert.Equal(0, lastWeek.Totals.PageViews);
+            Assert.Equal(7, lastWeek.Days);
+            Assert.Equal(todayIst.AddDays(-1).ToString("yyyy-MM-dd"), lastWeek.EndDate);
+            var future = await analytics.GetDashboardAsync(30, 330, default, todayIst.AddDays(-2), todayIst.AddDays(30));
+            Assert.Equal(todayIst.ToString("yyyy-MM-dd"), future.EndDate);
+            Assert.Equal(3, future.Days);
 
             Assert.Equal(3, dashboard.Totals.PageViews);
             Assert.Equal(2, dashboard.Totals.Visitors);

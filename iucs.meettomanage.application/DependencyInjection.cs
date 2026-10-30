@@ -45,6 +45,7 @@ namespace iucs.meettomanage.application
             services.AddScoped<IStoreService, StoreService>();
             services.AddScoped<IPlatformDemoRequestService, PlatformDemoRequestService>();
             services.AddScoped<IMarketingOperationsService, MarketingOperationsService>();
+            services.AddScoped<IMarketingChatLogService, MarketingChatLogService>();
             services.AddScoped<IBlogService, BlogService>();
             services.AddScoped<IMarketingAnalyticsService, MarketingAnalyticsService>();
             services.AddScoped<IAcademicOpsService, AcademicOpsService>();

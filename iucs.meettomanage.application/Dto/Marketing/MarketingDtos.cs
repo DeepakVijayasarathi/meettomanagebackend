@@ -290,6 +290,11 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public List<SalesChatTurn> Messages { get; set; } = new();
 
         public MarketingLeadAttributionDto? Attribution { get; set; }
+
+        /// <summary>Random id the browser keeps for this chat session, so its turns are saved as one conversation.</summary>
+        [MaxLength(64)]
+        [RegularExpression("^[A-Za-z0-9-]{8,64}$")]
+        public string? ConversationId { get; set; }
     }
 
     public class MarketingLeadAttributionDto
@@ -458,5 +463,32 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public List<string> NextActions { get; set; } = new();
         public bool AiPowered { get; set; }
         public DateTime GeneratedAtUtc { get; set; }
+    }
+
+    /// <summary>One website chat conversation, for the marketing console's list.</summary>
+    public class MarketingChatConversationDto
+    {
+        public Guid Id { get; set; }
+        public DateTime StartedAtUtc { get; set; }
+        public DateTime LastMessageAtUtc { get; set; }
+        public int MessageCount { get; set; }
+        public string FirstMessage { get; set; } = "";
+        public string? Source { get; set; }
+        public string? Campaign { get; set; }
+        public string? LandingPath { get; set; }
+        public string? BookedName { get; set; }
+    }
+
+    public class MarketingChatMessageDto
+    {
+        public string Role { get; set; } = "";
+        public string Text { get; set; } = "";
+        public DateTime CreatedAtUtc { get; set; }
+    }
+
+    public class MarketingChatDetailDto
+    {
+        public MarketingChatConversationDto Conversation { get; set; } = new();
+        public List<MarketingChatMessageDto> Messages { get; set; } = new();
     }
 }

@@ -48,28 +48,41 @@ namespace iucs.meettomanage.application.Services
             await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
-        public async Task<MarketingDashboardDto> GetDashboardAsync(int days, int tzOffsetMinutes, CancellationToken cancellationToken = default)
+        public async Task<MarketingDashboardDto> GetDashboardAsync(int days, int tzOffsetMinutes, CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null)
         {
             days = Math.Clamp(days, 1, 90);
             var offset = TimeSpan.FromMinutes(Math.Clamp(tzOffsetMinutes, -14 * 60, 14 * 60));
             var nowUtc = DateTime.UtcNow;
 
-            // Window = the last `days` local calendar days including today; the previous window is
-            // the same length immediately before it.
+            // Window = the last `days` local calendar days including today, or the custom from–to
+            // range; the previous window is the same length immediately before it.
             var todayLocal = (nowUtc + offset).Date;
-            var startLocal = todayLocal.AddDays(-(days - 1));
+            var endLocal = todayLocal;
+            if (from is { } fromDate && to is { } toDate)
+            {
+                // A future end date is capped at today; a reversed range is swapped. Capped at
+                // 183 days so the comparison window stays inside the 400-day retention.
+                var a = fromDate.ToDateTime(TimeOnly.MinValue);
+                var b = toDate.ToDateTime(TimeOnly.MinValue);
+                if (b < a) (a, b) = (b, a);
+                endLocal = b > todayLocal ? todayLocal : b;
+                if (a > endLocal) a = endLocal;
+                days = Math.Min((int)(endLocal - a).TotalDays + 1, 183);
+            }
+            var startLocal = endLocal.AddDays(-(days - 1));
             var startUtc = DateTime.SpecifyKind(startLocal - offset, DateTimeKind.Utc);
+            var endUtc = DateTime.SpecifyKind(endLocal.AddDays(1) - offset, DateTimeKind.Utc);
             var previousStartUtc = startUtc.AddDays(-days);
 
             await _unitOfWork.Repository<MarketingEvent>()
                 .ExecuteHardDeleteAsync(e => e.CreatedAtUtc < nowUtc - Retention, cancellationToken);
 
             var events = await _unitOfWork.Repository<MarketingEvent>().Query()
-                .Where(e => e.CreatedAtUtc >= previousStartUtc)
+                .Where(e => e.CreatedAtUtc >= previousStartUtc && e.CreatedAtUtc < endUtc)
                 .Select(e => new { e.CreatedAtUtc, e.Type, e.Path, e.VisitorId, e.Source, e.Medium, e.Campaign, e.Device, e.Country })
                 .ToListAsync(cancellationToken);
             var requests = await _unitOfWork.Repository<PlatformDemoRequest>().Query()
-                .Where(r => r.CreatedAtUtc >= previousStartUtc)
+                .Where(r => r.CreatedAtUtc >= previousStartUtc && r.CreatedAtUtc < endUtc)
                 .Select(r => new { r.CreatedAtUtc, r.Message, r.Status, r.Source, r.Campaign, r.LandingPath })
                 .ToListAsync(cancellationToken);
 
@@ -160,7 +173,7 @@ namespace iucs.meettomanage.application.Services
             {
                 Days = days,
                 StartDate = startLocal.ToString("yyyy-MM-dd"),
-                EndDate = todayLocal.ToString("yyyy-MM-dd"),
+                EndDate = endLocal.ToString("yyyy-MM-dd"),
                 Totals = Totals(current.Select(e => (e.Type, e.VisitorId)), currentRequests.Select(r => (r.Message, r.Status))),
                 Previous = Totals(previous.Select(e => (e.Type, e.VisitorId)), previousRequests.Select(r => (r.Message, r.Status))),
                 Daily = daily,

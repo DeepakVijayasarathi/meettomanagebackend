@@ -1,4 +1,6 @@
+using System.Net;
 using iucs.meettomanage.application.Common.Exceptions;
+using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Marketing;
 using iucs.meettomanage.application.Dto.Common;
 using iucs.meettomanage.application.Mappings;
@@ -6,6 +8,8 @@ using iucs.meettomanage.domain.Entities.Marketing;
 using iucs.meettomanage.domain.Enums;
 using iucs.meettomanage.domain.Repository;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace iucs.meettomanage.application.Services
 {
@@ -13,11 +17,22 @@ namespace iucs.meettomanage.application.Services
     {
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAuditLogService _auditLog;
+        private readonly IEmailSender? _email;
+        private readonly IConfiguration? _configuration;
+        private readonly ILogger<PlatformDemoRequestService>? _logger;
 
-        public PlatformDemoRequestService(IUnitOfWork unitOfWork, IAuditLogService auditLog)
+        public PlatformDemoRequestService(
+            IUnitOfWork unitOfWork,
+            IAuditLogService auditLog,
+            IEmailSender? email = null,
+            IConfiguration? configuration = null,
+            ILogger<PlatformDemoRequestService>? logger = null)
         {
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
+            _email = email;
+            _configuration = configuration;
+            _logger = logger;
         }
 
         public async Task<PlatformDemoRequestDto> CreateAsync(
@@ -40,7 +55,46 @@ namespace iucs.meettomanage.application.Services
             await _auditLog.StageAsync(AuditAction.Create, nameof(PlatformDemoRequest), demoRequest.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+            await SendLeadAlertAsync(demoRequest, cancellationToken);
             return demoRequest.ToDto();
+        }
+
+        /// <summary>
+        /// Emails the marketing team about a new lead. Marketing:LeadAlertEmail holds one or more
+        /// addresses separated by commas or semicolons (blank = off); each gets its own email.
+        /// Best effort: the lead is already saved, so a mail failure is only logged.
+        /// </summary>
+        private async Task SendLeadAlertAsync(PlatformDemoRequest lead, CancellationToken cancellationToken)
+        {
+            var recipients = (_configuration?["Marketing:LeadAlertEmail"] ?? "")
+                .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (_email is null || recipients.Count == 0) return;
+            static string H(string? value) => WebUtility.HtmlEncode(value ?? "");
+            var consoleUrl = $"{(_configuration?["Marketing:SiteUrl"] ?? "https://meettomanage.cloud").TrimEnd('/')}/marketing/demo-requests";
+            var rows = new (string Label, string? Value)[]
+            {
+                ("Name", lead.FullName), ("Academy", lead.AcademyName), ("Email", lead.WorkEmail), ("Phone", lead.Phone),
+                ("Message", lead.Message), ("Source", lead.Source ?? "Direct"), ("Campaign", lead.Campaign), ("Landing page", lead.LandingPath),
+            };
+            var table = string.Concat(rows.Where(r => !string.IsNullOrWhiteSpace(r.Value)).Select(r =>
+                $"<tr><td style=\"padding:4px 12px 4px 0;color:#57534e\">{H(r.Label)}</td><td style=\"padding:4px 0\"><b>{H(r.Value)}</b></td></tr>"));
+            var body = $"<p>A new platform demo request just came in.</p><table>{table}</table>" +
+                $"<p><a href=\"{H(consoleUrl)}\">Open it in the Marketing console</a></p>";
+            var subject = $"New demo request: {lead.FullName} ({lead.AcademyName})";
+            // One send per address: a bad address doesn't stop the others getting the alert.
+            foreach (var to in recipients)
+            {
+                try
+                {
+                    await _email.SendAsync(to, subject, body, cancellationToken);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger?.LogWarning(ex, "Couldn't email the lead alert for demo request {Id} to {To}", lead.Id, to);
+                }
+            }
         }
 
         public async Task<IReadOnlyList<PlatformDemoRequestDto>> ListAsync(

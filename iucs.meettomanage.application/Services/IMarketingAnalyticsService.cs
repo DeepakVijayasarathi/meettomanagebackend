@@ -12,6 +12,8 @@ namespace iucs.meettomanage.application.Services
         /// Dashboard for the last <paramref name="days"/> days (clamped 1–90), with calendar days in
         /// the caller's UTC offset (<paramref name="tzOffsetMinutes"/>, e.g. 330 for IST).
         /// </summary>
-        Task<MarketingDashboardDto> GetDashboardAsync(int days, int tzOffsetMinutes, CancellationToken cancellationToken = default);
+        /// <summary>The last <paramref name="days"/> local days including today, or — when both are given —
+        /// the local calendar days <paramref name="from"/> to <paramref name="to"/> inclusive.</summary>
+        Task<MarketingDashboardDto> GetDashboardAsync(int days, int tzOffsetMinutes, CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null);
     }
 }

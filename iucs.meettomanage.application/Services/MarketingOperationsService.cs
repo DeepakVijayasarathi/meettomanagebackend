@@ -65,6 +65,9 @@ public class MarketingOperationsService(IUnitOfWork unitOfWork) : IMarketingOper
         var settings = await GetSettingsAsync(ct); var cutoff = DateTime.UtcNow.AddDays(-settings.RetentionDays);
         await unitOfWork.Repository<MarketingEvent>().ExecuteHardDeleteAsync(x => x.CreatedAtUtc < cutoff, ct);
         await unitOfWork.Repository<MarketingLeadActivity>().ExecuteHardDeleteAsync(x => x.CreatedAtUtc < cutoff, ct);
+        // Website chat transcripts: a conversation idle past the cutoff only holds older messages.
+        await unitOfWork.Repository<MarketingChatMessage>().ExecuteHardDeleteAsync(x => x.CreatedAtUtc < cutoff, ct);
+        await unitOfWork.Repository<MarketingChatConversation>().ExecuteHardDeleteAsync(x => x.LastMessageAtUtc < cutoff, ct);
     }
 
     private static MarketingCampaignBudgetDto ToDto(MarketingCampaignBudget x, int leads, int converted) => new()

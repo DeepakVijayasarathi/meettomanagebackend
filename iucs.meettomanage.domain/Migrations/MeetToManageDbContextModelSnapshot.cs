@@ -3343,6 +3343,145 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("marketing_campaign_budgets");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingChatConversation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("BookedName")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("booked_name");
+
+                    b.Property<string>("Campaign")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("campaign");
+
+                    b.Property<string>("ConversationKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("conversation_key");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<string>("FirstMessage")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("first_message");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("LandingPath")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("landing_path");
+
+                    b.Property<DateTime>("LastMessageAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_message_at_utc");
+
+                    b.Property<string>("Medium")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("medium");
+
+                    b.Property<int>("MessageCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("message_count");
+
+                    b.Property<string>("Source")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("source");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<string>("VisitorId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("visitor_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_marketing_chat_conversations");
+
+                    b.HasIndex("ConversationKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_marketing_chat_conversations_conversation_key")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("LastMessageAtUtc")
+                        .HasDatabaseName("ix_marketing_chat_conversations_last_message_at_utc");
+
+                    b.ToTable("marketing_chat_conversations");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingChatMessage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ConversationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("conversation_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("integer")
+                        .HasColumnName("position");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("role");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("text");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_marketing_chat_messages");
+
+                    b.HasIndex("ConversationId", "Position")
+                        .HasDatabaseName("ix_marketing_chat_messages_conversation_id_position");
+
+                    b.ToTable("marketing_chat_messages");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingEvent", b =>
                 {
                     b.Property<Guid>("Id")
@@ -6979,6 +7118,18 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("SupportTicket");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingChatMessage", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Marketing.MarketingChatConversation", "Conversation")
+                        .WithMany("Messages")
+                        .HasForeignKey("ConversationId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_marketing_chat_messages_marketing_chat_conversations_conver");
+
+                    b.Navigation("Conversation");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingLeadActivity", b =>
                 {
                     b.HasOne("iucs.meettomanage.domain.Entities.Marketing.PlatformDemoRequest", "PlatformDemoRequest")
@@ -7589,6 +7740,11 @@ namespace iucs.meettomanage.domain.Migrations
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.SupportTicket", b =>
+                {
+                    b.Navigation("Messages");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingChatConversation", b =>
                 {
                     b.Navigation("Messages");
                 });

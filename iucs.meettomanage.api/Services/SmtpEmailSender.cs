@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Net.Mail;
 using System.Text.Json;
 using iucs.meettomanage.application.Common.Interfaces;
@@ -14,6 +15,9 @@ namespace iucs.meettomanage.api.Services
     /// so a rebranding/mail-account change needs no redeploy. Falls back to logging
     /// (and never throws) when the integration is disabled or unconfigured, so
     /// account creation and other flows keep working in dev without a mail server.
+    /// When SMTP isn't configured but the platform has a Resend API key (Resend:ApiKey,
+    /// set as an environment variable), mail goes out through Resend's HTTP API instead,
+    /// so nothing is silently dropped. An academy's own SMTP settings always win.
     /// </summary>
     public class SmtpEmailSender : IEmailSender
     {
@@ -21,12 +25,18 @@ namespace iucs.meettomanage.api.Services
 
         private readonly IUnitOfWork _unitOfWork;
         private readonly ILogger<SmtpEmailSender> _logger;
+        private readonly IHttpClientFactory _httpClientFactory;
+        private readonly IConfiguration _configuration;
 
-        public SmtpEmailSender(IUnitOfWork unitOfWork, ILogger<SmtpEmailSender> logger)
+        public SmtpEmailSender(IUnitOfWork unitOfWork, ILogger<SmtpEmailSender> logger, IHttpClientFactory httpClientFactory, IConfiguration configuration)
         {
             _unitOfWork = unitOfWork;
             _logger = logger;
+            _httpClientFactory = httpClientFactory;
+            _configuration = configuration;
         }
+
+        private string? ResendApiKey => _configuration["Resend:ApiKey"] is { Length: > 0 } key ? key : null;
 
         public async Task SendAsync(string toEmail, string subject, string body, CancellationToken cancellationToken = default)
         {
@@ -46,6 +56,11 @@ namespace iucs.meettomanage.api.Services
 
             if (integration is null || !integration.IsEnabled || string.IsNullOrWhiteSpace(host))
             {
+                if (ResendApiKey is not null)
+                {
+                    await SendViaResendAsync(toEmail, subject, body, cancellationToken);
+                    return;
+                }
                 // Never log the rendered body: it routinely carries a temporary password
                 // (welcome-credentials), review notes, or other content not meant for the
                 // log aggregator — subject/recipient is enough to see delivery was skipped.
@@ -77,6 +92,25 @@ namespace iucs.meettomanage.api.Services
             _logger.LogInformation("EMAIL sent to {To} via {Host}:{Port} | {Subject}", toEmail, host, port, subject);
         }
 
+        /// <summary>Resend HTTP API (https://resend.com/docs/api-reference/emails/send-email). Throws on a refused send.</summary>
+        private async Task SendViaResendAsync(string toEmail, string subject, string body, CancellationToken cancellationToken)
+        {
+            var from = _configuration["Resend:From"] is { Length: > 0 } f ? f : "Meet to Manage <notifications@meettomanage.cloud>";
+            var client = _httpClientFactory.CreateClient(nameof(SmtpEmailSender));
+            using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.resend.com/emails")
+            {
+                Content = JsonContent.Create(new { from, to = new[] { toEmail }, subject, html = body }),
+            };
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ResendApiKey);
+            using var response = await client.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var detail = await response.Content.ReadAsStringAsync(cancellationToken);
+                throw new InvalidOperationException($"Resend refused the email ({(int)response.StatusCode}): {detail[..Math.Min(detail.Length, 300)]}");
+            }
+            _logger.LogInformation("EMAIL sent to {To} via Resend | {Subject}", toEmail, subject);
+        }
+
         /// <summary>
         /// Settings → "Send test email": the same delivery as SendAsync, but it reports every problem
         /// instead of quietly skipping. Reported live: parents never received their PIN-reset email,
@@ -88,6 +122,23 @@ namespace iucs.meettomanage.api.Services
         {
             var integration = await _unitOfWork.Repository<Integration>().Query()
                 .FirstOrDefaultAsync(i => i.Key == EmailIntegrationKey, cancellationToken);
+            var smtpReady = integration is { IsEnabled: true } && Value(DecodeConfig(integration.ConfigJson), "smtpHost") is not null;
+            if (!smtpReady && ResendApiKey is not null)
+            {
+                // No SMTP of its own: this tenant's mail goes through the platform's Resend account.
+                try
+                {
+                    await SendAsync(toEmail, "Meet to Manage — test email",
+                        "<p>This is a test email from the Meet to Manage portal. If you can read this, email delivery is working.</p>",
+                        cancellationToken);
+                    return null;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "Test email to {To} via Resend failed", toEmail);
+                    return $"The email service refused the email: {ex.GetBaseException().Message}";
+                }
+            }
             if (integration is null)
             {
                 return "There is no Email integration set up. Add it in Settings → Integrations.";

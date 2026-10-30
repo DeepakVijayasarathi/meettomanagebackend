@@ -99,6 +99,14 @@ pipeline {
               } catch (err) {
                   echo "WARNING: credential 'meettomanage-hetzner-ai-api-key' not found -- deploying without the chat assistant."
               }
+              // Resend (HTTP email API) is optional too: without it, mail still goes through each
+              // academy's own SMTP settings, and is only logged where none are set.
+              try {
+                  withCredentials([string(credentialsId: 'meettomanage-resend-api-key', variable: 'RESEND_PROBE')]) {}
+                  optionalCredentials << string(credentialsId: 'meettomanage-resend-api-key', variable: 'RESEND_API_KEY')
+              } catch (err) {
+                  echo "WARNING: credential 'meettomanage-resend-api-key' not found -- deploying without Resend email."
+              }
               withCredentials([
                   string(credentialsId: 'meettomanage-db-password',          variable: 'DB_PASS'),
                   string(credentialsId: 'meettomanage-jwt-signing-key',      variable: 'JWT_SIGNING_KEY'),
@@ -125,6 +133,9 @@ pipeline {
                       -e Monitoring__Servers__0__SshPassword="\${SSH_PASS_0}" \
                       -e Monitoring__Servers__1__SshPassword="\${SSH_PASS_1}" \
                       -e HetznerAi__ApiKey="\${HETZNER_AI_API_KEY:-}" \
+                      -e Resend__ApiKey="\${RESEND_API_KEY:-}" \
+                      -e Resend__From="Meet to Manage <notifications@meettomanage.cloud>" \
+                      -e Marketing__LeadAlertEmail="deepanvijayasarathi32@gmail.com" \
                       -e Seed__MarketingEmail="marketing@meettomanage.cloud" \
                       -e Seed__MarketingPin="1234" \
                       -e MultiTenancy__Enabled=true \
@@ -187,4 +198,6 @@ pipeline {
 //   meettomanage-platform-admin-hash   (BCrypt hash from
 //                                       `dotnet iucs.meettomanage.api.dll platform-password-hash`)
 //   meettomanage-hetzner-ai-api-key    (optional)
+//   meettomanage-resend-api-key        (optional; Resend email API key, used when an
+//                                       academy has no SMTP set up, e.g. new-lead alerts)
 // ---------------------------------------------------------------------------------------

@@ -23,15 +23,21 @@ namespace iucs.meettomanage.api.Controllers
         private readonly IPlatformDemoRequestService _platformDemoRequestService;
         private readonly ISalesAssistant _salesAssistant;
         private readonly IMarketingAnalyticsService _analytics;
+        private readonly IMarketingChatLogService _chatLog;
+        private readonly ILogger<MarketingController> _logger;
 
         public MarketingController(
             IPlatformDemoRequestService platformDemoRequestService,
             ISalesAssistant salesAssistant,
-            IMarketingAnalyticsService analytics)
+            IMarketingAnalyticsService analytics,
+            IMarketingChatLogService chatLog,
+            ILogger<MarketingController> logger)
         {
             _platformDemoRequestService = platformDemoRequestService;
             _salesAssistant = salesAssistant;
             _analytics = analytics;
+            _chatLog = chatLog;
+            _logger = logger;
         }
 
         /// <summary>Anonymous analytics beacon from the public marketing pages (page views, chat starts).</summary>
@@ -49,9 +55,11 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<ActionResult<MarketingDashboardDto>> Analytics(
             [FromQuery] int days = 30,
             [FromQuery] int tzOffsetMinutes = 0,
+            [FromQuery] DateOnly? from = null,
+            [FromQuery] DateOnly? to = null,
             CancellationToken cancellationToken = default)
         {
-            return Ok(await _analytics.GetDashboardAsync(days, tzOffsetMinutes, cancellationToken));
+            return Ok(await _analytics.GetDashboardAsync(days, tzOffsetMinutes, cancellationToken, from, to));
         }
 
         /// <summary>Hetzner AI analysis of the same anonymous, aggregate marketing dashboard data.</summary>
@@ -60,9 +68,11 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<ActionResult<MarketingAiInsightsDto>> AnalyticsInsights(
             [FromQuery] int days = 30,
             [FromQuery] int tzOffsetMinutes = 0,
+            [FromQuery] DateOnly? from = null,
+            [FromQuery] DateOnly? to = null,
             CancellationToken cancellationToken = default)
         {
-            var dashboard = await _analytics.GetDashboardAsync(days, tzOffsetMinutes, cancellationToken);
+            var dashboard = await _analytics.GetDashboardAsync(days, tzOffsetMinutes, cancellationToken, from, to);
             return Ok(await _salesAssistant.AnalyzeMarketingAsync(dashboard, cancellationToken));
         }
 
@@ -84,7 +94,28 @@ namespace iucs.meettomanage.api.Controllers
         [EnableRateLimiting("marketing-chat")]
         public async Task<ActionResult<SalesChatResponse>> Chat(SalesChatRequest request, CancellationToken cancellationToken)
         {
-            return Ok(await _salesAssistant.ReplyAsync(request.Messages, cancellationToken, request.Attribution));
+            SalesChatResponse? response = null;
+            try
+            {
+                response = await _salesAssistant.ReplyAsync(request.Messages, cancellationToken, request.Attribution);
+                return Ok(response);
+            }
+            finally
+            {
+                // Saved for the marketing console's Chats page, even when the assistant failed
+                // (the visitor's question is still worth seeing). Never breaks the chat itself.
+                if (request.ConversationId is { } conversationId)
+                {
+                    try
+                    {
+                        await _chatLog.RecordTurnAsync(conversationId, request.Messages, response?.Reply, response?.BookedName, request.Attribution, CancellationToken.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Couldn't save website chat turn");
+                    }
+                }
+            }
         }
 
         [HttpPost("translate")]
