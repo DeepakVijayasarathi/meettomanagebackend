@@ -411,16 +411,18 @@ namespace iucs.meettomanage.api.Data
         /// </summary>
         private static AppSetting[] SeoSettingDefaults(Func<SettingCategory, string, string?, bool, AppSetting> setting) =>
         [
-            setting(SettingCategory.Seo, "seo.home.title", "Meet to Manage — LMS & Virtual Classroom", true),
-            setting(SettingCategory.Seo, "seo.home.description", "Meet to Manage brings live teaching, scheduling, admissions, billing and reporting into one role-based platform for schools and academies.", true),
-            setting(SettingCategory.Seo, "seo.store.title", "Course Catalogue — Meet to Manage", true),
-            setting(SettingCategory.Seo, "seo.store.description", "Browse current courses and book a free demo class — no account needed.", true),
-            setting(SettingCategory.Seo, "seo.demo.title", "Book a Free Demo — Meet to Manage", true),
-            setting(SettingCategory.Seo, "seo.demo.description", "Book a free demo class and see how Meet to Manage's live classroom, scheduling and billing work together.", true),
-            setting(SettingCategory.Seo, "seo.getStarted.title", "Request a Demo — Meet to Manage", true),
-            setting(SettingCategory.Seo, "seo.getStarted.description", "Running an academy? See how Meet to Manage's live classroom, scheduling, admissions and billing work together — request a platform demo.", true),
-            setting(SettingCategory.Seo, "seo.blog.title", "Blog — Meet to Manage", true),
-            setting(SettingCategory.Seo, "seo.blog.description", "Practical notes on running a modern academy: admissions, billing automation, scheduling and more.", true),
+            setting(SettingCategory.Seo, "seo.home.title", "Online Coaching Software & Academy Management | Meet to Manage", true),
+            setting(SettingCategory.Seo, "seo.home.description", "Run live classes, automate fee collection, manage admissions and keep parents updated in one app. Built for tuition, abacus and phonics centres. Book a free demo.", true),
+            setting(SettingCategory.Seo, "seo.pricing.title", "Pricing: Academy Management Software Plans | Meet to Manage", true),
+            setting(SettingCategory.Seo, "seo.pricing.description", "One simple price per academy with live classes, admissions, automatic fee collection and a parent app included. Pay monthly or yearly. Book a free demo.", true),
+            setting(SettingCategory.Seo, "seo.store.title", "Live Online Courses & Free Demo Classes | Meet to Manage", true),
+            setting(SettingCategory.Seo, "seo.store.description", "Browse live online courses and book a free demo class in minutes. No account needed. Meet the teacher and try the live classroom before you enrol.", true),
+            setting(SettingCategory.Seo, "seo.demo.title", "Book a Free Live Demo Class | Meet to Manage", true),
+            setting(SettingCategory.Seo, "seo.demo.description", "Book a free live demo class and see how lessons run in the Meet to Manage virtual classroom, with whiteboard, quizzes and recordings. No account needed.", true),
+            setting(SettingCategory.Seo, "seo.getStarted.title", "Book a Free Platform Demo for Your Academy | Meet to Manage", true),
+            setting(SettingCategory.Seo, "seo.getStarted.description", "See live classes, admissions, fee collection and the parent app working together for your academy or coaching centre. Book a free 30-minute demo today.", true),
+            setting(SettingCategory.Seo, "seo.blog.title", "Academy Growth & Management Blog | Meet to Manage", true),
+            setting(SettingCategory.Seo, "seo.blog.description", "Practical guides for coaching centres and online academies on admissions, fee collection, scheduling, parent communication and student retention.", true),
             // Website analytics tag IDs, loaded by the public marketing pages only. Blank = off.
             setting(SettingCategory.Analytics, "analytics.gaMeasurementId", "", true),
             setting(SettingCategory.Analytics, "analytics.gtmContainerId", "", true),
