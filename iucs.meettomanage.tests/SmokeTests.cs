@@ -12317,6 +12317,51 @@ namespace iucs.meettomanage.tests
         }
 
         [Fact]
+        public async Task SiteBehaviour_FunnelExitRatesAndTimeOnPage_FeedImprovements()
+        {
+            var analytics = new MarketingAnalyticsService(_db.UnitOfWork);
+            var repo = _db.UnitOfWork.Repository<iucs.meettomanage.domain.Entities.Marketing.MarketingEvent>();
+            var start = DateTime.UtcNow.AddHours(-3);
+            // Visitor A: home (60s) -> pricing (120s) -> get-started, then leaves.
+            // Visitor B: home only. Visitor C: home (30s) -> pricing, leaves.
+            var plan = new (string Visitor, string Path, int Second)[]
+            {
+                ("visitor-behave-a", "/", 0), ("visitor-behave-a", "/pricing", 60), ("visitor-behave-a", "/get-started", 180),
+                ("visitor-behave-b", "/", 10),
+                ("visitor-behave-c", "/", 20), ("visitor-behave-c", "/pricing", 50),
+            };
+            var rows = plan.Select(x => new iucs.meettomanage.domain.Entities.Marketing.MarketingEvent
+            {
+                Id = Guid.NewGuid(), Type = "page_view", Path = x.Path, VisitorId = x.Visitor, Device = "desktop", Country = "IN",
+            }).ToList();
+            foreach (var row in rows) await repo.AddAsync(row);
+            await _db.UnitOfWork.SaveChangesAsync();
+            for (var i = 0; i < rows.Count; i++) rows[i].CreatedAtUtc = start.AddSeconds(plan[i].Second);
+            await _db.UnitOfWork.SaveChangesAsync();
+
+            var b = await analytics.GetSiteBehaviourAsync(1, 0, "IN");
+
+            Assert.Equal(3, b.Visitors);
+            Assert.Equal(3, b.Visits);
+            Assert.Equal(1, b.SinglePageVisits);
+            Assert.Equal([3, 0, 2, 1, 0], b.Funnel.Select(f => f.Visitors).ToArray());
+            var home = Assert.Single(b.Pages, p => p.Path == "/");
+            Assert.Equal(45, home.AvgSeconds);          // (60 + 30) / 2; B's lone view is not timed
+            Assert.Equal(33.3, home.ExitRate);          // 1 of 3 home views ended a visit
+            var pricing = Assert.Single(b.Pages, p => p.Path == "/pricing");
+            Assert.Equal(120, pricing.AvgSeconds);
+            Assert.Equal(50, pricing.ExitRate);
+
+            var assistant = new iucs.meettomanage.api.Services.HetznerSalesAssistant(
+                new NoHttpClientFactory(), new PlatformDemoRequestService(_db.UnitOfWork, _auditLog),
+                Microsoft.Extensions.Options.Options.Create(new iucs.meettomanage.application.Common.Options.HetznerAiOptions()),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<iucs.meettomanage.api.Services.HetznerSalesAssistant>.Instance);
+            var tips = await assistant.SuggestSiteImprovementsAsync(b);
+            Assert.False(tips.AiPowered);
+            Assert.Contains(tips.Improvements, t => t.Page == "/pricing" && t.Impact == "High"); // 2 saw pricing, 1 went on
+        }
+
+        [Fact]
         public void BlogDraft_IsKeptInTheBlogsOwnFormat()
         {
             var cleaned = iucs.meettomanage.api.Services.HetznerSalesAssistant.CleanDraft(

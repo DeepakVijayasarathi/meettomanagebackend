@@ -20,6 +20,8 @@ namespace iucs.meettomanage.application.Common.Interfaces
         Task<MarketingVisitorInsightDto> AnalyzeVisitorAsync(MarketingVisitorDetailDto visitor, CancellationToken cancellationToken = default);
         /// <summary>Writes a full draft for one idea, matching the house style of an existing post. The draft is only returned, never saved or published.</summary>
         Task<MarketingBlogDraftDto> WriteBlogDraftAsync(MarketingBlogDraftRequest idea, string? styleSample, CancellationToken cancellationToken = default);
+        /// <summary>From site-wide behaviour (funnel, exit rates, time on page), what visitors do and what to improve, ranked by impact.</summary>
+        Task<MarketingSiteImprovementsDto> SuggestSiteImprovementsAsync(MarketingSiteBehaviourDto behaviour, CancellationToken cancellationToken = default);
         Task<MarketingBlogIdeasDto> SuggestBlogPostsAsync(MarketingBlogIdeaEvidence evidence, CancellationToken cancellationToken = default);
     }
 }

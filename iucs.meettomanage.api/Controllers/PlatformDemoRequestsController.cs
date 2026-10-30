@@ -78,6 +78,27 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _analytics.GetVisitorJourneysAsync(days, tzOffsetMinutes, page, pageSize, country, cancellationToken, from, to));
         }
 
+        /// <summary>Marketing console → Visitors: funnel to a booking and per-page exit rate / time on page.</summary>
+        [HttpGet("analytics/behaviour")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingSiteBehaviourDto>> Behaviour(
+            [FromQuery] int days = 30, [FromQuery] int tzOffsetMinutes = 0,
+            [FromQuery] DateOnly? from = null, [FromQuery] DateOnly? to = null, [FromQuery] string? country = null,
+            CancellationToken cancellationToken = default) =>
+            Ok(await _analytics.GetSiteBehaviourAsync(days, tzOffsetMinutes, country, cancellationToken, from, to));
+
+        /// <summary>AI: how visitors behave and what to improve on the site, ranked by impact on demo bookings.</summary>
+        [HttpPost("analytics/improvements")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingSiteImprovementsDto>> Improvements(
+            [FromQuery] int days = 30, [FromQuery] int tzOffsetMinutes = 0,
+            [FromQuery] DateOnly? from = null, [FromQuery] DateOnly? to = null, [FromQuery] string? country = null,
+            CancellationToken cancellationToken = default)
+        {
+            var behaviour = await _analytics.GetSiteBehaviourAsync(days, tzOffsetMinutes, country, cancellationToken, from, to);
+            return Ok(await _salesAssistant.SuggestSiteImprovementsAsync(behaviour, cancellationToken));
+        }
+
         /// <summary>Marketing console → Journeys → one visitor: every visit, page, chat and demo request.</summary>
         [HttpGet("analytics/visitors/{visitorId}")]
         [Authorize(Roles = nameof(UserRole.Marketing))]

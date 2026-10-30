@@ -30,6 +30,10 @@ namespace iucs.meettomanage.application.Services
         /// <summary>The body of the published post whose readers acted most (else the newest), as a house-style sample for AI drafts.</summary>
         Task<string?> GetStyleSampleAsync(CancellationToken cancellationToken = default);
 
+        /// <summary>Site-wide behaviour: funnel to a booking, and per-page visitors, exit rate and time on page.</summary>
+        Task<MarketingSiteBehaviourDto> GetSiteBehaviourAsync(int days, int tzOffsetMinutes, string? country = null,
+            CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null);
+
         /// <summary>Per-visitor journeys (pages in order) for the same window, plus entry/exit pages, common paths and visit hours.</summary>
         Task<MarketingVisitorJourneysDto> GetVisitorJourneysAsync(int days, int tzOffsetMinutes, int page, int pageSize, string? country = null,
             CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null);

@@ -492,6 +492,96 @@ namespace iucs.meettomanage.api.Services
             };
         }
 
+        public async Task<MarketingSiteImprovementsDto> SuggestSiteImprovementsAsync(MarketingSiteBehaviourDto behaviour, CancellationToken cancellationToken = default)
+        {
+            var fallback = BuildImprovementsFallback(behaviour);
+            if (string.IsNullOrWhiteSpace(_options.ApiKey) || behaviour.Visitors == 0) return fallback;
+            var input = JsonSerializer.Serialize(new
+            {
+                site = "meettomanage.cloud — marketing site for Meet to Manage, academy-management SaaS for Indian academies and coaching/tuition centres. Goal: visitors book a free platform demo at /get-started (or via the AI chat). /pricing is the main buying page; /blog posts and /solutions pages educate; /customers has case studies.",
+                behaviour,
+            });
+            var messages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] =
+                    "You are a conversion-rate expert reviewing a B2B SaaS marketing site. From the aggregate behaviour only, explain how visitors behave and what to improve. " +
+                    "Use the funnel (where most visitors drop out), page exit rates (ExitRate = % of views that ended the visit), time on page (AvgSeconds) and single-page visits. " +
+                    "Each improvement must name one page, the problem seen in the numbers, and one concrete fix (copy, layout, call-to-action, link, speed, mobile, content). Rank by impact on demo bookings. " +
+                    "Never invent numbers; quote the ones given. Mention when a sample is too small to be sure. " +
+                    "Return strict JSON: {\"summary\":string,\"behaviour\":[2-4 short observations],\"improvements\":[{\"page\":string,\"problem\":string,\"fix\":string,\"impact\":\"High\"|\"Medium\"|\"Low\"}] (3-6 items)}. No markdown." },
+                new JsonObject { ["role"] = "user", ["content"] = input },
+            };
+            try
+            {
+                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
+                {
+                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.2, ["max_tokens"] = 1600, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
+                    var (status, body) = await SendAsync(model, payload, cancellationToken, LongClient);
+                    if (status != 200) continue;
+                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(content) || JsonNode.Parse(content) is not JsonObject parsed) continue;
+                    var summary = parsed["summary"]?.GetValue<string>()?.Trim();
+                    var items = new List<MarketingSiteImprovementDto>();
+                    if (parsed["improvements"] is JsonArray list)
+                    {
+                        foreach (var item in list)
+                        {
+                            var fix = item?["fix"]?.GetValue<string>()?.Trim();
+                            if (string.IsNullOrWhiteSpace(fix)) continue;
+                            var impact = item?["impact"]?.GetValue<string>()?.Trim();
+                            string Clip(string? v, int n) => (v ?? "").Trim() is var t && t.Length > n ? t[..n] : t;
+                            items.Add(new MarketingSiteImprovementDto
+                            {
+                                Page = Clip(item?["page"]?.GetValue<string>(), 200),
+                                Problem = Clip(item?["problem"]?.GetValue<string>(), 400),
+                                Fix = Clip(fix, 500),
+                                Impact = impact is "High" or "Medium" or "Low" ? impact : "Medium",
+                            });
+                        }
+                    }
+                    if (string.IsNullOrWhiteSpace(summary) || items.Count == 0) continue;
+                    return new MarketingSiteImprovementsDto
+                    {
+                        Summary = summary[..Math.Min(summary.Length, 700)],
+                        Behaviour = ReadStringArray(parsed["behaviour"] ?? parsed["behavior"]).Take(4).ToList(),
+                        Improvements = items.Take(6).ToList(),
+                        AiPowered = true,
+                    };
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException or InvalidOperationException)
+            {
+                _logger.LogWarning(ex, "Hetzner site improvements unavailable; using rule-based checks.");
+            }
+            return fallback;
+        }
+
+        /// <summary>Rule-based checks over the same numbers the AI gets.</summary>
+        private static MarketingSiteImprovementsDto BuildImprovementsFallback(MarketingSiteBehaviourDto b)
+        {
+            var items = new List<MarketingSiteImprovementDto>();
+            var visitors = Math.Max(1, b.Visitors);
+            int Step(int i) => b.Funnel.Count > i ? b.Funnel[i].Visitors : 0;
+            if (b.Visits > 0 && b.SinglePageVisits * 100 / b.Visits >= 50)
+                items.Add(new() { Page = b.Pages.FirstOrDefault()?.Path ?? "/", Problem = $"{b.SinglePageVisits} of {b.Visits} visits saw only one page.", Fix = "Add a clear next step above the fold (e.g. 'See pricing' and 'Book a free demo') and link related pages at the end.", Impact = "High" });
+            if (Step(2) * 100 / visitors < 20)
+                items.Add(new() { Page = "/", Problem = $"Only {Step(2)} of {b.Visitors} visitors looked at pricing.", Fix = "Show a pricing teaser or 'Plans from ₹…' link on the home page and blog posts.", Impact = "High" });
+            if (Step(2) > 0 && Step(3) * 100 / Math.Max(1, Step(2)) <= 50)
+                items.Add(new() { Page = "/pricing", Problem = $"{Step(2)} looked at pricing but only {Step(3)} opened Get Started or Demo.", Fix = "Put a 'Book a free 30-minute demo' button next to each plan and answer the top pricing questions on the page.", Impact = "High" });
+            foreach (var page in b.Pages.Where(p => p.Views >= 5 && p.ExitRate >= 70).Take(2))
+                items.Add(new() { Page = page.Path, Problem = $"{page.ExitRate:0}% of views ended the visit here.", Fix = "End the page with one strong call-to-action and two related links.", Impact = "Medium" });
+            if (b.ChatVisitors * 100 / visitors < 5)
+                items.Add(new() { Page = "/", Problem = $"Only {b.ChatVisitors} of {b.Visitors} visitors used the chat.", Fix = "Make the chat prompt specific ('Ask about fees or a free demo') on pricing and blog pages.", Impact = "Low" });
+            if (items.Count == 0) items.Add(new() { Page = "/", Problem = "No single weak spot stands out in this period.", Fix = "Keep growing traffic; compare again over a longer range.", Impact = "Low" });
+            return new MarketingSiteImprovementsDto
+            {
+                Summary = $"{b.Visitors} visitors made {b.Visits} visits; {b.BookedVisitors} booked a demo. {b.SinglePageVisits} visits saw only one page.",
+                Behaviour = b.Funnel.Select(s => $"{s.Name}: {s.Visitors}").ToList(),
+                Improvements = items.Take(6).ToList(),
+                AiPowered = false,
+            };
+        }
+
         public async Task<MarketingBlogIdeasDto> SuggestBlogPostsAsync(MarketingBlogIdeaEvidence evidence, CancellationToken cancellationToken = default)
         {
             var fallback = BuildBlogIdeasFallback(evidence);

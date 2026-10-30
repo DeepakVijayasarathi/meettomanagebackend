@@ -658,4 +658,58 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public string Content { get; set; } = "";
         public bool AiPowered { get; set; }
     }
+
+    /// <summary>How visitors used one page in the window.</summary>
+    public class MarketingPageBehaviourDto
+    {
+        public string Path { get; set; } = "";
+        public int Visitors { get; set; }
+        public int Views { get; set; }
+        /// <summary>Visits that ended on this page.</summary>
+        public int Exits { get; set; }
+        public double ExitRate { get; set; }
+        /// <summary>Average seconds before the next page in the same visit (pages that ended a visit are not timed).</summary>
+        public int? AvgSeconds { get; set; }
+    }
+
+    public class MarketingFunnelStepDto
+    {
+        public string Name { get; set; } = "";
+        public int Visitors { get; set; }
+    }
+
+    /// <summary>Site-wide behaviour for the Visitors page and the AI "what to improve".</summary>
+    public class MarketingSiteBehaviourDto
+    {
+        public int Days { get; set; }
+        public string StartDate { get; set; } = "";
+        public string EndDate { get; set; } = "";
+        public int Visitors { get; set; }
+        public int Visits { get; set; }
+        public int SinglePageVisits { get; set; }
+        public int ReturningVisitors { get; set; }
+        public int ChatVisitors { get; set; }
+        public int BookedVisitors { get; set; }
+        public List<MarketingFunnelStepDto> Funnel { get; set; } = new();
+        public List<MarketingPageBehaviourDto> Pages { get; set; } = new();
+        public List<NamedCountDto> Devices { get; set; } = new();
+        public List<NamedCountDto> Sources { get; set; } = new();
+    }
+
+    public class MarketingSiteImprovementDto
+    {
+        public string Page { get; set; } = "";
+        public string Problem { get; set; } = "";
+        public string Fix { get; set; } = "";
+        /// <summary>"High", "Medium" or "Low".</summary>
+        public string Impact { get; set; } = "Medium";
+    }
+
+    public class MarketingSiteImprovementsDto
+    {
+        public string Summary { get; set; } = "";
+        public List<string> Behaviour { get; set; } = new();
+        public List<MarketingSiteImprovementDto> Improvements { get; set; } = new();
+        public bool AiPowered { get; set; }
+    }
 }

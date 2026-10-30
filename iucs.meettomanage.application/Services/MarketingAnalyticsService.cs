@@ -221,6 +221,97 @@ namespace iucs.meettomanage.application.Services
             return sample ?? await published.OrderByDescending(b => b.PublishedAtUtc).Select(b => b.Content).FirstOrDefaultAsync(cancellationToken);
         }
 
+        public async Task<MarketingSiteBehaviourDto> GetSiteBehaviourAsync(int days, int tzOffsetMinutes, string? country = null,
+            CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null)
+        {
+            (days, var offset, var startLocal, var endLocal, var startUtc, var endUtc) = Window(days, tzOffsetMinutes, from, to);
+            var events = await _unitOfWork.Repository<MarketingEvent>().Query()
+                .Where(e => e.CreatedAtUtc >= startUtc && e.CreatedAtUtc < endUtc)
+                .OrderBy(e => e.CreatedAtUtc)
+                .Select(e => new { e.VisitorId, e.Type, e.Path, e.CreatedAtUtc, e.Device, e.Source, e.Country })
+                .ToListAsync(cancellationToken);
+            var countryFilter = string.IsNullOrWhiteSpace(country) ? null : country.Trim().ToUpperInvariant();
+            if (countryFilter is not null)
+            {
+                var keep = events.GroupBy(e => e.VisitorId)
+                    .Where(g => (g.Select(e => e.Country).LastOrDefault(c => c != null) ?? "?") == countryFilter)
+                    .Select(g => g.Key).ToHashSet();
+                events = events.Where(e => keep.Contains(e.VisitorId)).ToList();
+            }
+            var booked = (await _unitOfWork.Repository<PlatformDemoRequest>().Query()
+                    .Where(r => r.VisitorId != null && r.CreatedAtUtc >= startUtc && r.CreatedAtUtc < endUtc)
+                    .Select(r => r.VisitorId!).ToListAsync(cancellationToken))
+                .ToHashSet();
+
+            // Split each visitor's page views into visits (30-minute gaps).
+            var visits = new List<List<(string Path, DateTime At)>>();
+            foreach (var g in events.Where(e => e.Type == MarketingEvent.PageView).GroupBy(e => e.VisitorId))
+            {
+                List<(string Path, DateTime At)>? current = null;
+                foreach (var e in g)
+                {
+                    if (current is null || e.CreatedAtUtc - current[^1].At > VisitGap) { current = []; visits.Add(current); }
+                    current.Add((e.Path, e.CreatedAtUtc));
+                }
+            }
+
+            var timed = new Dictionary<string, List<double>>();
+            var exits = new Dictionary<string, int>();
+            foreach (var visit in visits)
+            {
+                for (var i = 0; i < visit.Count - 1; i++)
+                {
+                    var seconds = (visit[i + 1].At - visit[i].At).TotalSeconds;
+                    if (seconds is > 0 and <= 30 * 60) (timed.TryGetValue(visit[i].Path, out var l) ? l : timed[visit[i].Path] = []).Add(seconds);
+                }
+                exits[visit[^1].Path] = exits.GetValueOrDefault(visit[^1].Path) + 1;
+            }
+
+            var views = events.Where(e => e.Type == MarketingEvent.PageView).ToList();
+            var pages = views.GroupBy(e => e.Path).Select(g =>
+            {
+                var pageViews = g.Count();
+                var pageExits = exits.GetValueOrDefault(g.Key);
+                return new MarketingPageBehaviourDto
+                {
+                    Path = g.Key,
+                    Visitors = g.Select(e => e.VisitorId).Distinct().Count(),
+                    Views = pageViews,
+                    Exits = pageExits,
+                    ExitRate = Math.Round(pageExits * 100.0 / pageViews, 1),
+                    AvgSeconds = timed.TryGetValue(g.Key, out var t) && t.Count > 0 ? (int)Math.Round(t.Average()) : null,
+                };
+            }).OrderByDescending(p => p.Visitors).ThenByDescending(p => p.Views).Take(25).ToList();
+
+            var byVisitor = views.GroupBy(e => e.VisitorId).ToDictionary(g => g.Key, g => g.Select(e => e.Path).ToHashSet());
+            int Reached(Func<HashSet<string>, bool> match) => byVisitor.Count(v => match(v.Value));
+            var visitorIds = byVisitor.Keys.ToList();
+
+            return new MarketingSiteBehaviourDto
+            {
+                Days = days,
+                StartDate = startLocal.ToString("yyyy-MM-dd"),
+                EndDate = endLocal.ToString("yyyy-MM-dd"),
+                Visitors = visitorIds.Count,
+                Visits = visits.Count,
+                SinglePageVisits = visits.Count(v => v.Count == 1),
+                ReturningVisitors = views.GroupBy(e => e.VisitorId).Count(g => g.Select(e => (e.CreatedAtUtc + offset).Date).Distinct().Count() > 1),
+                ChatVisitors = events.Where(e => e.Type == MarketingEvent.ChatStarted).Select(e => e.VisitorId).Distinct().Count(),
+                BookedVisitors = visitorIds.Count(booked.Contains),
+                Funnel =
+                [
+                    new() { Name = "Visited the site", Visitors = visitorIds.Count },
+                    new() { Name = "Read a blog post or feature page", Visitors = Reached(p => p.Any(x => x.StartsWith("/blog/") || x.StartsWith("/solutions/") || x.StartsWith("/customers"))) },
+                    new() { Name = "Looked at pricing", Visitors = Reached(p => p.Contains("/pricing")) },
+                    new() { Name = "Opened Get Started or Demo", Visitors = Reached(p => p.Contains("/get-started") || p.Contains("/demo")) },
+                    new() { Name = "Booked a demo", Visitors = visitorIds.Count(booked.Contains) },
+                ],
+                Pages = pages,
+                Devices = views.GroupBy(e => e.VisitorId).Select(g => g.First().Device).GroupBy(d => d).Select(d => new NamedCountDto { Name = d.Key, Count = d.Count() }).OrderByDescending(d => d.Count).ToList(),
+                Sources = views.GroupBy(e => e.VisitorId).Select(g => SourceLabel(g.First().Source)).GroupBy(s => s).Select(s => new NamedCountDto { Name = s.Key, Count = s.Count() }).OrderByDescending(s => s.Count).Take(8).ToList(),
+            };
+        }
+
         private static readonly string[] BuyingPages = ["/pricing", "/get-started", "/demo"];
 
         public async Task<MarketingContentPerformanceDto> GetContentPerformanceAsync(int days, int tzOffsetMinutes,
