@@ -8,6 +8,7 @@ using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Common.Options;
 using iucs.meettomanage.application.Dto.Marketing;
 using iucs.meettomanage.application.Services;
+using iucs.meettomanage.domain.Enums;
 using Microsoft.Extensions.Options;
 
 namespace iucs.meettomanage.api.Services
@@ -344,6 +345,38 @@ namespace iucs.meettomanage.api.Services
             if (dashboard.TopPages.FirstOrDefault() is { } page) actions.Add($"Review the demo CTA and mobile experience on {page.Name}, the highest-traffic page.");
             if (actions.Count < 3) actions.Add("Repeat the strongest source and content combination, changing one variable at a time.");
             return new MarketingAiInsightsDto { Summary = $"{t.Visitors} visitors produced {t.DemoRequests} demo requests ({t.ConversionRate:0.#}%) during this {dashboard.Days}-day period.", Observations = [$"Visitors viewed {t.PagesPerVisitor:0.#} pages each on average.", $"{t.ChatStartRate:0.#}% started chat; {t.ChatBookings} demo requests came through chat."], NextActions = actions, AiPowered = false, GeneratedAtUtc = DateTime.UtcNow };
+        }
+
+        public async Task<MarketingLeadRecommendationDto> RecommendLeadAsync(PlatformDemoRequestDto lead, CancellationToken cancellationToken = default)
+        {
+            var fallback = new MarketingLeadRecommendationDto
+            {
+                Summary = $"{lead.LeadTemperature} lead from {lead.Source ?? "direct traffic"}; current status is {lead.Status}.",
+                NextAction = lead.Status == StoreInquiryStatus.New ? "Contact the lead today and confirm their academy's priorities." : "Complete the scheduled follow-up and update the outcome.",
+                SuggestedChannel = string.IsNullOrWhiteSpace(lead.Phone) ? "Email" : "WhatsApp",
+                SuggestedMessage = $"Hi {lead.FullName}, thank you for your interest in Meet to Manage. When would be a convenient time for a short platform walkthrough?",
+                AiPowered = false,
+            };
+            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            var messages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] = "You are a B2B SaaS sales coach. Use only the supplied lead data. Return strict JSON with summary, nextAction, suggestedChannel (WhatsApp, Email, or Call), and suggestedMessage. Keep the message respectful and under 70 words. Do not invent facts." },
+                new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(new { lead.FullName, lead.AcademyName, lead.Message, lead.Status, lead.Source, lead.Campaign, lead.LeadScore, lead.LeadTemperature, lead.LastContactedAtUtc, lead.NextFollowUpAtUtc }) },
+            };
+            try
+            {
+                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct())
+                {
+                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.2, ["max_tokens"] = 700, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
+                    var (status, body) = await SendAsync(model, payload, cancellationToken); if (status != 200) continue;
+                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+                    var json = string.IsNullOrWhiteSpace(content) ? null : JsonNode.Parse(content) as JsonObject;
+                    if (json?["nextAction"]?.GetValue<string>() is { } action && json["summary"]?.GetValue<string>() is { } summary)
+                        return new MarketingLeadRecommendationDto { Summary = summary, NextAction = action, SuggestedChannel = json["suggestedChannel"]?.GetValue<string>() ?? fallback.SuggestedChannel, SuggestedMessage = json["suggestedMessage"]?.GetValue<string>() ?? fallback.SuggestedMessage, AiPowered = true };
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException) { _logger.LogWarning(ex, "Lead recommendation fallback used."); }
+            return fallback;
         }
 
         /// <summary>

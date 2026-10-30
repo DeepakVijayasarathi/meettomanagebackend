@@ -31,6 +31,7 @@ namespace iucs.meettomanage.api.Services
                 try
                 {
                     var now = DateTime.UtcNow;
+                    await RunMarketingAutomationAsync(now, stoppingToken);
                     if (now.DayOfWeek == DayOfWeek.Monday && now.Hour == 7)
                     {
                         await SendDigestAsync(stoppingToken);
@@ -43,6 +44,43 @@ namespace iucs.meettomanage.api.Services
 
                 await Task.Delay(Interval, stoppingToken);
             }
+        }
+
+        private async Task RunMarketingAutomationAsync(DateTime now, CancellationToken cancellationToken)
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+            var setting = await unitOfWork.Repository<iucs.meettomanage.domain.Entities.Marketing.MarketingReportSetting>()
+                .TrackedQuery().OrderBy(x => x.CreatedAtUtc).FirstOrDefaultAsync(cancellationToken);
+            if (setting is null) return;
+
+            var operations = scope.ServiceProvider.GetRequiredService<IMarketingOperationsService>();
+            await operations.ApplyRetentionAsync(cancellationToken);
+            var email = scope.ServiceProvider.GetRequiredService<iucs.meettomanage.application.Common.Interfaces.IEmailSender>();
+            var overdue = await unitOfWork.Repository<iucs.meettomanage.domain.Entities.Marketing.PlatformDemoRequest>().TrackedQuery()
+                .Where(x => x.ArchivedAtUtc == null && x.NextFollowUpAtUtc < now && x.Status != StoreInquiryStatus.Converted && x.Status != StoreInquiryStatus.Closed
+                    && (x.LastReminderSentAtUtc == null || x.LastReminderSentAtUtc < now.AddHours(-20)))
+                .OrderBy(x => x.NextFollowUpAtUtc).Take(100).ToListAsync(cancellationToken);
+            if (overdue.Count > 0 && !string.IsNullOrWhiteSpace(setting.RecipientEmail))
+            {
+                await email.SendAsync(setting.RecipientEmail, $"{overdue.Count} marketing follow-up(s) overdue",
+                    $"<h2>Marketing follow-ups need attention</h2><p>{overdue.Count} active lead(s) are overdue. Open the Marketing Console → Demo Requests to assign or reschedule them.</p>", cancellationToken);
+                foreach (var lead in overdue) lead.LastReminderSentAtUtc = now;
+            }
+
+            var localNow = now.AddMinutes(330);
+            var due = setting.Enabled && localNow.Hour == 8 && (setting.LastSentAtUtc is null ||
+                (setting.Frequency == "Daily" ? setting.LastSentAtUtc.Value.Date < now.Date : setting.LastSentAtUtc.Value < now.AddDays(-6)));
+            if (due && !string.IsNullOrWhiteSpace(setting.RecipientEmail))
+            {
+                var analytics = scope.ServiceProvider.GetRequiredService<IMarketingAnalyticsService>();
+                var dashboard = await analytics.GetDashboardAsync(setting.Frequency == "Daily" ? 1 : 7, 330, cancellationToken);
+                var t = dashboard.Totals;
+                await email.SendAsync(setting.RecipientEmail, $"{setting.Frequency} marketing performance report",
+                    $"<h2>Marketing performance</h2><p><b>{t.Visitors}</b> visitors · <b>{t.DemoRequests}</b> demo requests · <b>{t.ConversionRate:0.#}%</b> visitor-to-demo · <b>{t.DemoPipelineConversionRate:0.#}%</b> demo-to-won.</p><p>Overdue follow-ups: {overdue.Count}.</p>", cancellationToken);
+                setting.LastSentAtUtc = now;
+            }
+            await unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
         private async Task SendDigestAsync(CancellationToken cancellationToken)

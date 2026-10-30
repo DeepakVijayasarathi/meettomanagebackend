@@ -1,4 +1,5 @@
 using iucs.meettomanage.application.Dto.Marketing;
+using iucs.meettomanage.application.Dto.Common;
 using iucs.meettomanage.domain.Enums;
 
 namespace iucs.meettomanage.application.Services
@@ -17,5 +18,9 @@ namespace iucs.meettomanage.application.Services
 
         Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
         Task<PlatformDemoRequestDto> UpdateAsync(Guid id, UpdatePlatformDemoRequestRequest request, CancellationToken cancellationToken = default);
+        Task<PagedResult<PlatformDemoRequestDto>> ListPagedAsync(MarketingLeadQuery query, CancellationToken cancellationToken = default);
+        Task<MarketingLeadDetailDto> GetAsync(Guid id, CancellationToken cancellationToken = default);
+        Task BulkUpdateAsync(BulkMarketingLeadRequest request, CancellationToken cancellationToken = default);
+        Task RestoreAsync(Guid id, CancellationToken cancellationToken = default);
     }
 }

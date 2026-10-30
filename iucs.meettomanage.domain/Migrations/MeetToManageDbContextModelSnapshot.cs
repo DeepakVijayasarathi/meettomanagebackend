@@ -3276,6 +3276,73 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("blog_posts");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingCampaignBudget", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Campaign")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("campaign");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("character varying(3)")
+                        .HasColumnName("currency");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date")
+                        .HasColumnName("end_date");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<decimal>("Spend")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("spend");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date")
+                        .HasColumnName("start_date");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<decimal?>("WonRevenue")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("won_revenue");
+
+                    b.HasKey("Id")
+                        .HasName("pk_marketing_campaign_budgets");
+
+                    b.ToTable("marketing_campaign_budgets");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingEvent", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3288,14 +3355,14 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(100)")
                         .HasColumnName("campaign");
 
-                    b.Property<DateTime>("CreatedAtUtc")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at_utc");
-
                     b.Property<string>("Country")
                         .HasMaxLength(2)
                         .HasColumnType("character varying(2)")
                         .HasColumnName("country");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
 
                     b.Property<DateTime?>("DeletedAtUtc")
                         .HasColumnType("timestamp with time zone")
@@ -3352,17 +3419,121 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("marketing_events");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingLeadActivity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<string>("Detail")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("detail");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid>("PlatformDemoRequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("platform_demo_request_id");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("type");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_marketing_lead_activities");
+
+                    b.HasIndex("PlatformDemoRequestId")
+                        .HasDatabaseName("ix_marketing_lead_activities_platform_demo_request_id");
+
+                    b.ToTable("marketing_lead_activities");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingReportSetting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("enabled");
+
+                    b.Property<string>("Frequency")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("frequency");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<DateTime?>("LastSentAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_sent_at_utc");
+
+                    b.Property<string>("RecipientEmail")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("recipient_email");
+
+                    b.Property<int>("RetentionDays")
+                        .HasColumnType("integer")
+                        .HasColumnName("retention_days");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_marketing_report_settings");
+
+                    b.ToTable("marketing_report_settings");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.PlatformDemoRequest", b =>
                 {
-                    b.Property<string>("AssignedTo").HasMaxLength(150).HasColumnType("character varying(150)").HasColumnName("assigned_to");
-                    b.Property<string>("Campaign").HasMaxLength(100).HasColumnType("character varying(100)").HasColumnName("campaign");
-                    b.Property<string>("InternalNotes").HasMaxLength(1000).HasColumnType("character varying(1000)").HasColumnName("internal_notes");
-                    b.Property<DateTime?>("LastContactedAtUtc").HasColumnType("timestamp with time zone").HasColumnName("last_contacted_at_utc");
-                    b.Property<string>("LandingPath").HasMaxLength(200).HasColumnType("character varying(200)").HasColumnName("landing_path");
-                    b.Property<string>("Medium").HasMaxLength(100).HasColumnType("character varying(100)").HasColumnName("medium");
-                    b.Property<DateTime?>("NextFollowUpAtUtc").HasColumnType("timestamp with time zone").HasColumnName("next_follow_up_at_utc");
-                    b.Property<string>("Source").HasMaxLength(100).HasColumnType("character varying(100)").HasColumnName("source");
-                    b.Property<string>("VisitorId").HasMaxLength(100).HasColumnType("character varying(100)").HasColumnName("visitor_id");
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")
@@ -3373,6 +3544,24 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasMaxLength(150)
                         .HasColumnType("character varying(150)")
                         .HasColumnName("academy_name");
+
+                    b.Property<DateTime?>("ArchivedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("archived_at_utc");
+
+                    b.Property<string>("AssignedTo")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("assigned_to");
+
+                    b.Property<Guid?>("AssignedToUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("assigned_to_user_id");
+
+                    b.Property<string>("Campaign")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("campaign");
 
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone")
@@ -3392,20 +3581,52 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(150)")
                         .HasColumnName("full_name");
 
+                    b.Property<string>("InternalNotes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("internal_notes");
+
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean")
                         .HasColumnName("is_deleted");
+
+                    b.Property<string>("LandingPath")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("landing_path");
+
+                    b.Property<DateTime?>("LastContactedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_contacted_at_utc");
+
+                    b.Property<DateTime?>("LastReminderSentAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_reminder_sent_at_utc");
+
+                    b.Property<string>("Medium")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("medium");
 
                     b.Property<string>("Message")
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)")
                         .HasColumnName("message");
 
+                    b.Property<DateTime?>("NextFollowUpAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_follow_up_at_utc");
+
                     b.Property<string>("Phone")
                         .IsRequired()
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
                         .HasColumnName("phone");
+
+                    b.Property<string>("Source")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("source");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -3421,6 +3642,11 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("updated_by");
 
+                    b.Property<string>("VisitorId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("visitor_id");
+
                     b.Property<string>("WorkEmail")
                         .IsRequired()
                         .HasMaxLength(256)
@@ -3429,6 +3655,15 @@ namespace iucs.meettomanage.domain.Migrations
 
                     b.HasKey("Id")
                         .HasName("pk_platform_demo_requests");
+
+                    b.HasIndex("ArchivedAtUtc")
+                        .HasDatabaseName("ix_platform_demo_requests_archived_at_utc");
+
+                    b.HasIndex("AssignedToUserId")
+                        .HasDatabaseName("ix_platform_demo_requests_assigned_to_user_id");
+
+                    b.HasIndex("NextFollowUpAtUtc")
+                        .HasDatabaseName("ix_platform_demo_requests_next_follow_up_at_utc");
 
                     b.ToTable("platform_demo_requests");
                 });
@@ -6742,6 +6977,18 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("AuthorUser");
 
                     b.Navigation("SupportTicket");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingLeadActivity", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Marketing.PlatformDemoRequest", "PlatformDemoRequest")
+                        .WithMany()
+                        .HasForeignKey("PlatformDemoRequestId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_marketing_lead_activities_platform_demo_requests_platform_dem");
+
+                    b.Navigation("PlatformDemoRequest");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Notes.FloatingNote", b =>

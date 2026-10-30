@@ -1,6 +1,8 @@
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 using iucs.meettomanage.domain.Entities.Common;
 using iucs.meettomanage.domain.Enums;
+using Microsoft.EntityFrameworkCore;
 
 namespace iucs.meettomanage.domain.Entities.Marketing
 {
@@ -10,6 +12,9 @@ namespace iucs.meettomanage.domain.Entities.Marketing
     /// Admission.DemoBooking, which is a free trial CLASS an existing academy's own
     /// parent books for their child; this is a B2B sales lead, not a class attendee.
     /// </summary>
+    [Index(nameof(ArchivedAtUtc))]
+    [Index(nameof(AssignedToUserId))]
+    [Index(nameof(NextFollowUpAtUtc))]
     public class PlatformDemoRequest : AuditEntity
     {
         [MaxLength(150)]
@@ -38,5 +43,10 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         public DateTime? NextFollowUpAtUtc { get; set; }
         public DateTime? LastContactedAtUtc { get; set; }
         [MaxLength(1000)] public string? InternalNotes { get; set; }
+        public Guid? AssignedToUserId { get; set; }
+        public DateTime? ArchivedAtUtc { get; set; }
+        public DateTime? LastReminderSentAtUtc { get; set; }
+        [NotMapped] public bool IsDuplicate { get; set; }
+        [NotMapped] public int EngagementScoreBoost { get; set; }
     }
 }

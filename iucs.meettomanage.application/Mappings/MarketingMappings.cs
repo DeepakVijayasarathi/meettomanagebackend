@@ -25,6 +25,9 @@ namespace iucs.meettomanage.application.Mappings
                 NextFollowUpAtUtc = request.NextFollowUpAtUtc,
                 LastContactedAtUtc = request.LastContactedAtUtc,
                 InternalNotes = request.InternalNotes,
+                AssignedToUserId = request.AssignedToUserId,
+                ArchivedAtUtc = request.ArchivedAtUtc,
+                IsDuplicate = request.IsDuplicate,
                 LeadScore = LeadScore(request),
                 LeadTemperature = LeadScore(request) >= 70 ? "Hot" : LeadScore(request) >= 40 ? "Warm" : "Cold",
             };
@@ -39,6 +42,8 @@ namespace iucs.meettomanage.application.Mappings
             if (request.Status == iucs.meettomanage.domain.Enums.StoreInquiryStatus.Contacted) score += 15;
             if (request.Status == iucs.meettomanage.domain.Enums.StoreInquiryStatus.Converted) score = 100;
             if (request.Status == iucs.meettomanage.domain.Enums.StoreInquiryStatus.Closed) score = 0;
+            score += request.EngagementScoreBoost;
+            if (request.CreatedAtUtc > DateTime.UtcNow.AddDays(-3)) score += 10;
             return Math.Clamp(score, 0, 100);
         }
 

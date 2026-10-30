@@ -80,6 +80,10 @@ public class HetznerSalesAssistantTests
         public Task<PlatformDemoRequestDto> UpdateStatusAsync(Guid id, UpdatePlatformDemoRequestStatusRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task DeleteAsync(Guid id, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<PlatformDemoRequestDto> UpdateAsync(Guid id, UpdatePlatformDemoRequestRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<iucs.meettomanage.application.Dto.Common.PagedResult<PlatformDemoRequestDto>> ListPagedAsync(MarketingLeadQuery query, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<MarketingLeadDetailDto> GetAsync(Guid id, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task BulkUpdateAsync(BulkMarketingLeadRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task RestoreAsync(Guid id, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class FakeHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory

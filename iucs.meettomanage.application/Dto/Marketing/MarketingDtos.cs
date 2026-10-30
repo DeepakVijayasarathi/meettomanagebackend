@@ -62,6 +62,8 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int LeadScore { get; set; }
         public string LeadTemperature { get; set; } = null!;
         public bool IsDuplicate { get; set; }
+        public Guid? AssignedToUserId { get; set; }
+        public DateTime? ArchivedAtUtc { get; set; }
     }
 
     public class UpdatePlatformDemoRequestStatusRequest
@@ -76,6 +78,83 @@ namespace iucs.meettomanage.application.Dto.Marketing
         [MaxLength(150)] public string? AssignedTo { get; set; }
         public DateTime? NextFollowUpAtUtc { get; set; }
         [MaxLength(1000)] public string? InternalNotes { get; set; }
+        public Guid? AssignedToUserId { get; set; }
+    }
+
+    public class MarketingLeadActivityDto
+    {
+        public Guid Id { get; set; }
+        public string Type { get; set; } = null!;
+        public string Detail { get; set; } = null!;
+        public DateTime CreatedAtUtc { get; set; }
+    }
+
+    public class MarketingLeadDetailDto
+    {
+        public PlatformDemoRequestDto Lead { get; set; } = new();
+        public List<MarketingLeadActivityDto> Activity { get; set; } = new();
+    }
+
+    public class MarketingLeadQuery
+    {
+        public int Page { get; set; } = 1;
+        public int PageSize { get; set; } = 25;
+        public string? Search { get; set; }
+        public StoreInquiryStatus? Status { get; set; }
+        public string? Source { get; set; }
+        public Guid? AssignedToUserId { get; set; }
+        public bool OverdueOnly { get; set; }
+        public bool ArchivedOnly { get; set; }
+    }
+
+    public class BulkMarketingLeadRequest
+    {
+        [Required, MinLength(1), MaxLength(200)] public List<Guid> Ids { get; set; } = [];
+        public StoreInquiryStatus? Status { get; set; }
+        public Guid? AssignedToUserId { get; set; }
+        public DateTime? NextFollowUpAtUtc { get; set; }
+        public bool Archive { get; set; }
+    }
+
+    public class MarketingLeadRecommendationDto
+    {
+        public string Summary { get; set; } = null!;
+        public string NextAction { get; set; } = null!;
+        public string SuggestedChannel { get; set; } = null!;
+        public string SuggestedMessage { get; set; } = null!;
+        public bool AiPowered { get; set; }
+    }
+
+    public class MarketingCampaignBudgetDto
+    {
+        public Guid Id { get; set; }
+        [Required, MaxLength(100)] public string Campaign { get; set; } = null!;
+        [Range(0, double.MaxValue)] public decimal Spend { get; set; }
+        [Required, StringLength(3)] public string Currency { get; set; } = "INR";
+        [Range(0, double.MaxValue)] public decimal? WonRevenue { get; set; }
+        public DateOnly StartDate { get; set; }
+        public DateOnly EndDate { get; set; }
+        public int Leads { get; set; }
+        public int Converted { get; set; }
+        public decimal? CostPerLead { get; set; }
+        public decimal? CostPerAcquisition { get; set; }
+        public decimal? ReturnOnAdSpend { get; set; }
+    }
+
+    public class MarketingReportSettingDto
+    {
+        public bool Enabled { get; set; }
+        [Required, RegularExpression("^(Daily|Weekly)$")] public string Frequency { get; set; } = "Weekly";
+        [Required, EmailAddress] public string RecipientEmail { get; set; } = null!;
+        [Range(30, 730)] public int RetentionDays { get; set; } = 400;
+        public DateTime? LastSentAtUtc { get; set; }
+    }
+
+    public class MarketingTeamMemberDto
+    {
+        public Guid Id { get; set; }
+        public string Name { get; set; } = null!;
+        public string Email { get; set; } = null!;
     }
 
     // --- Blog ---

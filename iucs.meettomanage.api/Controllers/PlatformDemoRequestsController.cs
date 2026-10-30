@@ -6,6 +6,7 @@ using iucs.meettomanage.domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
+using iucs.meettomanage.application.Dto.Common;
 
 namespace iucs.meettomanage.api.Controllers
 {
@@ -101,10 +102,14 @@ namespace iucs.meettomanage.api.Controllers
     public class PlatformDemoRequestsAdminController : ControllerBase
     {
         private readonly IPlatformDemoRequestService _platformDemoRequestService;
+        private readonly IMarketingOperationsService _marketingOperations;
+        private readonly ISalesAssistant _salesAssistant;
 
-        public PlatformDemoRequestsAdminController(IPlatformDemoRequestService platformDemoRequestService)
+        public PlatformDemoRequestsAdminController(IPlatformDemoRequestService platformDemoRequestService, IMarketingOperationsService marketingOperations, ISalesAssistant salesAssistant)
         {
             _platformDemoRequestService = platformDemoRequestService;
+            _marketingOperations = marketingOperations;
+            _salesAssistant = salesAssistant;
         }
 
         [HttpGet]
@@ -114,6 +119,24 @@ namespace iucs.meettomanage.api.Controllers
             CancellationToken cancellationToken)
         {
             return Ok(await _platformDemoRequestService.ListAsync(status, cancellationToken));
+        }
+
+        [HttpGet("paged")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<PagedResult<PlatformDemoRequestDto>>> ListPaged([FromQuery] MarketingLeadQuery query, CancellationToken cancellationToken) =>
+            Ok(await _platformDemoRequestService.ListPagedAsync(query, cancellationToken));
+
+        [HttpGet("{id:guid}")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingLeadDetailDto>> Get(Guid id, CancellationToken cancellationToken) =>
+            Ok(await _platformDemoRequestService.GetAsync(id, cancellationToken));
+
+        [HttpGet("{id:guid}/recommendation")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingLeadRecommendationDto>> Recommendation(Guid id, CancellationToken cancellationToken)
+        {
+            var detail = await _platformDemoRequestService.GetAsync(id, cancellationToken);
+            return Ok(await _salesAssistant.RecommendLeadAsync(detail.Lead, cancellationToken));
         }
 
         [HttpPut("{id:guid}/status")]
@@ -138,5 +161,45 @@ namespace iucs.meettomanage.api.Controllers
         [Authorize(Roles = nameof(UserRole.Marketing))]
         public async Task<ActionResult<PlatformDemoRequestDto>> Update(Guid id, UpdatePlatformDemoRequestRequest request, CancellationToken cancellationToken) =>
             Ok(await _platformDemoRequestService.UpdateAsync(id, request, cancellationToken));
+
+        [HttpPost("bulk")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<IActionResult> Bulk(BulkMarketingLeadRequest request, CancellationToken cancellationToken)
+        {
+            await _platformDemoRequestService.BulkUpdateAsync(request, cancellationToken);
+            return NoContent();
+        }
+
+        [HttpPost("{id:guid}/restore")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<IActionResult> Restore(Guid id, CancellationToken cancellationToken)
+        {
+            await _platformDemoRequestService.RestoreAsync(id, cancellationToken);
+            return NoContent();
+        }
+
+        [HttpGet("team")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<IReadOnlyList<MarketingTeamMemberDto>>> Team(CancellationToken cancellationToken) => Ok(await _marketingOperations.TeamAsync(cancellationToken));
+
+        [HttpGet("campaigns")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<IReadOnlyList<MarketingCampaignBudgetDto>>> Campaigns(CancellationToken cancellationToken) => Ok(await _marketingOperations.ListCampaignsAsync(cancellationToken));
+
+        [HttpPut("campaigns")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingCampaignBudgetDto>> SaveCampaign(MarketingCampaignBudgetDto request, CancellationToken cancellationToken) => Ok(await _marketingOperations.SaveCampaignAsync(request, cancellationToken));
+
+        [HttpDelete("campaigns/{id:guid}")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<IActionResult> DeleteCampaign(Guid id, CancellationToken cancellationToken) { await _marketingOperations.DeleteCampaignAsync(id, cancellationToken); return NoContent(); }
+
+        [HttpGet("settings")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingReportSettingDto>> Settings(CancellationToken cancellationToken) => Ok(await _marketingOperations.GetSettingsAsync(cancellationToken));
+
+        [HttpPut("settings")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingReportSettingDto>> SaveSettings(MarketingReportSettingDto request, CancellationToken cancellationToken) => Ok(await _marketingOperations.SaveSettingsAsync(request, cancellationToken));
     }
 }

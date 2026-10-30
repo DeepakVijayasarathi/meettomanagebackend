@@ -88,6 +88,9 @@ namespace iucs.meettomanage.domain.Data
         public DbSet<PlatformDemoRequest> PlatformDemoRequests => Set<PlatformDemoRequest>();
         public DbSet<BlogPost> BlogPosts => Set<BlogPost>();
         public DbSet<MarketingEvent> MarketingEvents => Set<MarketingEvent>();
+        public DbSet<MarketingLeadActivity> MarketingLeadActivities => Set<MarketingLeadActivity>();
+        public DbSet<MarketingCampaignBudget> MarketingCampaignBudgets => Set<MarketingCampaignBudget>();
+        public DbSet<MarketingReportSetting> MarketingReportSettings => Set<MarketingReportSetting>();
 
         // Billing
         public DbSet<PaymentAccount> PaymentAccounts => Set<PaymentAccount>();

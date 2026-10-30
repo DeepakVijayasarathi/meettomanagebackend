@@ -43,13 +43,29 @@ pipeline {
             }
         }
 
+        stage('Quality Gate') {
+            steps {
+                sh '''
+                    dotnet restore iucs.meettomanage.api.sln
+                    dotnet build iucs.meettomanage.api.sln --configuration Release --no-restore
+                    dotnet test iucs.meettomanage.api.sln --configuration Release --no-build
+                '''
+            }
+        }
+
         stage('Build Docker Image') {
             steps {
+                script {
+                env.RELEASE_VERSION = "${env.BUILD_NUMBER}-${env.GIT_COMMIT.take(12)}"
                 sh """
                     docker build \
+                      --build-arg RELEASE_VERSION=${RELEASE_VERSION} \
+                      --build-arg GIT_COMMIT=${GIT_COMMIT} \
+                      -t ${IMAGE_NAME}:${RELEASE_VERSION} \
                       -t ${IMAGE_NAME}:latest \
                       -f iucs.meettomanage.api/Dockerfile .
                 """
+                }
             }
         }
 
@@ -120,7 +136,7 @@ pipeline {
                       -e Frontend__BaseUrl="${FRONTEND_BASE_URL}" \
                       -e Api__BaseUrl="${API_BASE_URL}" \
                       -e Cors__AllowedOrigins__0="${FRONTEND_BASE_URL}" \
-                      ${IMAGE_NAME}:latest
+                      ${IMAGE_NAME}:${RELEASE_VERSION}
                 """
               }
               }
@@ -134,7 +150,10 @@ pipeline {
                     docker ps | grep ${CONTAINER_NAME}
                     docker logs --tail 50 ${CONTAINER_NAME}
                     # A missing master/tenant connection fails startup, so require /health to answer.
-                    curl --fail --silent --show-error http://127.0.0.1:2200/health
+                    HEALTH_JSON=\$(curl --fail --silent --show-error http://127.0.0.1:2200/health)
+                    echo "\${HEALTH_JSON}"
+                    echo "\${HEALTH_JSON}" | grep -F '"version":"${RELEASE_VERSION}"'
+                    echo "\${HEALTH_JSON}" | grep -F '"commit":"${GIT_COMMIT}"'
                 """
             }
         }

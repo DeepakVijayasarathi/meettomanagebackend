@@ -725,7 +725,21 @@ app.MapGet("/api/tenant/resolve", (HttpContext http) => Results.Ok(new
 app.MapHub<iucs.meettomanage.api.Hubs.ClassroomHub>("/hubs/classroom");
 app.MapHub<iucs.meettomanage.api.Hubs.MonitoringHub>("/hubs/monitoring");
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok", timestampUtc = DateTime.UtcNow }));
+app.MapGet("/health", (IHostEnvironment environment) =>
+{
+    var assembly = typeof(Program).Assembly.GetName();
+    return Results.Ok(new
+    {
+        status = "ok",
+        timestampUtc = DateTime.UtcNow,
+        service = assembly.Name,
+        version = Environment.GetEnvironmentVariable("RELEASE_VERSION")
+            ?? assembly.Version?.ToString()
+            ?? "unknown",
+        commit = Environment.GetEnvironmentVariable("GIT_COMMIT") ?? "unknown",
+        environment = environment.EnvironmentName,
+    });
+}).AllowAnonymous();
 
 // Deliberately outside /api and unauthenticated -- the whole point of a short link is that
 // whoever receives it (a parent with no account, on any device) can just tap it. Redirects
