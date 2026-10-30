@@ -48,20 +48,20 @@ namespace iucs.meettomanage.application.Services
             await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
-        public async Task<MarketingDashboardDto> GetDashboardAsync(int days, int tzOffsetMinutes, CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null)
+        /// <summary>
+        /// The reporting window: the last <paramref name="days"/> local calendar days including today,
+        /// or the custom from–to range (a future end is capped at today, a reversed range swapped,
+        /// at most 183 days so a comparison window stays inside the 400-day retention).
+        /// </summary>
+        private static (int Days, TimeSpan Offset, DateTime StartLocal, DateTime EndLocal, DateTime StartUtc, DateTime EndUtc) Window(
+            int days, int tzOffsetMinutes, DateOnly? from, DateOnly? to)
         {
             days = Math.Clamp(days, 1, 90);
             var offset = TimeSpan.FromMinutes(Math.Clamp(tzOffsetMinutes, -14 * 60, 14 * 60));
-            var nowUtc = DateTime.UtcNow;
-
-            // Window = the last `days` local calendar days including today, or the custom from–to
-            // range; the previous window is the same length immediately before it.
-            var todayLocal = (nowUtc + offset).Date;
+            var todayLocal = (DateTime.UtcNow + offset).Date;
             var endLocal = todayLocal;
             if (from is { } fromDate && to is { } toDate)
             {
-                // A future end date is capped at today; a reversed range is swapped. Capped at
-                // 183 days so the comparison window stays inside the 400-day retention.
                 var a = fromDate.ToDateTime(TimeOnly.MinValue);
                 var b = toDate.ToDateTime(TimeOnly.MinValue);
                 if (b < a) (a, b) = (b, a);
@@ -70,8 +70,194 @@ namespace iucs.meettomanage.application.Services
                 days = Math.Min((int)(endLocal - a).TotalDays + 1, 183);
             }
             var startLocal = endLocal.AddDays(-(days - 1));
-            var startUtc = DateTime.SpecifyKind(startLocal - offset, DateTimeKind.Utc);
-            var endUtc = DateTime.SpecifyKind(endLocal.AddDays(1) - offset, DateTimeKind.Utc);
+            return (days, offset, startLocal, endLocal,
+                DateTime.SpecifyKind(startLocal - offset, DateTimeKind.Utc),
+                DateTime.SpecifyKind(endLocal.AddDays(1) - offset, DateTimeKind.Utc));
+        }
+
+        public async Task<MarketingVisitorJourneysDto> GetVisitorJourneysAsync(
+            int days, int tzOffsetMinutes, int page, int pageSize, string? country = null,
+            CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null)
+        {
+            (days, var offset, var startLocal, var endLocal, var startUtc, var endUtc) = Window(days, tzOffsetMinutes, from, to);
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 10, 100);
+
+            var events = await _unitOfWork.Repository<MarketingEvent>().Query()
+                .Where(e => e.CreatedAtUtc >= startUtc && e.CreatedAtUtc < endUtc)
+                .OrderBy(e => e.CreatedAtUtc)
+                .Select(e => new { e.CreatedAtUtc, e.Type, e.Path, e.VisitorId, e.Source, e.Campaign, e.Device, e.Country })
+                .ToListAsync(cancellationToken);
+            // A visitor counts as having booked when a demo request carries their visitor id.
+            var bookedVisitors = (await _unitOfWork.Repository<PlatformDemoRequest>().Query()
+                    .Where(r => r.VisitorId != null && r.CreatedAtUtc >= startUtc && r.CreatedAtUtc < endUtc)
+                    .Select(r => r.VisitorId!)
+                    .ToListAsync(cancellationToken))
+                .ToHashSet();
+
+            var visitors = events
+                .GroupBy(e => e.VisitorId)
+                .Where(g => g.Any(e => e.Type == MarketingEvent.PageView))
+                .Select(g =>
+                {
+                    var views = g.Where(e => e.Type == MarketingEvent.PageView).ToList();
+                    var first = views[0];
+                    var visitorCountry = g.Select(e => e.Country).LastOrDefault(c => c != null);
+                    return new MarketingVisitorJourneyDto
+                    {
+                        Visitor = g.Key.Length > 8 ? g.Key[^8..] : g.Key,
+                        FirstSeenUtc = first.CreatedAtUtc,
+                        LastSeenUtc = g.Last().CreatedAtUtc,
+                        Country = visitorCountry,
+                        Device = first.Device,
+                        Source = first.Source ?? "Direct",
+                        Campaign = first.Campaign,
+                        PageViews = views.Count,
+                        Pages = views.Select(e => new MarketingJourneyStepDto { Path = e.Path, AtUtc = e.CreatedAtUtc }).ToList(),
+                        StartedChat = g.Any(e => e.Type == MarketingEvent.ChatStarted),
+                        BookedDemo = bookedVisitors.Contains(g.Key),
+                        ReturnVisits = views.Select(e => (e.CreatedAtUtc + offset).Date).Distinct().Count() - 1,
+                    };
+                })
+                .ToList();
+
+            var countryFilter = string.IsNullOrWhiteSpace(country) ? null : country.Trim().ToUpperInvariant();
+            var filtered = countryFilter is null
+                ? visitors
+                : visitors.Where(v => (v.Country ?? "?") == countryFilter).ToList();
+
+            static List<NamedCountDto> Count(IEnumerable<string> names, int take) =>
+                names.GroupBy(n => n).Select(g => new NamedCountDto { Name = g.Key, Count = g.Count() })
+                    .OrderByDescending(n => n.Count).ThenBy(n => n.Name).Take(take).ToList();
+
+            var hours = new int[24];
+            foreach (var v in filtered) hours[(v.FirstSeenUtc + offset).Hour]++;
+
+            return new MarketingVisitorJourneysDto
+            {
+                Days = days,
+                StartDate = startLocal.ToString("yyyy-MM-dd"),
+                EndDate = endLocal.ToString("yyyy-MM-dd"),
+                TotalVisitors = filtered.Count,
+                SinglePageVisitors = filtered.Count(v => v.PageViews == 1),
+                ReturningVisitors = filtered.Count(v => v.ReturnVisits > 0),
+                ChatVisitors = filtered.Count(v => v.StartedChat),
+                BookedVisitors = filtered.Count(v => v.BookedDemo),
+                Countries = Count(visitors.Select(v => v.Country ?? "?"), 20),
+                EntryPages = Count(filtered.Select(v => v.Pages[0].Path), 10),
+                ExitPages = Count(filtered.Select(v => v.Pages[^1].Path), 10),
+                TopJourneys = Count(filtered.Where(v => v.PageViews > 1).Select(v => string.Join(" → ", Collapse(v.Pages.Select(p => p.Path)).Take(4))), 10),
+                VisitsByHour = hours.Select((n, h) => new NamedCountDto { Name = h.ToString("00"), Count = n }).ToList(),
+                Visitors = filtered.OrderByDescending(v => v.LastSeenUtc).Skip((page - 1) * pageSize).Take(pageSize).ToList(),
+                Page = page,
+                PageSize = pageSize,
+            };
+        }
+
+        private static readonly string[] BuyingPages = ["/pricing", "/get-started", "/demo"];
+
+        public async Task<MarketingContentPerformanceDto> GetContentPerformanceAsync(int days, int tzOffsetMinutes,
+            CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null)
+        {
+            (days, _, var startLocal, var endLocal, var startUtc, var endUtc) = Window(days, tzOffsetMinutes, from, to);
+            var views = await _unitOfWork.Repository<MarketingEvent>().Query()
+                .Where(e => e.Type == MarketingEvent.PageView && e.CreatedAtUtc >= startUtc && e.CreatedAtUtc < endUtc)
+                .OrderBy(e => e.CreatedAtUtc)
+                .Select(e => new { e.VisitorId, e.Path, e.CreatedAtUtc })
+                .ToListAsync(cancellationToken);
+            var booked = (await _unitOfWork.Repository<PlatformDemoRequest>().Query()
+                    .Where(r => r.VisitorId != null && r.CreatedAtUtc >= startUtc && r.CreatedAtUtc < endUtc)
+                    .Select(r => r.VisitorId!)
+                    .ToListAsync(cancellationToken))
+                .ToHashSet();
+            var titles = (await _unitOfWork.Repository<BlogPost>().Query().Select(b => new { b.Slug, b.Title }).ToListAsync(cancellationToken))
+                .GroupBy(b => b.Slug).ToDictionary(g => g.Key, g => g.First().Title);
+            var byVisitor = views.GroupBy(v => v.VisitorId).ToDictionary(g => g.Key, g => g.ToList());
+
+            var posts = views
+                .Where(v => v.Path.StartsWith("/blog/"))
+                .GroupBy(v => v.Path)
+                .Select(g =>
+                {
+                    var readers = g.Select(v => v.VisitorId).Distinct().ToList();
+                    int After(Func<string, bool> match) => readers.Count(r =>
+                    {
+                        var firstRead = g.Where(v => v.VisitorId == r).Min(v => v.CreatedAtUtc);
+                        return byVisitor[r].Any(v => v.CreatedAtUtc > firstRead && match(v.Path));
+                    });
+                    return new MarketingContentStatDto
+                    {
+                        Path = g.Key,
+                        Title = titles.GetValueOrDefault(g.Key["/blog/".Length..]),
+                        Readers = readers.Count,
+                        Views = g.Count(),
+                        WentOn = After(_ => true),
+                        ToBuyingPages = After(p => BuyingPages.Contains(p)),
+                        BookedDemo = readers.Count(booked.Contains),
+                    };
+                })
+                .OrderByDescending(p => p.ToBuyingPages).ThenByDescending(p => p.Readers).ThenByDescending(p => p.WentOn)
+                .ToList();
+
+            return new MarketingContentPerformanceDto
+            {
+                Days = days,
+                StartDate = startLocal.ToString("yyyy-MM-dd"),
+                EndDate = endLocal.ToString("yyyy-MM-dd"),
+                BlogReaders = views.Where(v => v.Path.StartsWith("/blog/")).Select(v => v.VisitorId).Distinct().Count(),
+                Posts = posts,
+            };
+        }
+
+        public async Task<MarketingBlogIdeaEvidence> GetBlogIdeaEvidenceAsync(int days, int tzOffsetMinutes,
+            CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null)
+        {
+            var performance = await GetContentPerformanceAsync(days, tzOffsetMinutes, cancellationToken, from, to);
+            var titles = await _unitOfWork.Repository<BlogPost>().Query()
+                .OrderByDescending(b => b.CreatedAtUtc).Select(b => b.Title).Take(200).ToListAsync(cancellationToken);
+            var since = DateTime.UtcNow.AddDays(-90);
+            var questions = await _unitOfWork.Repository<MarketingChatConversation>().Query()
+                .Where(c => c.CreatedAtUtc >= since && c.FirstMessage != "")
+                .OrderByDescending(c => c.CreatedAtUtc).Select(c => c.FirstMessage).Take(40).ToListAsync(cancellationToken);
+            return new MarketingBlogIdeaEvidence
+            {
+                Performance = performance,
+                ExistingTitles = titles,
+                VisitorQuestions = questions.Select(RedactContact).Where(q => q.Length > 0).Distinct().ToList(),
+            };
+        }
+
+        /// <summary>Removes email addresses and phone-like digit runs before visitor text leaves the system.</summary>
+        public static string RedactContact(string text)
+        {
+            var cleaned = EmailPattern().Replace(text, "[email]");
+            cleaned = PhonePattern().Replace(cleaned, "[phone]");
+            cleaned = cleaned.Trim();
+            return cleaned.Length > 200 ? cleaned[..200] : cleaned;
+        }
+
+        [GeneratedRegex(@"[^\s@]+@[^\s@]+\.[^\s@]+")]
+        private static partial Regex EmailPattern();
+
+        [GeneratedRegex(@"\+?\d[\d\s\-()]{6,}\d")]
+        private static partial Regex PhonePattern();
+
+        /// <summary>Drops immediate repeats ("/ → / → /pricing" reads as "/ → /pricing").</summary>
+        private static IEnumerable<string> Collapse(IEnumerable<string> paths)
+        {
+            string? last = null;
+            foreach (var p in paths)
+            {
+                if (p != last) yield return p;
+                last = p;
+            }
+        }
+
+        public async Task<MarketingDashboardDto> GetDashboardAsync(int days, int tzOffsetMinutes, CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null)
+        {
+            var nowUtc = DateTime.UtcNow;
+            // The previous window is the same length immediately before this one.
+            (days, var offset, var startLocal, var endLocal, var startUtc, var endUtc) = Window(days, tzOffsetMinutes, from, to);
             var previousStartUtc = startUtc.AddDays(-days);
 
             await _unitOfWork.Repository<MarketingEvent>()

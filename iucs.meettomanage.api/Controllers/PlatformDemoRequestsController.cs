@@ -62,6 +62,43 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _analytics.GetDashboardAsync(days, tzOffsetMinutes, cancellationToken, from, to));
         }
 
+        /// <summary>Marketing console → Visitors: each anonymous visitor's pages in order, and common paths.</summary>
+        [HttpGet("analytics/visitors")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingVisitorJourneysDto>> Visitors(
+            [FromQuery] int days = 30,
+            [FromQuery] int tzOffsetMinutes = 0,
+            [FromQuery] DateOnly? from = null,
+            [FromQuery] DateOnly? to = null,
+            [FromQuery] string? country = null,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 25,
+            CancellationToken cancellationToken = default)
+        {
+            return Ok(await _analytics.GetVisitorJourneysAsync(days, tzOffsetMinutes, page, pageSize, country, cancellationToken, from, to));
+        }
+
+        /// <summary>Marketing console → Blog Posts: which posts readers engage with and act on.</summary>
+        [HttpGet("analytics/content")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingContentPerformanceDto>> Content(
+            [FromQuery] int days = 30, [FromQuery] int tzOffsetMinutes = 0,
+            [FromQuery] DateOnly? from = null, [FromQuery] DateOnly? to = null,
+            CancellationToken cancellationToken = default) =>
+            Ok(await _analytics.GetContentPerformanceAsync(days, tzOffsetMinutes, cancellationToken, from, to));
+
+        /// <summary>AI: five next blog post ideas from content performance and what visitors ask the chat.</summary>
+        [HttpPost("analytics/blog-ideas")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingBlogIdeasDto>> BlogIdeas(
+            [FromQuery] int days = 90, [FromQuery] int tzOffsetMinutes = 0,
+            [FromQuery] DateOnly? from = null, [FromQuery] DateOnly? to = null,
+            CancellationToken cancellationToken = default)
+        {
+            var evidence = await _analytics.GetBlogIdeaEvidenceAsync(days, tzOffsetMinutes, cancellationToken, from, to);
+            return Ok(await _salesAssistant.SuggestBlogPostsAsync(evidence, cancellationToken));
+        }
+
         /// <summary>Hetzner AI analysis of the same anonymous, aggregate marketing dashboard data.</summary>
         [HttpGet("analytics/insights")]
         [Authorize(Roles = nameof(UserRole.Marketing))]

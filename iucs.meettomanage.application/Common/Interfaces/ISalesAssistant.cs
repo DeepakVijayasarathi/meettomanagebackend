@@ -15,5 +15,7 @@ namespace iucs.meettomanage.application.Common.Interfaces
         Task<IReadOnlyList<string>> TranslateAsync(IReadOnlyList<string> texts, string targetLanguage, CancellationToken cancellationToken = default);
         Task<MarketingAiInsightsDto> AnalyzeMarketingAsync(MarketingDashboardDto dashboard, CancellationToken cancellationToken = default);
         Task<MarketingLeadRecommendationDto> RecommendLeadAsync(PlatformDemoRequestDto lead, CancellationToken cancellationToken = default);
+        /// <summary>Five next blog post ideas from what readers engage with and what visitors ask; a rule-based fallback when AI is unavailable.</summary>
+        Task<MarketingBlogIdeasDto> SuggestBlogPostsAsync(MarketingBlogIdeaEvidence evidence, CancellationToken cancellationToken = default);
     }
 }

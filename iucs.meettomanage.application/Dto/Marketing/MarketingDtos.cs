@@ -491,4 +491,99 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public MarketingChatConversationDto Conversation { get; set; } = new();
         public List<MarketingChatMessageDto> Messages { get; set; } = new();
     }
+
+    public class MarketingJourneyStepDto
+    {
+        public string Path { get; set; } = "";
+        public DateTime AtUtc { get; set; }
+    }
+
+    /// <summary>One anonymous visitor's path through the site in the window.</summary>
+    public class MarketingVisitorJourneyDto
+    {
+        /// <summary>Last 8 characters of the random browser id — enough to tell visitors apart, identifies no one.</summary>
+        public string Visitor { get; set; } = "";
+        public DateTime FirstSeenUtc { get; set; }
+        public DateTime LastSeenUtc { get; set; }
+        public string? Country { get; set; }
+        public string Device { get; set; } = "";
+        public string Source { get; set; } = "";
+        public string? Campaign { get; set; }
+        public int PageViews { get; set; }
+        public List<MarketingJourneyStepDto> Pages { get; set; } = new();
+        public bool StartedChat { get; set; }
+        public bool BookedDemo { get; set; }
+        /// <summary>Other local days this visitor came back on within the window.</summary>
+        public int ReturnVisits { get; set; }
+    }
+
+    public class MarketingVisitorJourneysDto
+    {
+        public int Days { get; set; }
+        public string StartDate { get; set; } = "";
+        public string EndDate { get; set; } = "";
+        public int TotalVisitors { get; set; }
+        public int SinglePageVisitors { get; set; }
+        public int ReturningVisitors { get; set; }
+        public int ChatVisitors { get; set; }
+        public int BookedVisitors { get; set; }
+        /// <summary>All countries in the window (unfiltered), for the country filter.</summary>
+        public List<NamedCountDto> Countries { get; set; } = new();
+        public List<NamedCountDto> EntryPages { get; set; } = new();
+        public List<NamedCountDto> ExitPages { get; set; } = new();
+        public List<NamedCountDto> TopJourneys { get; set; } = new();
+        /// <summary>24 entries, "00"–"23" in the viewer's local time, counting visitors by arrival hour.</summary>
+        public List<NamedCountDto> VisitsByHour { get; set; } = new();
+        public List<MarketingVisitorJourneyDto> Visitors { get; set; } = new();
+        public int Page { get; set; }
+        public int PageSize { get; set; }
+    }
+
+    /// <summary>How one blog post performed with real readers in the window.</summary>
+    public class MarketingContentStatDto
+    {
+        public string Path { get; set; } = "";
+        public string? Title { get; set; }
+        public int Readers { get; set; }
+        public int Views { get; set; }
+        /// <summary>Readers who opened another page after this post.</summary>
+        public int WentOn { get; set; }
+        /// <summary>Readers who went on to /pricing, /get-started or /demo after this post.</summary>
+        public int ToBuyingPages { get; set; }
+        public int BookedDemo { get; set; }
+    }
+
+    public class MarketingContentPerformanceDto
+    {
+        public int Days { get; set; }
+        public string StartDate { get; set; } = "";
+        public string EndDate { get; set; } = "";
+        public int BlogReaders { get; set; }
+        public List<MarketingContentStatDto> Posts { get; set; } = new();
+    }
+
+    /// <summary>Everything the AI sees to suggest the next blog posts — aggregate stats and anonymised visitor questions only.</summary>
+    public class MarketingBlogIdeaEvidence
+    {
+        public MarketingContentPerformanceDto Performance { get; set; } = new();
+        /// <summary>Every existing post title (published, scheduled or draft), so ideas don't repeat them.</summary>
+        public List<string> ExistingTitles { get; set; } = new();
+        /// <summary>What visitors asked the website chat first, with phone numbers and emails removed.</summary>
+        public List<string> VisitorQuestions { get; set; } = new();
+    }
+
+    public class MarketingBlogIdeaDto
+    {
+        public string Title { get; set; } = "";
+        public string TargetKeyword { get; set; } = "";
+        public string Why { get; set; } = "";
+        public List<string> Outline { get; set; } = new();
+    }
+
+    public class MarketingBlogIdeasDto
+    {
+        public List<MarketingBlogIdeaDto> Ideas { get; set; } = new();
+        public bool AiPowered { get; set; }
+        public DateTime GeneratedAtUtc { get; set; }
+    }
 }

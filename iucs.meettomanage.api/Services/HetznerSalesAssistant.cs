@@ -323,6 +323,85 @@ namespace iucs.meettomanage.api.Services
             return fallback;
         }
 
+        public async Task<MarketingBlogIdeasDto> SuggestBlogPostsAsync(MarketingBlogIdeaEvidence evidence, CancellationToken cancellationToken = default)
+        {
+            var fallback = BuildBlogIdeasFallback(evidence);
+            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            var input = JsonSerializer.Serialize(new
+            {
+                audience = "Owners of academies and coaching/tuition centres in India (abacus, phonics, tuition, online classes) evaluating academy-management software: live classes, admissions, fee collection, parent app.",
+                window = new { evidence.Performance.StartDate, evidence.Performance.EndDate, evidence.Performance.BlogReaders },
+                postPerformance = evidence.Performance.Posts.Take(25).Select(p => new { p.Title, p.Path, p.Readers, p.WentOn, p.ToBuyingPages, p.BookedDemo }),
+                existingTitles = evidence.ExistingTitles,
+                visitorQuestions = evidence.VisitorQuestions,
+            });
+            var messages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] =
+                    "You are the content strategist for Meet to Manage, an academy-management SaaS. Suggest the next 5 blog posts. " +
+                    "Lean towards the themes whose readers went on to buying pages (ToBuyingPages) or other pages (WentOn), and towards questions visitors actually asked. " +
+                    "Never repeat or lightly reword an existing title. Each idea must target one realistic search phrase an Indian academy owner would type. " +
+                    "Samples are small: say so in 'why' when an idea rests on few readers. Do not invent statistics. " +
+                    "Return strict JSON: {\"ideas\":[{\"title\":string,\"targetKeyword\":string,\"why\":string,\"outline\":[4-6 section headings]}]}. No markdown." },
+                new JsonObject { ["role"] = "user", ["content"] = input },
+            };
+            try
+            {
+                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
+                {
+                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.5, ["max_tokens"] = 1800, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
+                    var (status, body) = await SendAsync(model, payload, cancellationToken);
+                    if (status != 200) continue;
+                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(content) || JsonNode.Parse(content)?["ideas"] is not JsonArray items) continue;
+                    var existing = evidence.ExistingTitles.Select(t => t.Trim().ToLowerInvariant()).ToHashSet();
+                    var ideas = new List<MarketingBlogIdeaDto>();
+                    foreach (var item in items)
+                    {
+                        var title = item?["title"]?.GetValue<string>()?.Trim();
+                        if (string.IsNullOrWhiteSpace(title) || existing.Contains(title.ToLowerInvariant())) continue;
+                        ideas.Add(new MarketingBlogIdeaDto
+                        {
+                            Title = title[..Math.Min(title.Length, 160)],
+                            TargetKeyword = (item?["targetKeyword"]?.GetValue<string>() ?? "").Trim() is var k && k.Length > 100 ? k[..100] : k,
+                            Why = (item?["why"]?.GetValue<string>() ?? "").Trim() is var w && w.Length > 500 ? w[..500] : w,
+                            Outline = ReadStringArray(item?["outline"]).Take(8).ToList(),
+                        });
+                    }
+                    if (ideas.Count > 0) return new MarketingBlogIdeasDto { Ideas = ideas.Take(5).ToList(), AiPowered = true, GeneratedAtUtc = DateTime.UtcNow };
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException or InvalidOperationException)
+            {
+                _logger.LogWarning(ex, "Hetzner blog suggestions unavailable; using measured-data fallback.");
+            }
+            return fallback;
+        }
+
+        /// <summary>Without AI: follow-ups to the posts that sent readers onward, plus the visitors' own questions.</summary>
+        private static MarketingBlogIdeasDto BuildBlogIdeasFallback(MarketingBlogIdeaEvidence evidence)
+        {
+            var ideas = evidence.Performance.Posts
+                .Where(p => p.Title != null && (p.ToBuyingPages > 0 || p.WentOn > 0))
+                .Take(3)
+                .Select(p => new MarketingBlogIdeaDto
+                {
+                    Title = $"Follow-up: {p.Title} — a step-by-step guide",
+                    TargetKeyword = p.Title!.ToLowerInvariant(),
+                    Why = $"{p.Readers} readers; {p.ToBuyingPages} went on to pricing/demo pages after reading it. Small sample.",
+                    Outline = ["The problem in one paragraph", "Step-by-step setup", "A worked example from an academy", "Common mistakes", "How Meet to Manage helps"],
+                })
+                .Concat(evidence.VisitorQuestions.Take(2).Select(q => new MarketingBlogIdeaDto
+                {
+                    Title = q.TrimEnd('?', '.', ' ') + "? A guide for academy owners",
+                    TargetKeyword = q.ToLowerInvariant(),
+                    Why = "A visitor asked this in the website chat.",
+                    Outline = ["The short answer", "What to look for", "Example", "Next steps"],
+                }))
+                .ToList();
+            return new MarketingBlogIdeasDto { Ideas = ideas, AiPowered = false, GeneratedAtUtc = DateTime.UtcNow };
+        }
+
         private static List<string> ReadStringArray(JsonNode? node)
         {
             if (node is not JsonArray values) return [];

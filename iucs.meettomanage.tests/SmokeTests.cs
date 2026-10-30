@@ -12317,6 +12317,64 @@ namespace iucs.meettomanage.tests
         }
 
         [Fact]
+        public async Task MarketingContentPerformance_RanksPostsByWhatReadersDidNext()
+        {
+            var analytics = new MarketingAnalyticsService(_db.UnitOfWork);
+            const string ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0";
+            Task View(string visitor, string path) => analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = path, VisitorId = visitor }, ua);
+            await View("visitor-content-1", "/blog/kpis");
+            await View("visitor-content-1", "/pricing");
+            await View("visitor-content-2", "/blog/kpis");
+            await View("visitor-content-3", "/blog/gamification");
+            await View("visitor-content-3", "/blog/kpis");
+
+            var result = await analytics.GetContentPerformanceAsync(7, 330);
+            Assert.Equal(3, result.BlogReaders);
+            var kpis = result.Posts[0];
+            Assert.Equal("/blog/kpis", kpis.Path);
+            Assert.Equal(3, kpis.Readers);
+            Assert.Equal(1, kpis.WentOn);         // only visitor 1 opened another page after it
+            Assert.Equal(1, kpis.ToBuyingPages);  // ...and that page was /pricing
+            var games = Assert.Single(result.Posts, p => p.Path == "/blog/gamification");
+            Assert.Equal(1, games.WentOn);
+            Assert.Equal(0, games.ToBuyingPages);
+
+            // Visitor text sent to the AI never carries contact details.
+            Assert.Equal("Call me on [phone] or [email] about fees", MarketingAnalyticsService.RedactContact("Call me on +91 98765 43210 or asha@x.com about fees"));
+        }
+
+        [Fact]
+        public async Task MarketingVisitorJourneys_ShowEachVisitorsPagesInOrder()
+        {
+            var analytics = new MarketingAnalyticsService(_db.UnitOfWork);
+            const string desktop = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0";
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/", VisitorId = "visitor-journey-aaaa", Country = "IN", ReferrerHost = "www.google.com" }, desktop);
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/", VisitorId = "visitor-journey-aaaa", Country = "IN" }, desktop);
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/pricing", VisitorId = "visitor-journey-aaaa", Country = "IN" }, desktop);
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "chat_started", Path = "/pricing", VisitorId = "visitor-journey-aaaa", Country = "IN" }, desktop);
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/policy", VisitorId = "visitor-journey-bbbb", Country = "US" }, desktop);
+            var demos = new PlatformDemoRequestService(_db.UnitOfWork, _auditLog);
+            await demos.CreateAsync(new CreatePlatformDemoRequestRequest { FullName = "J", WorkEmail = "j@x.com", Phone = "9000000009", AcademyName = "J Academy", VisitorId = "visitor-journey-aaaa" });
+
+            var all = await analytics.GetVisitorJourneysAsync(7, 330, 1, 25);
+            Assert.Equal(2, all.TotalVisitors);
+            Assert.Equal(1, all.SinglePageVisitors);
+            var journey = Assert.Single(all.Visitors, v => v.PageViews == 3);
+            Assert.Equal(["/", "/", "/pricing"], journey.Pages.Select(p => p.Path).ToArray());
+            Assert.Equal("aaaa", journey.Visitor[^4..]);
+            Assert.Equal("google.com", journey.Source);
+            Assert.True(journey.StartedChat);
+            Assert.True(journey.BookedDemo);
+            Assert.Equal("/ → /pricing", Assert.Single(all.TopJourneys).Name); // repeats collapsed
+            Assert.Equal(24, all.VisitsByHour.Count);
+            Assert.Equal(2, all.VisitsByHour.Sum(h => h.Count));
+
+            var us = await analytics.GetVisitorJourneysAsync(7, 330, 1, 25, "us");
+            Assert.Equal("/policy", Assert.Single(us.Visitors).Pages[0].Path);
+            Assert.Equal(2, us.Countries.Count); // the filter list always shows every country
+        }
+
+        [Fact]
         public async Task MarketingAnalytics_CountsVisitorsSourcesAndBookings_AndDropsBots()
         {
             var analytics = new MarketingAnalyticsService(_db.UnitOfWork);
