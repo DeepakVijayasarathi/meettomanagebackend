@@ -39,6 +39,7 @@ public static class TenantServices
         services.AddScoped<LoginDirectory>();
         services.AddScoped<LoginDirectoryInterceptor>();
         services.AddScoped<TenantProvisioner>();
+        services.AddScoped<TenantEraser>();
         services.AddSingleton<TenantScopeFactory>();
         services.AddHostedService<TenantHostedService<DirectoryBackgroundService>>();
     }

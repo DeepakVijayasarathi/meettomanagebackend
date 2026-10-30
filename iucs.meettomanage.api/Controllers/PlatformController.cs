@@ -166,6 +166,19 @@ public sealed class PlatformController(IConfiguration configuration, IPasswordHa
         return NoContent();
     }
 
+    public sealed class DeleteTenantRequest { [Required] public string ConfirmCode { get; set; } = ""; }
+
+    /// <summary>Permanently deletes the tenant, its database and its billing/login records. The operator must type the tenant code.</summary>
+    [HttpDelete("tenants/{id:guid}"), Authorize(Policy = "PlatformAdmin")]
+    public async Task<IActionResult> Delete(Guid id, DeleteTenantRequest request, TenantEraser eraser, CancellationToken ct)
+    {
+        var tenant = await master.Tenants.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Tenant", id);
+        if (!string.Equals(request.ConfirmCode.Trim(), tenant.Code, StringComparison.Ordinal))
+            throw new DomainValidationException("Type the client code exactly to confirm the deletion.");
+        await eraser.EraseAsync(id, ct);
+        return NoContent();
+    }
+
     public sealed class SetStatusRequest { public bool Suspended { get; set; } }
     [HttpPut("tenants/{id:guid}/status"), Authorize(Policy = "PlatformAdmin")]
     public async Task<IActionResult> SetStatus(Guid id, SetStatusRequest request, CancellationToken ct)
