@@ -24,6 +24,12 @@ namespace iucs.meettomanage.application.Services
         Task<MarketingBlogIdeaEvidence> GetBlogIdeaEvidenceAsync(int days, int tzOffsetMinutes,
             CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null);
 
+        /// <summary>One visitor's whole history: visits (30-minute gaps split them), pages in order, chats and demo requests. Null when unknown.</summary>
+        Task<MarketingVisitorDetailDto?> GetVisitorDetailAsync(string visitorId, CancellationToken cancellationToken = default);
+
+        /// <summary>The body of the published post whose readers acted most (else the newest), as a house-style sample for AI drafts.</summary>
+        Task<string?> GetStyleSampleAsync(CancellationToken cancellationToken = default);
+
         /// <summary>Per-visitor journeys (pages in order) for the same window, plus entry/exit pages, common paths and visit hours.</summary>
         Task<MarketingVisitorJourneysDto> GetVisitorJourneysAsync(int days, int tzOffsetMinutes, int page, int pageSize, string? country = null,
             CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null);

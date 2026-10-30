@@ -106,6 +106,7 @@ namespace iucs.meettomanage.application.Services
                     return new MarketingVisitorJourneyDto
                     {
                         Visitor = g.Key.Length > 8 ? g.Key[^8..] : g.Key,
+                        VisitorId = g.Key,
                         FirstSeenUtc = first.CreatedAtUtc,
                         LastSeenUtc = g.Last().CreatedAtUtc,
                         Country = visitorCountry,
@@ -152,6 +153,72 @@ namespace iucs.meettomanage.application.Services
                 Page = page,
                 PageSize = pageSize,
             };
+        }
+
+        private static readonly TimeSpan VisitGap = TimeSpan.FromMinutes(30);
+
+        public async Task<MarketingVisitorDetailDto?> GetVisitorDetailAsync(string visitorId, CancellationToken cancellationToken = default)
+        {
+            var events = await _unitOfWork.Repository<MarketingEvent>().Query()
+                .Where(e => e.VisitorId == visitorId)
+                .OrderBy(e => e.CreatedAtUtc)
+                .Select(e => new { e.CreatedAtUtc, e.Type, e.Path, e.Source, e.Campaign, e.Device, e.Country })
+                .ToListAsync(cancellationToken);
+            if (events.Count == 0) return null;
+
+            var visits = new List<MarketingVisitDto>();
+            foreach (var e in events)
+            {
+                var current = visits.LastOrDefault();
+                if (current is null || e.CreatedAtUtc - current.EndUtc > VisitGap)
+                {
+                    current = new MarketingVisitDto { StartUtc = e.CreatedAtUtc, EndUtc = e.CreatedAtUtc, Source = e.Source ?? "Direct", Campaign = e.Campaign, Device = e.Device };
+                    visits.Add(current);
+                }
+                current.EndUtc = e.CreatedAtUtc;
+                if (e.Type == MarketingEvent.PageView) current.Pages.Add(new MarketingJourneyStepDto { Path = e.Path, AtUtc = e.CreatedAtUtc });
+                else if (e.Type == MarketingEvent.ChatStarted) current.StartedChat = true;
+            }
+
+            var leads = await _unitOfWork.Repository<PlatformDemoRequest>().Query()
+                .Where(r => r.VisitorId == visitorId)
+                .OrderBy(r => r.CreatedAtUtc)
+                .Select(r => new MarketingVisitorLeadDto { Id = r.Id, FullName = r.FullName, AcademyName = r.AcademyName, Status = r.Status.ToString(), CreatedAtUtc = r.CreatedAtUtc })
+                .ToListAsync(cancellationToken);
+            var chats = await _unitOfWork.Repository<MarketingChatConversation>().Query()
+                .Where(c => c.VisitorId == visitorId)
+                .OrderBy(c => c.CreatedAtUtc)
+                .Select(c => new MarketingChatConversationDto
+                {
+                    Id = c.Id, StartedAtUtc = c.CreatedAtUtc, LastMessageAtUtc = c.LastMessageAtUtc, MessageCount = c.MessageCount,
+                    FirstMessage = c.FirstMessage, Source = c.Source, Campaign = c.Campaign, LandingPath = c.LandingPath, BookedName = c.BookedName,
+                })
+                .ToListAsync(cancellationToken);
+
+            var views = events.Where(e => e.Type == MarketingEvent.PageView).ToList();
+            return new MarketingVisitorDetailDto
+            {
+                VisitorId = visitorId,
+                Visitor = visitorId.Length > 8 ? visitorId[^8..] : visitorId,
+                FirstSeenUtc = events[0].CreatedAtUtc,
+                LastSeenUtc = events[^1].CreatedAtUtc,
+                Country = events.Select(e => e.Country).LastOrDefault(c => c != null),
+                PageViews = views.Count,
+                DistinctPages = views.Select(e => e.Path).Distinct().Count(),
+                Visits = visits.Where(v => v.Pages.Count > 0 || v.StartedChat).OrderByDescending(v => v.StartUtc).ToList(),
+                DemoRequests = leads,
+                Chats = chats,
+            };
+        }
+
+        public async Task<string?> GetStyleSampleAsync(CancellationToken cancellationToken = default)
+        {
+            var best = (await GetContentPerformanceAsync(90, 0, cancellationToken)).Posts.FirstOrDefault()?.Path;
+            var slug = best?["/blog/".Length..];
+            var now = DateTime.UtcNow;
+            var published = _unitOfWork.Repository<BlogPost>().Query().Where(b => b.IsPublished && b.PublishedAtUtc <= now);
+            var sample = slug is null ? null : await published.Where(b => b.Slug == slug).Select(b => b.Content).FirstOrDefaultAsync(cancellationToken);
+            return sample ?? await published.OrderByDescending(b => b.PublishedAtUtc).Select(b => b.Content).FirstOrDefaultAsync(cancellationToken);
         }
 
         private static readonly string[] BuyingPages = ["/pricing", "/get-started", "/demo"];

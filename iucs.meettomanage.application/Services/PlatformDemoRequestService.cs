@@ -205,15 +205,55 @@ namespace iucs.meettomanage.application.Services
         private async Task Enrich(List<PlatformDemoRequest> rows, CancellationToken cancellationToken)
         {
             var visitorIds = rows.Where(x => x.VisitorId != null).Select(x => x.VisitorId!).Distinct().ToList();
-            var engagement = await _unitOfWork.Repository<MarketingEvent>().Query().Where(x => visitorIds.Contains(x.VisitorId))
-                .GroupBy(x => x.VisitorId).Select(g => new { VisitorId = g.Key, Views = g.Count(x => x.Type == MarketingEvent.PageView), Chats = g.Count(x => x.Type == MarketingEvent.ChatStarted) }).ToDictionaryAsync(x => x.VisitorId, cancellationToken);
+            var journeys = (await _unitOfWork.Repository<MarketingEvent>().Query().Where(x => visitorIds.Contains(x.VisitorId))
+                    .Select(x => new JourneyEvent(x.VisitorId, x.Type, x.Path, x.CreatedAtUtc)).ToListAsync(cancellationToken))
+                .GroupBy(x => x.VisitorId).ToDictionary(g => g.Key, g => g.ToList());
             var duplicates = await _unitOfWork.Repository<PlatformDemoRequest>().Query().Where(x => rows.Select(r => r.WorkEmail).Contains(x.WorkEmail) || rows.Select(r => r.Phone).Contains(x.Phone)).ToListAsync(cancellationToken);
             foreach (var row in rows)
             {
                 row.IsDuplicate = duplicates.Count(x => x.Id != row.Id && (x.WorkEmail == row.WorkEmail || x.Phone == row.Phone)) > 0;
-                if (row.VisitorId is not null && engagement.TryGetValue(row.VisitorId, out var e)) row.EngagementScoreBoost = Math.Min(25, e.Views * 3 + e.Chats * 10);
+                if (row.VisitorId is not null && journeys.TryGetValue(row.VisitorId, out var events))
+                    (row.EngagementScoreBoost, row.EngagementReasons) = JourneyScore(events, row.CreatedAtUtc);
             }
         }
+
+        private sealed record JourneyEvent(string VisitorId, string Type, string Path, DateTime AtUtc);
+
+        private static readonly string[] BuyingPages = ["/pricing", "/get-started", "/demo"];
+
+        /// <summary>
+        /// Up to 40 points from what the lead did on the website (before and after submitting):
+        /// studying buying pages, coming back on other days, exploring several pages, and chatting.
+        /// A visitor who only reloaded the home page earns little; one who compared pricing twice earns a lot.
+        /// </summary>
+        public static (int Points, List<string> Reasons) JourneyScore(IEnumerable<(string Type, string Path, DateTime AtUtc)> events, DateTime leadCreatedUtc)
+        {
+            var list = events.ToList();
+            var views = list.Where(e => e.Type == MarketingEvent.PageView).ToList();
+            var reasons = new List<string>();
+            var points = 0;
+
+            var buying = views.Select(v => v.Path).Where(p => BuyingPages.Contains(p)).Distinct().ToList();
+            if (buying.Contains("/pricing")) { points += 12; reasons.Add("Looked at pricing"); }
+            var otherBuying = buying.Count(p => p != "/pricing");
+            if (otherBuying > 0) { points += 6; reasons.Add("Visited the demo pages"); }
+
+            var days = views.Select(v => v.AtUtc.Date).Distinct().Count();
+            if (days > 1) { points += Math.Min(16, (days - 1) * 8); reasons.Add($"Came back on {days - 1} other day{(days > 2 ? "s" : "")}"); }
+
+            var pages = views.Select(v => v.Path).Distinct().Count();
+            if (pages >= 4) { points += 6; reasons.Add($"Explored {pages} different pages"); }
+            else if (pages >= 2) points += 2;
+
+            if (list.Any(e => e.Type == MarketingEvent.ChatStarted)) { points += 10; reasons.Add("Used the website chat"); }
+
+            if (views.Any(v => v.AtUtc > leadCreatedUtc.AddMinutes(30))) { points += 6; reasons.Add("Returned to the site after requesting a demo"); }
+
+            return (Math.Min(40, points), reasons);
+        }
+
+        private static (int, List<string>) JourneyScore(List<JourneyEvent> events, DateTime leadCreatedUtc) =>
+            JourneyScore(events.Select(e => (e.Type, e.Path, e.AtUtc)), leadCreatedUtc);
 
         private Task AddActivity(Guid leadId, string type, string detail, CancellationToken cancellationToken) =>
             _unitOfWork.Repository<MarketingLeadActivity>().AddAsync(new MarketingLeadActivity { Id = Guid.NewGuid(), PlatformDemoRequestId = leadId, Type = type, Detail = detail }, cancellationToken);

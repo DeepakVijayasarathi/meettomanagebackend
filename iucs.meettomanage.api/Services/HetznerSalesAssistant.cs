@@ -323,6 +323,175 @@ namespace iucs.meettomanage.api.Services
             return fallback;
         }
 
+        public async Task<MarketingVisitorInsightDto> AnalyzeVisitorAsync(MarketingVisitorDetailDto visitor, CancellationToken cancellationToken = default)
+        {
+            var fallback = BuildVisitorFallback(visitor);
+            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            // Anonymous behaviour only: no names, emails, phones or academy names leave the system.
+            var input = JsonSerializer.Serialize(new
+            {
+                product = "Meet to Manage: academy-management SaaS for Indian academies and coaching/tuition centres (live classes, admissions, fee collection, parent app). Buying pages: /pricing, /get-started (request a platform demo), /demo.",
+                visitor.Country,
+                firstSeen = visitor.FirstSeenUtc,
+                lastSeen = visitor.LastSeenUtc,
+                visits = visitor.Visits.OrderBy(v => v.StartUtc).Select(v => new
+                {
+                    start = v.StartUtc, minutes = Math.Round((v.EndUtc - v.StartUtc).TotalMinutes), v.Source, v.Campaign, v.Device, v.StartedChat,
+                    pages = v.Pages.Select(p => p.Path),
+                }),
+                chats = visitor.Chats.Select(c => new { firstQuestion = MarketingAnalyticsService.RedactContact(c.FirstMessage), c.MessageCount, booked = c.BookedName != null }),
+                demoRequests = visitor.DemoRequests.Select(r => new { r.Status, r.CreatedAtUtc }),
+            });
+            var messages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] =
+                    "You are a B2B marketer for Meet to Manage. Read one anonymous visitor's website behaviour and say what they care about and what marketing should do next. " +
+                    "Use only the evidence; never invent identity, company, budget or statistics. Intent: Hot = visited buying pages or requested a demo, or several return visits with buying pages; Warm = several pages or a return visit or a chat; Cold = one short visit. " +
+                    "Next actions must be concrete marketing moves (e.g. retarget with a specific post, follow up a demo request within a time, improve a specific page the visitor left from), 2-4 items. " +
+                    "Return strict JSON: {\"summary\":string,\"interests\":[2-4 short phrases],\"intent\":\"Hot\"|\"Warm\"|\"Cold\",\"intentReason\":string,\"nextActions\":[strings]}. No markdown." },
+                new JsonObject { ["role"] = "user", ["content"] = input },
+            };
+            try
+            {
+                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
+                {
+                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.2, ["max_tokens"] = 900, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
+                    var (status, body) = await SendAsync(model, payload, cancellationToken);
+                    if (status != 200) continue;
+                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(content) || JsonNode.Parse(content) is not JsonObject parsed) continue;
+                    var summary = parsed["summary"]?.GetValue<string>()?.Trim();
+                    var intent = parsed["intent"]?.GetValue<string>()?.Trim();
+                    var actions = ReadStringArray(parsed["nextActions"] ?? parsed["next_actions"]);
+                    if (string.IsNullOrWhiteSpace(summary) || actions.Count == 0) continue;
+                    return new MarketingVisitorInsightDto
+                    {
+                        Summary = summary[..Math.Min(summary.Length, 600)],
+                        Interests = ReadStringArray(parsed["interests"]).Take(4).ToList(),
+                        Intent = intent is "Hot" or "Warm" or "Cold" ? intent : fallback.Intent,
+                        IntentReason = (parsed["intentReason"]?.GetValue<string>() ?? fallback.IntentReason).Trim() is var why && why.Length > 400 ? why[..400] : why,
+                        NextActions = actions.Take(4).ToList(),
+                        AiPowered = true,
+                    };
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException or InvalidOperationException)
+            {
+                _logger.LogWarning(ex, "Hetzner visitor analysis unavailable; using rule-based read.");
+            }
+            return fallback;
+        }
+
+        /// <summary>Rule-based read of a visitor from the same signals the AI gets.</summary>
+        private static MarketingVisitorInsightDto BuildVisitorFallback(MarketingVisitorDetailDto v)
+        {
+            var paths = v.Visits.SelectMany(x => x.Pages).Select(p => p.Path).ToList();
+            var buying = paths.Any(p => p is "/pricing" or "/get-started" or "/demo");
+            var chatted = v.Chats.Count > 0 || v.Visits.Any(x => x.StartedChat);
+            var booked = v.DemoRequests.Count > 0;
+            var visits = v.Visits.Count;
+            var intent = booked || (buying && visits > 1) ? "Hot" : buying || chatted || visits > 1 || paths.Count >= 3 ? "Warm" : "Cold";
+            var interests = new List<string>();
+            if (paths.Any(p => p == "/pricing")) interests.Add("Pricing");
+            if (paths.Any(p => p is "/get-started" or "/demo")) interests.Add("Seeing a demo");
+            if (paths.Any(p => p.StartsWith("/blog/"))) interests.Add("Blog: " + string.Join(", ", paths.Where(p => p.StartsWith("/blog/")).Distinct().Take(2).Select(p => p["/blog/".Length..].Replace('-', ' '))));
+            if (paths.Any(p => p.StartsWith("/solutions/"))) interests.Add("Product features");
+            if (paths.Any(p => p.StartsWith("/customers"))) interests.Add("Customer proof");
+            var actions = new List<string>();
+            if (booked) actions.Add("Follow up the demo request today and confirm a time.");
+            else if (buying) actions.Add("They looked at buying pages without booking: make the demo offer clearer on " + paths.Last(p => p is "/pricing" or "/get-started" or "/demo") + ".");
+            if (paths.Count > 0) actions.Add($"They left from {paths[^1]} — check that page ends with a clear next step.");
+            if (paths.Any(p => p.StartsWith("/blog/"))) actions.Add("Retarget blog readers with a related post that links to /get-started.");
+            if (actions.Count == 0) actions.Add("Single short visit: nothing to act on for this visitor alone.");
+            return new MarketingVisitorInsightDto
+            {
+                Summary = $"{visits} visit(s), {paths.Count} page views across {paths.Distinct().Count()} pages{(chatted ? ", used the chat" : "")}{(booked ? ", requested a demo" : "")}.",
+                Interests = interests.Count > 0 ? interests : ["Home page only"],
+                Intent = intent,
+                IntentReason = booked ? "Requested a demo." : buying ? "Visited pricing or demo pages." : chatted ? "Started a chat." : visits > 1 ? "Came back more than once." : "One short visit.",
+                NextActions = actions,
+                AiPowered = false,
+            };
+        }
+
+        public async Task<MarketingBlogDraftDto> WriteBlogDraftAsync(MarketingBlogDraftRequest idea, string? styleSample, CancellationToken cancellationToken = default)
+        {
+            var fallback = BuildDraftFallback(idea);
+            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            var input = JsonSerializer.Serialize(new
+            {
+                idea.Title, idea.TargetKeyword, idea.Why, outline = idea.Outline,
+                audience = "Owners of academies, coaching and tuition centres in India (abacus, phonics, tuition, online classes).",
+                product = "Meet to Manage: one platform for live online classes, scheduling, admissions, automatic fee collection and reminders, attendance, and a parent app. Demo: meettomanage.cloud/get-started",
+                styleSample = styleSample is null ? null : styleSample[..Math.Min(styleSample.Length, 2500)],
+            });
+            var messages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] =
+                    "You write blog posts for Meet to Manage. Write one complete, practical post of 800-1100 words for the given idea, in plain, friendly English for busy Indian academy owners. " +
+                    "Follow the outline as '## ' section headings. Use the target keyword naturally in the first paragraph and one heading. Match the tone of styleSample if given. " +
+                    "Format strictly as plain text: paragraphs separated by a blank line; headings start with '## '; list items are lines starting with '- '; **bold** sparingly. No other markdown, no links except the text meettomanage.cloud/get-started. " +
+                    "Never invent statistics, studies, customer names or quotes; give concrete steps and examples instead. Mention Meet to Manage only where it genuinely helps, and end with a short call to book a free demo at meettomanage.cloud/get-started. " +
+                    "Return strict JSON: {\"title\":string,\"excerpt\":string (one sentence, under 160 characters),\"content\":string}." },
+                new JsonObject { ["role"] = "user", ["content"] = input },
+            };
+            try
+            {
+                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
+                {
+                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.6, ["max_tokens"] = 3000, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
+                    var (status, body) = await SendAsync(model, payload, cancellationToken, LongClient);
+                    if (status != 200) continue;
+                    var raw = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(raw) || JsonNode.Parse(raw) is not JsonObject parsed) continue;
+                    var content = CleanDraft(parsed["content"]?.GetValue<string>());
+                    if (content.Length < 400) continue;
+                    var title = parsed["title"]?.GetValue<string>()?.Trim();
+                    var excerpt = parsed["excerpt"]?.GetValue<string>()?.Trim() ?? "";
+                    return new MarketingBlogDraftDto
+                    {
+                        Title = string.IsNullOrWhiteSpace(title) ? idea.Title : title[..Math.Min(title.Length, 160)],
+                        Excerpt = excerpt[..Math.Min(excerpt.Length, 300)],
+                        Content = content,
+                        AiPowered = true,
+                    };
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException or InvalidOperationException)
+            {
+                _logger.LogWarning(ex, "Hetzner blog draft unavailable; returning the outline as a skeleton.");
+            }
+            return fallback;
+        }
+
+        /// <summary>Keeps a draft inside the blog's plain-text format (the reader page only understands ## headings, - lists and **bold**).</summary>
+        public static string CleanDraft(string? content)
+        {
+            if (string.IsNullOrWhiteSpace(content)) return "";
+            var lines = content.Replace("\r\n", "\n").Split('\n').Select(line =>
+            {
+                var l = line.TrimEnd();
+                if (l.StartsWith("### ") || l.StartsWith("#### ")) return "## " + l.TrimStart('#').Trim();
+                if (l.StartsWith("# ")) return "## " + l[2..].Trim();
+                if (l.StartsWith("* ")) return "- " + l[2..];
+                return System.Text.RegularExpressions.Regex.Replace(l, @"\[([^\]]+)\]\([^)]+\)", "$1"); // markdown links -> their text
+            });
+            var text = string.Join("\n", lines).Trim();
+            return text.Length > 20000 ? text[..20000] : text;
+        }
+
+        private static MarketingBlogDraftDto BuildDraftFallback(MarketingBlogDraftRequest idea)
+        {
+            var sections = idea.Outline.Count > 0 ? idea.Outline : ["Introduction", "Main points", "Next steps"];
+            return new MarketingBlogDraftDto
+            {
+                Title = idea.Title,
+                Excerpt = "",
+                Content = string.Join("\n\n", sections.Select(h => $"## {h}\n\nWrite this section…")),
+                AiPowered = false,
+            };
+        }
+
         public async Task<MarketingBlogIdeasDto> SuggestBlogPostsAsync(MarketingBlogIdeaEvidence evidence, CancellationToken cancellationToken = default)
         {
             var fallback = BuildBlogIdeasFallback(evidence);
@@ -572,9 +741,12 @@ namespace iucs.meettomanage.api.Services
         }
 
         /// <summary>One OpenAI-compatible chat-completions call. Status 0 means no HTTP response.</summary>
-        private async Task<(int Status, string Body)> SendAsync(string model, string payload, CancellationToken cancellationToken)
+        /// <summary>Named HTTP client with a longer timeout, for full article drafts.</summary>
+        public const string LongClient = nameof(HetznerSalesAssistant) + ".Long";
+
+        private async Task<(int Status, string Body)> SendAsync(string model, string payload, CancellationToken cancellationToken, string? clientName = null)
         {
-            var client = _httpClientFactory.CreateClient(nameof(HetznerSalesAssistant));
+            var client = _httpClientFactory.CreateClient(clientName ?? nameof(HetznerSalesAssistant));
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
                 $"{_options.Endpoint.TrimEnd('/')}/chat/completions");

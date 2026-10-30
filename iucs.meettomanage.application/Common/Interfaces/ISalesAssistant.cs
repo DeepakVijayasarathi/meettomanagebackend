@@ -16,6 +16,10 @@ namespace iucs.meettomanage.application.Common.Interfaces
         Task<MarketingAiInsightsDto> AnalyzeMarketingAsync(MarketingDashboardDto dashboard, CancellationToken cancellationToken = default);
         Task<MarketingLeadRecommendationDto> RecommendLeadAsync(PlatformDemoRequestDto lead, CancellationToken cancellationToken = default);
         /// <summary>Five next blog post ideas from what readers engage with and what visitors ask; a rule-based fallback when AI is unavailable.</summary>
+        /// <summary>Reads one visitor's anonymous journey: interests, buying intent and next marketing actions. Names and contact details are never sent.</summary>
+        Task<MarketingVisitorInsightDto> AnalyzeVisitorAsync(MarketingVisitorDetailDto visitor, CancellationToken cancellationToken = default);
+        /// <summary>Writes a full draft for one idea, matching the house style of an existing post. The draft is only returned, never saved or published.</summary>
+        Task<MarketingBlogDraftDto> WriteBlogDraftAsync(MarketingBlogDraftRequest idea, string? styleSample, CancellationToken cancellationToken = default);
         Task<MarketingBlogIdeasDto> SuggestBlogPostsAsync(MarketingBlogIdeaEvidence evidence, CancellationToken cancellationToken = default);
     }
 }

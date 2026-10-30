@@ -12317,6 +12317,90 @@ namespace iucs.meettomanage.tests
         }
 
         [Fact]
+        public void BlogDraft_IsKeptInTheBlogsOwnFormat()
+        {
+            var cleaned = iucs.meettomanage.api.Services.HetznerSalesAssistant.CleanDraft(
+                "# Big title\r\n\r\n### Step one\n* first\n* second\nSee [our pricing](https://x.y/pricing) today.");
+            Assert.Equal("## Big title\n\n## Step one\n- first\n- second\nSee our pricing today.", cleaned);
+            Assert.Equal("", iucs.meettomanage.api.Services.HetznerSalesAssistant.CleanDraft("   "));
+        }
+
+        [Fact]
+        public void LeadJourneyScore_RewardsBuyingIntent_NotPageReloads()
+        {
+            var lead = new DateTime(2026, 10, 20, 10, 0, 0, DateTimeKind.Utc);
+            (string, string, DateTime) View(string path, int dayOffset, int minute = 0) => ("page_view", path, lead.AddDays(dayOffset).AddMinutes(minute));
+
+            var reloader = PlatformDemoRequestService.JourneyScore([View("/", 0), View("/", 0, 1), View("/", 0, 2), View("/", 0, 3), View("/", 0, 4)], lead);
+            var shopper = PlatformDemoRequestService.JourneyScore(
+                [View("/", -2), View("/pricing", -2, 1), View("/blog/kpis", -1), View("/get-started", 0), ("chat_started", "/pricing", lead), View("/pricing", 1)], lead);
+
+            Assert.True(reloader.Points <= 2);
+            Assert.Empty(reloader.Reasons);
+            Assert.True(shopper.Points >= 35);
+            Assert.Contains("Looked at pricing", shopper.Reasons);
+            Assert.Contains("Came back on 3 other days", shopper.Reasons); // 4 different days in all
+            Assert.Contains("Used the website chat", shopper.Reasons);
+            Assert.Contains("Returned to the site after requesting a demo", shopper.Reasons);
+            Assert.True(PlatformDemoRequestService.JourneyScore(Enumerable.Range(0, 30).Select(i => View("/pricing", -i)), lead).Points <= 40);
+        }
+
+        [Fact]
+        public async Task MarketingVisitorDetail_SplitsVisitsAndLinksChatsAndLeads()
+        {
+            var analytics = new MarketingAnalyticsService(_db.UnitOfWork);
+            var repo = _db.UnitOfWork.Repository<iucs.meettomanage.domain.Entities.Marketing.MarketingEvent>();
+            var start = DateTime.UtcNow.AddDays(-2);
+            var rows = new[]
+            {
+                (Min: 0, Type: "page_view", Path: "/", Source: "google.com"),
+                (Min: 2, Type: "page_view", Path: "/blog/kpis", Source: (string?)null),
+                (Min: 5, Type: "chat_started", Path: "/blog/kpis", Source: null),
+                (Min: 6 * 60, Type: "page_view", Path: "/pricing", Source: null), // 6 hours later: a second visit
+            }.Select(r => new iucs.meettomanage.domain.Entities.Marketing.MarketingEvent
+            {
+                Id = Guid.NewGuid(), Type = r.Type, Path = r.Path, VisitorId = "visitor-detail-1234", Source = r.Source, Device = "mobile", Country = "IN",
+            }).ToList();
+            foreach (var row in rows) await repo.AddAsync(row);
+            await _db.UnitOfWork.SaveChangesAsync();
+            int[] minutes = [0, 2, 5, 6 * 60];
+            for (var i = 0; i < rows.Count; i++) rows[i].CreatedAtUtc = start.AddMinutes(minutes[i]);
+            await _db.UnitOfWork.SaveChangesAsync();
+            await new PlatformDemoRequestService(_db.UnitOfWork, _auditLog).CreateAsync(new CreatePlatformDemoRequestRequest { FullName = "Meena", WorkEmail = "m@x.com", Phone = "9000000011", AcademyName = "Meena Phonics", VisitorId = "visitor-detail-1234" });
+            await new MarketingChatLogService(_db.UnitOfWork).RecordTurnAsync("conv-detail-1234", [new SalesChatTurn { Role = "user", Text = "Fees?" }], "Here's how fees work", null, new MarketingLeadAttributionDto { VisitorId = "visitor-detail-1234" });
+
+            var detail = await analytics.GetVisitorDetailAsync("visitor-detail-1234");
+
+            Assert.NotNull(detail);
+            Assert.Equal(3, detail!.PageViews);
+            Assert.Equal(2, detail.Visits.Count);
+            var first = detail.Visits[^1]; // newest visit first
+            Assert.Equal("google.com", first.Source);
+            Assert.Equal(["/", "/blog/kpis"], first.Pages.Select(p => p.Path).ToArray());
+            Assert.True(first.StartedChat);
+            Assert.Equal("/pricing", Assert.Single(detail.Visits[0].Pages).Path);
+            Assert.Equal("Meena", Assert.Single(detail.DemoRequests).FullName);
+            Assert.Equal("Fees?", Assert.Single(detail.Chats).FirstMessage);
+            Assert.Null(await analytics.GetVisitorDetailAsync("visitor-unknown-0000"));
+
+            // Without an AI key the visitor read falls back to rules over the same signals.
+            var assistant = new iucs.meettomanage.api.Services.HetznerSalesAssistant(
+                new NoHttpClientFactory(), new PlatformDemoRequestService(_db.UnitOfWork, _auditLog),
+                Microsoft.Extensions.Options.Options.Create(new iucs.meettomanage.application.Common.Options.HetznerAiOptions()),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<iucs.meettomanage.api.Services.HetznerSalesAssistant>.Instance);
+            var insight = await assistant.AnalyzeVisitorAsync(detail);
+            Assert.False(insight.AiPowered);
+            Assert.Equal("Hot", insight.Intent); // requested a demo
+            Assert.Contains("Pricing", insight.Interests);
+            Assert.NotEmpty(insight.NextActions);
+        }
+
+        private sealed class NoHttpClientFactory : System.Net.Http.IHttpClientFactory
+        {
+            public System.Net.Http.HttpClient CreateClient(string name) => throw new InvalidOperationException("No HTTP in tests.");
+        }
+
+        [Fact]
         public async Task MarketingContentPerformance_RanksPostsByWhatReadersDidNext()
         {
             var analytics = new MarketingAnalyticsService(_db.UnitOfWork);

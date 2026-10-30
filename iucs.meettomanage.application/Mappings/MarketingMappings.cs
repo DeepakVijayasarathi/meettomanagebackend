@@ -30,7 +30,23 @@ namespace iucs.meettomanage.application.Mappings
                 IsDuplicate = request.IsDuplicate,
                 LeadScore = LeadScore(request),
                 LeadTemperature = LeadScore(request) >= 70 ? "Hot" : LeadScore(request) >= 40 ? "Warm" : "Cold",
+                ScoreReasons = ScoreReasons(request),
             };
+        }
+
+        /// <summary>Why the lead scored what it did, in the same order the points are added.</summary>
+        private static List<string> ScoreReasons(PlatformDemoRequest request)
+        {
+            var reasons = new List<string>();
+            if (request.Status == iucs.meettomanage.domain.Enums.StoreInquiryStatus.Converted) return ["Converted"];
+            if (request.Status == iucs.meettomanage.domain.Enums.StoreInquiryStatus.Closed) return ["Closed"];
+            if (request.Message?.StartsWith("Booked by the website chat assistant.") == true) reasons.Add("Booked through the AI chat");
+            else if (!string.IsNullOrWhiteSpace(request.Message)) reasons.Add("Wrote a message");
+            if (!string.IsNullOrWhiteSpace(request.Campaign)) reasons.Add($"Came from campaign \"{request.Campaign}\"");
+            if (request.Status == iucs.meettomanage.domain.Enums.StoreInquiryStatus.Contacted) reasons.Add("Already contacted");
+            reasons.AddRange(request.EngagementReasons);
+            if (request.CreatedAtUtc > DateTime.UtcNow.AddDays(-3)) reasons.Add("New in the last 3 days");
+            return reasons;
         }
 
         private static int LeadScore(PlatformDemoRequest request)

@@ -121,6 +121,8 @@ builder.Services.AddScoped<IPushSender, FcmPushSender>();
 // Marketing-site chat assistant (Hetzner AI). Key from HetznerAi:ApiKey — user-secrets locally,
 // HetznerAi__ApiKey env var in prod, never committed.
 builder.Services.AddHttpClient(nameof(HetznerSalesAssistant), client => client.Timeout = TimeSpan.FromSeconds(30));
+// Full blog drafts (~1,000 words) take longer than a chat reply.
+builder.Services.AddHttpClient(HetznerSalesAssistant.LongClient, client => client.Timeout = TimeSpan.FromSeconds(120));
 builder.Services.AddScoped<ISalesAssistant, HetznerSalesAssistant>();
 builder.Services.AddScoped<IMitoAssistant, HetznerMitoAssistant>();
 builder.Services.AddHttpClient(nameof(OllamaChatClient), client => client.Timeout = TimeSpan.FromSeconds(45));

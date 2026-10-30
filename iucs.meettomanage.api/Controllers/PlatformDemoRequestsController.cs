@@ -78,6 +78,26 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _analytics.GetVisitorJourneysAsync(days, tzOffsetMinutes, page, pageSize, country, cancellationToken, from, to));
         }
 
+        /// <summary>Marketing console → Journeys → one visitor: every visit, page, chat and demo request.</summary>
+        [HttpGet("analytics/visitors/{visitorId}")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingVisitorDetailDto>> VisitorDetail(string visitorId, CancellationToken cancellationToken)
+        {
+            if (visitorId.Length is < 4 or > 100) return NotFound();
+            var detail = await _analytics.GetVisitorDetailAsync(visitorId, cancellationToken);
+            return detail is null ? NotFound() : Ok(detail);
+        }
+
+        /// <summary>AI read of one visitor: interests, buying intent (Hot/Warm/Cold) and next marketing actions.</summary>
+        [HttpPost("analytics/visitors/{visitorId}/insight")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingVisitorInsightDto>> VisitorInsight(string visitorId, CancellationToken cancellationToken)
+        {
+            if (visitorId.Length is < 4 or > 100) return NotFound();
+            var detail = await _analytics.GetVisitorDetailAsync(visitorId, cancellationToken);
+            return detail is null ? NotFound() : Ok(await _salesAssistant.AnalyzeVisitorAsync(detail, cancellationToken));
+        }
+
         /// <summary>Marketing console → Blog Posts: which posts readers engage with and act on.</summary>
         [HttpGet("analytics/content")]
         [Authorize(Roles = nameof(UserRole.Marketing))]
@@ -97,6 +117,15 @@ namespace iucs.meettomanage.api.Controllers
         {
             var evidence = await _analytics.GetBlogIdeaEvidenceAsync(days, tzOffsetMinutes, cancellationToken, from, to);
             return Ok(await _salesAssistant.SuggestBlogPostsAsync(evidence, cancellationToken));
+        }
+
+        /// <summary>AI: a full blog draft for one idea, in the style of the post readers act on most. Returned only — never saved or published.</summary>
+        [HttpPost("analytics/blog-draft")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingBlogDraftDto>> BlogDraft(MarketingBlogDraftRequest idea, CancellationToken cancellationToken)
+        {
+            var style = await _analytics.GetStyleSampleAsync(cancellationToken);
+            return Ok(await _salesAssistant.WriteBlogDraftAsync(idea, style, cancellationToken));
         }
 
         /// <summary>Hetzner AI analysis of the same anonymous, aggregate marketing dashboard data.</summary>

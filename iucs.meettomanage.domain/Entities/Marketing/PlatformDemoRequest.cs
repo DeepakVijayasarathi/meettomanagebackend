@@ -48,5 +48,7 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         public DateTime? LastReminderSentAtUtc { get; set; }
         [NotMapped] public bool IsDuplicate { get; set; }
         [NotMapped] public int EngagementScoreBoost { get; set; }
+        /// <summary>Plain-language reasons behind <see cref="EngagementScoreBoost"/>, from the visitor's website journey.</summary>
+        [NotMapped] public List<string> EngagementReasons { get; set; } = [];
     }
 }

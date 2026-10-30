@@ -62,6 +62,9 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int LeadScore { get; set; }
         public string LeadTemperature { get; set; } = null!;
         public bool IsDuplicate { get; set; }
+
+        /// <summary>Plain-language reasons behind LeadScore (message, chat booking, journey on the website, recency).</summary>
+        public List<string> ScoreReasons { get; set; } = new();
         public Guid? AssignedToUserId { get; set; }
         public DateTime? ArchivedAtUtc { get; set; }
     }
@@ -503,6 +506,8 @@ namespace iucs.meettomanage.application.Dto.Marketing
     {
         /// <summary>Last 8 characters of the random browser id — enough to tell visitors apart, identifies no one.</summary>
         public string Visitor { get; set; } = "";
+        /// <summary>The full random browser id, to open this visitor's own journey page.</summary>
+        public string VisitorId { get; set; } = "";
         public DateTime FirstSeenUtc { get; set; }
         public DateTime LastSeenUtc { get; set; }
         public string? Country { get; set; }
@@ -585,5 +590,72 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public List<MarketingBlogIdeaDto> Ideas { get; set; } = new();
         public bool AiPowered { get; set; }
         public DateTime GeneratedAtUtc { get; set; }
+    }
+
+    /// <summary>One visit: page views with no gap longer than 30 minutes.</summary>
+    public class MarketingVisitDto
+    {
+        public DateTime StartUtc { get; set; }
+        public DateTime EndUtc { get; set; }
+        public string Source { get; set; } = "Direct";
+        public string? Campaign { get; set; }
+        public string Device { get; set; } = "";
+        public List<MarketingJourneyStepDto> Pages { get; set; } = new();
+        public bool StartedChat { get; set; }
+    }
+
+    public class MarketingVisitorLeadDto
+    {
+        public Guid Id { get; set; }
+        public string FullName { get; set; } = "";
+        public string AcademyName { get; set; } = "";
+        public string Status { get; set; } = "";
+        public DateTime CreatedAtUtc { get; set; }
+    }
+
+    /// <summary>Everything one anonymous visitor did, across all their visits (within the retention period).</summary>
+    public class MarketingVisitorDetailDto
+    {
+        public string VisitorId { get; set; } = "";
+        public string Visitor { get; set; } = "";
+        public DateTime FirstSeenUtc { get; set; }
+        public DateTime LastSeenUtc { get; set; }
+        public string? Country { get; set; }
+        public int PageViews { get; set; }
+        public int DistinctPages { get; set; }
+        public List<MarketingVisitDto> Visits { get; set; } = new();
+        public List<MarketingVisitorLeadDto> DemoRequests { get; set; } = new();
+        public List<MarketingChatConversationDto> Chats { get; set; } = new();
+    }
+
+    /// <summary>AI (or rule-based) read of one visitor: interests, buying intent, next marketing actions.</summary>
+    public class MarketingVisitorInsightDto
+    {
+        public string Summary { get; set; } = "";
+        public List<string> Interests { get; set; } = new();
+        /// <summary>"Hot", "Warm" or "Cold".</summary>
+        public string Intent { get; set; } = "Cold";
+        public string IntentReason { get; set; } = "";
+        public List<string> NextActions { get; set; } = new();
+        public bool AiPowered { get; set; }
+    }
+
+    /// <summary>Ask the AI to write a full draft from an idea (usually one of the suggested ideas).</summary>
+    public class MarketingBlogDraftRequest
+    {
+        [Required, MaxLength(160)] public string Title { get; set; } = "";
+        [MaxLength(100)] public string? TargetKeyword { get; set; }
+        [MaxLength(500)] public string? Why { get; set; }
+        [MaxLength(8)] public List<string> Outline { get; set; } = new();
+    }
+
+    /// <summary>A full blog draft in the blog's own format, never published automatically.</summary>
+    public class MarketingBlogDraftDto
+    {
+        public string Title { get; set; } = "";
+        public string Excerpt { get; set; } = "";
+        /// <summary>The blog's plain-text format: blank lines between paragraphs, "## " headings, "- " list lines, **bold**.</summary>
+        public string Content { get; set; } = "";
+        public bool AiPowered { get; set; }
     }
 }
