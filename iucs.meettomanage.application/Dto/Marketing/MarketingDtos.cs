@@ -209,6 +209,17 @@ namespace iucs.meettomanage.application.Dto.Marketing
         [MinLength(1)]
         [MaxLength(20)]
         public List<SalesChatTurn> Messages { get; set; } = new();
+
+        public MarketingLeadAttributionDto? Attribution { get; set; }
+    }
+
+    public class MarketingLeadAttributionDto
+    {
+        [MaxLength(100)] public string? VisitorId { get; set; }
+        [MaxLength(100)] public string? Source { get; set; }
+        [MaxLength(100)] public string? Medium { get; set; }
+        [MaxLength(100)] public string? Campaign { get; set; }
+        [MaxLength(200)] public string? LandingPath { get; set; }
     }
 
     public class SalesChatResponse
@@ -278,7 +289,9 @@ namespace iucs.meettomanage.application.Dto.Marketing
     {
         public string Name { get; set; } = null!;
         public int Leads { get; set; }
+        public int Visitors { get; set; }
         public int Converted { get; set; }
+        public double LeadConversionRate { get; set; }
         public double ConversionRate { get; set; }
     }
 

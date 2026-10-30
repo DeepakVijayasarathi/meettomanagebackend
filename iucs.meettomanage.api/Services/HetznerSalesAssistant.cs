@@ -156,7 +156,7 @@ namespace iucs.meettomanage.api.Services
             _logger = logger;
         }
 
-        public async Task<SalesChatResponse> ReplyAsync(IReadOnlyList<SalesChatTurn> conversation, CancellationToken cancellationToken = default)
+        public async Task<SalesChatResponse> ReplyAsync(IReadOnlyList<SalesChatTurn> conversation, CancellationToken cancellationToken = default, MarketingLeadAttributionDto? attribution = null)
         {
             if (string.IsNullOrWhiteSpace(_options.ApiKey))
             {
@@ -215,7 +215,7 @@ namespace iucs.meettomanage.api.Services
                 }
                 else
                 {
-                    (result, bookedName) = await BookDemoAsync(args, cancellationToken);
+                    (result, bookedName) = await BookDemoAsync(args, attribution, cancellationToken);
                 }
 
                 // Echo the model's own turn back untouched (it carries the thought signature the
@@ -351,7 +351,7 @@ namespace iucs.meettomanage.api.Services
         /// passed (it relays visitor-typed text) and reports problems back to the model as data, so it
         /// can ask the visitor to correct them instead of the request failing.
         /// </summary>
-        private async Task<(JsonObject Result, string? BookedName)> BookDemoAsync(JsonObject? args, CancellationToken cancellationToken)
+        private async Task<(JsonObject Result, string? BookedName)> BookDemoAsync(JsonObject? args, MarketingLeadAttributionDto? attribution, CancellationToken cancellationToken)
         {
             static string Arg(JsonObject? a, string name) =>
                 a?[name] is JsonValue v && v.TryGetValue<string>(out var s) ? s.Trim() : string.Empty;
@@ -399,6 +399,11 @@ namespace iucs.meettomanage.api.Services
                     WorkEmail = email,
                     AcademyName = organization.Length > 0 ? organization[..Math.Min(organization.Length, 150)] : "Via website chat assistant",
                     Message = message[..Math.Min(message.Length, 1000)],
+                    VisitorId = attribution?.VisitorId,
+                    Source = attribution?.Source,
+                    Medium = attribution?.Medium,
+                    Campaign = attribution?.Campaign,
+                    LandingPath = attribution?.LandingPath,
                 }, cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

@@ -128,13 +128,6 @@ namespace iucs.meettomanage.application.Services
                     .Take(take)
                     .ToList();
 
-            static List<MarketingPerformanceDto> Performance(IEnumerable<(string Name, StoreInquiryStatus Status)> rows) =>
-                rows.GroupBy(x => x.Name).Select(g => new MarketingPerformanceDto
-                {
-                    Name = g.Key, Leads = g.Count(), Converted = g.Count(x => x.Status == StoreInquiryStatus.Converted),
-                    ConversionRate = Math.Round(g.Count(x => x.Status == StoreInquiryStatus.Converted) * 100.0 / g.Count(), 1),
-                }).OrderByDescending(x => x.Converted).ThenByDescending(x => x.Leads).Take(10).ToList();
-
             // Sources and devices count visitors (first-touch per visitor in the window), not raw
             // page views, so one visitor clicking around doesn't inflate a channel.
             var firstTouch = views
@@ -142,6 +135,26 @@ namespace iucs.meettomanage.application.Services
                 .GroupBy(e => e.VisitorId)
                 .Select(g => g.First())
                 .ToList();
+
+            static List<MarketingPerformanceDto> Performance(
+                IEnumerable<(string Name, StoreInquiryStatus Status)> leadRows,
+                IEnumerable<string> visitorRows)
+            {
+                var leads = leadRows.GroupBy(x => x.Name).ToDictionary(g => g.Key, g => g.ToList());
+                var visitors = visitorRows.GroupBy(x => x).ToDictionary(g => g.Key, g => g.Count());
+                return leads.Keys.Union(visitors.Keys).Select(name =>
+                {
+                    var rows = leads.GetValueOrDefault(name) ?? [];
+                    var visitorCount = visitors.GetValueOrDefault(name);
+                    var converted = rows.Count(x => x.Status == StoreInquiryStatus.Converted);
+                    return new MarketingPerformanceDto
+                    {
+                        Name = name, Visitors = visitorCount, Leads = rows.Count, Converted = converted,
+                        LeadConversionRate = visitorCount == 0 ? 0 : Math.Round(rows.Count * 100.0 / visitorCount, 1),
+                        ConversionRate = rows.Count == 0 ? 0 : Math.Round(converted * 100.0 / rows.Count, 1),
+                    };
+                }).OrderByDescending(x => x.Converted).ThenByDescending(x => x.Leads).Take(10).ToList();
+            }
 
             return new MarketingDashboardDto
             {
@@ -159,9 +172,9 @@ namespace iucs.meettomanage.application.Services
                 Countries = Top(firstTouch.Where(e => e.Country != null).Select(e => e.Country!), 20),
                 Devices = Top(firstTouch.Select(e => e.Device), 3),
                 DemoRequestsByStatus = Top(currentRequests.Select(r => r.Status.ToString()), 10),
-                SourceQuality = Performance(currentRequests.Select(r => (r.Source ?? "Direct", r.Status))),
-                CampaignPerformance = Performance(currentRequests.Where(r => r.Campaign != null).Select(r => (r.Campaign!, r.Status))),
-                LandingPagePerformance = Performance(currentRequests.Select(r => (r.LandingPath ?? "Unknown", r.Status))),
+                SourceQuality = Performance(currentRequests.Select(r => (r.Source ?? "Direct", r.Status)), firstTouch.Select(e => SourceLabel(e.Source))),
+                CampaignPerformance = Performance(currentRequests.Where(r => r.Campaign != null).Select(r => (r.Campaign!, r.Status)), firstTouch.Where(e => e.Campaign != null).Select(e => e.Campaign!)),
+                LandingPagePerformance = Performance(currentRequests.Select(r => (r.LandingPath ?? "Unknown", r.Status)), firstTouch.Select(e => e.Path)),
             };
         }
 

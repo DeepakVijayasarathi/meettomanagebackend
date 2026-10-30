@@ -77,9 +77,10 @@ namespace iucs.meettomanage.application.Services
             var lead = await _unitOfWork.Repository<PlatformDemoRequest>().FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(PlatformDemoRequest), id);
             if (request.Status.HasValue) { lead.Status = request.Status.Value; if (request.Status == StoreInquiryStatus.Contacted) lead.LastContactedAtUtc = DateTime.UtcNow; }
-            lead.AssignedTo = Clean(request.AssignedTo);
-            lead.NextFollowUpAtUtc = request.NextFollowUpAtUtc;
-            lead.InternalNotes = Clean(request.InternalNotes);
+            // This endpoint is patch-like: omitted fields must not erase existing lead data.
+            if (request.AssignedTo is not null) lead.AssignedTo = Clean(request.AssignedTo);
+            if (request.NextFollowUpAtUtc.HasValue) lead.NextFollowUpAtUtc = request.NextFollowUpAtUtc;
+            if (request.InternalNotes is not null) lead.InternalNotes = Clean(request.InternalNotes);
             await _auditLog.StageAsync(AuditAction.Update, nameof(PlatformDemoRequest), id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
             return lead.ToDto();

@@ -83,7 +83,7 @@ namespace iucs.meettomanage.api.Controllers
         [EnableRateLimiting("marketing-chat")]
         public async Task<ActionResult<SalesChatResponse>> Chat(SalesChatRequest request, CancellationToken cancellationToken)
         {
-            return Ok(await _salesAssistant.ReplyAsync(request.Messages, cancellationToken));
+            return Ok(await _salesAssistant.ReplyAsync(request.Messages, cancellationToken, request.Attribution));
         }
 
         [HttpPost("translate")]
