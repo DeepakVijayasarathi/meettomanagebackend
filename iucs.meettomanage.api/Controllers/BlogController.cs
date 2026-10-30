@@ -25,6 +25,35 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _blogService.ListPublishedAsync(cancellationToken));
         }
 
+        /// <summary>
+        /// Search-engine sitemap of every published post, so a scheduled post is listed the
+        /// moment it goes live without a website redeploy. The website serves it as
+        /// https://meettomanage.cloud/sitemap-blog.xml (nginx proxy), referenced from its
+        /// /sitemap.xml index.
+        /// </summary>
+        [HttpGet("sitemap.xml")]
+        [ResponseCache(Duration = 3600)]
+        public async Task<ContentResult> Sitemap(CancellationToken cancellationToken)
+        {
+            const string site = "https://meettomanage.cloud";
+            var posts = await _blogService.ListPublishedAsync(cancellationToken);
+            var xml = new System.Text.StringBuilder();
+            xml.Append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+            xml.Append("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+            foreach (var post in posts)
+            {
+                var loc = System.Security.SecurityElement.Escape($"{site}/blog/{Uri.EscapeDataString(post.Slug)}");
+                xml.Append("  <url>\n");
+                xml.Append($"    <loc>{loc}</loc>\n");
+                xml.Append($"    <lastmod>{post.PublishedAtUtc:yyyy-MM-dd}</lastmod>\n");
+                xml.Append("    <changefreq>monthly</changefreq>\n");
+                xml.Append("    <priority>0.6</priority>\n");
+                xml.Append("  </url>\n");
+            }
+            xml.Append("</urlset>\n");
+            return Content(xml.ToString(), "application/xml; charset=utf-8");
+        }
+
         [HttpGet("{slug}")]
         public async Task<ActionResult<BlogPostDetailDto>> GetBySlug(string slug, CancellationToken cancellationToken)
         {
