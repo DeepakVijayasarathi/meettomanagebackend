@@ -47,12 +47,16 @@ namespace iucs.meettomanage.api.Services
                     return;
                 }
 
-                var config = JsonSerializer.Deserialize<Dictionary<string, string?>>(integration.ConfigJson ?? "{}") ?? [];
+                var config = Normalize(JsonSerializer.Deserialize<Dictionary<string, string?>>(integration.ConfigJson ?? "{}") ?? []);
                 var projectId = Value(config, "projectId");
                 var account = ReadAccount(config);
                 if (projectId is null || account is null)
                 {
-                    _logger.LogWarning("Push skipped for user {UserId}: the Firebase integration needs a projectId plus either serviceAccountKey or clientEmail + privateKey.", userId);
+                    // Field names only (never values), so a misspelt or empty field is obvious from the log.
+                    var present = string.Join(", ", config.Select(kv => string.IsNullOrWhiteSpace(kv.Value) ? kv.Key + " (empty)" : kv.Key));
+                    _logger.LogWarning(
+                        "Push skipped for user {UserId}: the Firebase integration needs a projectId plus either serviceAccountKey or clientEmail + privateKey. projectId: {HasProject}; service account: {HasAccount}; fields saved: [{Fields}].",
+                        userId, projectId is null ? "MISSING" : "ok", account is null ? "MISSING" : "ok", present);
                     return;
                 }
 
@@ -176,7 +180,17 @@ namespace iucs.meettomanage.api.Services
 
         private static string Base64Url(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
+        /// <summary>Field names are matched ignoring case, spaces, underscores and hyphens, so client_email, ClientEmail and clientEmail are the same field.</summary>
+        private static Dictionary<string, string?> Normalize(Dictionary<string, string?> config)
+        {
+            var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (name, value) in config)
+                result[new string(name.Where(c => c is not ('_' or '-' or ' ')).ToArray())] = value;
+            return result;
+        }
+
+        /// <summary>A trimmed value, also tolerating quotes and a trailing comma carried over from pasting a line of the key file.</summary>
         private static string? Value(Dictionary<string, string?> config, string key) =>
-            config.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value.Trim() : null;
+            config.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value.Trim().Trim(',').Trim('"').Trim() : null;
     }
 }
