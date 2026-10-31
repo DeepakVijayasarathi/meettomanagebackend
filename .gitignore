@@ -41,3 +41,6 @@ TestResults/
 publish/
 [Ll]og/
 [Cc]ache/
+
+## Local publish output
+.deploy/
