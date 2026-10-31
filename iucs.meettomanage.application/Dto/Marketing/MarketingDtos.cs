@@ -341,7 +341,7 @@ namespace iucs.meettomanage.application.Dto.Marketing
     public class TrackMarketingEventRequest
     {
         [Required]
-        [RegularExpression("^(page_view|chat_started|form_started|form_validation_failed|form_abandoned|form_submitted|whatsapp_clicked)$")]
+        [RegularExpression("^(page_view|chat_started|form_started|form_validation_failed|form_abandoned|form_submitted|whatsapp_clicked|exit_intent_shown|exit_intent_submitted|experiment_viewed)$")]
         public string Type { get; set; } = null!;
 
         [Required]
@@ -369,6 +369,10 @@ namespace iucs.meettomanage.application.Dto.Marketing
         /// <summary>Browser-locale ISO country/region code. This is self-reported, not IP geolocation.</summary>
         [RegularExpression("^[A-Za-z]{2}$")]
         public string? Country { get; set; }
+
+        /// <summary>A/B test bucket, "experiment:variant" in lowercase letters, digits and dashes.</summary>
+        [RegularExpression("^[a-z0-9-]{1,30}:[a-z0-9-]{1,16}$")]
+        public string? Variant { get; set; }
     }
 
     public class NamedCountDto
@@ -678,6 +682,18 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int? AvgSeconds { get; set; }
     }
 
+    /// <summary>One A/B test bucket: unique visitors who saw it, started the form, and submitted it.</summary>
+    public class MarketingExperimentVariantDto
+    {
+        public string Experiment { get; set; } = "";
+        public string Variant { get; set; } = "";
+        public int Visitors { get; set; }
+        public int FormStarted { get; set; }
+        public int FormSubmitted { get; set; }
+        /// <summary>FormSubmitted as a percentage of Visitors.</summary>
+        public double ConversionRate { get; set; }
+    }
+
     public class MarketingFunnelStepDto
     {
         public string Name { get; set; } = "";
@@ -701,6 +717,9 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int FormAbandonedVisitors { get; set; }
         public int FormSubmittedVisitors { get; set; }
         public int WhatsAppVisitors { get; set; }
+        public int ExitIntentShownVisitors { get; set; }
+        public int ExitIntentSubmittedVisitors { get; set; }
+        public List<MarketingExperimentVariantDto> Experiments { get; set; } = new();
         public List<MarketingFunnelStepDto> Funnel { get; set; } = new();
         public List<MarketingPageBehaviourDto> Pages { get; set; } = new();
         public List<NamedCountDto> Devices { get; set; } = new();

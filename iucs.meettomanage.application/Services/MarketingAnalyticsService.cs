@@ -44,6 +44,7 @@ namespace iucs.meettomanage.application.Services
                 Campaign = Clean(request.UtmCampaign),
                 Device = DeviceOf(userAgent),
                 Country = CleanCountry(request.Country),
+                Variant = request.Variant,
             }, cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
@@ -228,7 +229,7 @@ namespace iucs.meettomanage.application.Services
             var events = await _unitOfWork.Repository<MarketingEvent>().Query()
                 .Where(e => e.CreatedAtUtc >= startUtc && e.CreatedAtUtc < endUtc)
                 .OrderBy(e => e.CreatedAtUtc)
-                .Select(e => new { e.VisitorId, e.Type, e.Path, e.CreatedAtUtc, e.Device, e.Source, e.Country })
+                .Select(e => new { e.VisitorId, e.Type, e.Path, e.CreatedAtUtc, e.Device, e.Source, e.Country, e.Variant })
                 .ToListAsync(cancellationToken);
             var countryFilter = string.IsNullOrWhiteSpace(country) ? null : country.Trim().ToUpperInvariant();
             if (countryFilter is not null)
@@ -303,6 +304,24 @@ namespace iucs.meettomanage.application.Services
                 FormAbandonedVisitors = events.Where(e => e.Type == MarketingEvent.FormAbandoned).Select(e => e.VisitorId).Distinct().Count(),
                 FormSubmittedVisitors = events.Where(e => e.Type == MarketingEvent.FormSubmitted).Select(e => e.VisitorId).Distinct().Count(),
                 WhatsAppVisitors = events.Where(e => e.Type == MarketingEvent.WhatsAppClicked).Select(e => e.VisitorId).Distinct().Count(),
+                ExitIntentShownVisitors = events.Where(e => e.Type == MarketingEvent.ExitIntentShown).Select(e => e.VisitorId).Distinct().Count(),
+                ExitIntentSubmittedVisitors = events.Where(e => e.Type == MarketingEvent.ExitIntentSubmitted).Select(e => e.VisitorId).Distinct().Count(),
+                Experiments = events.Where(e => e.Variant != null).GroupBy(e => e.Variant!).Select(g =>
+                {
+                    int Count(string type) => g.Where(e => e.Type == type).Select(e => e.VisitorId).Distinct().Count();
+                    var seen = Count(MarketingEvent.ExperimentViewed);
+                    var submitted = Count(MarketingEvent.FormSubmitted);
+                    var parts = g.Key.Split(':', 2);
+                    return new MarketingExperimentVariantDto
+                    {
+                        Experiment = parts[0],
+                        Variant = parts.Length > 1 ? parts[1] : "",
+                        Visitors = seen,
+                        FormStarted = Count(MarketingEvent.FormStarted),
+                        FormSubmitted = submitted,
+                        ConversionRate = seen == 0 ? 0 : Math.Round(submitted * 100.0 / seen, 1),
+                    };
+                }).OrderBy(x => x.Experiment).ThenBy(x => x.Variant).ToList(),
                 Funnel =
                 [
                     new() { Name = "Visited the site", Visitors = visitorIds.Count },

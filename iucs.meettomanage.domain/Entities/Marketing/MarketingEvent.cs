@@ -21,6 +21,10 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         public const string FormAbandoned = "form_abandoned";
         public const string FormSubmitted = "form_submitted";
         public const string WhatsAppClicked = "whatsapp_clicked";
+        public const string ExitIntentShown = "exit_intent_shown";
+        public const string ExitIntentSubmitted = "exit_intent_submitted";
+        /// <summary>The visitor saw one variant of an A/B test; <see cref="Variant"/> says which.</summary>
+        public const string ExperimentViewed = "experiment_viewed";
 
         [MaxLength(32)]
         public string Type { get; set; } = PageView;
@@ -49,5 +53,9 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         /// <summary>ISO 3166-1 alpha-2 region reported by the browser locale; no IP address is stored.</summary>
         [MaxLength(2)]
         public string? Country { get; set; }
+
+        /// <summary>A/B test bucket as "experiment:variant" (e.g. "getstarted-copy:b"); null outside a test.</summary>
+        [MaxLength(48)]
+        public string? Variant { get; set; }
     }
 }
