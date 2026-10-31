@@ -41,17 +41,29 @@ namespace iucs.meettomanage.api.Services
             {
                 var integration = await _unitOfWork.Repository<Integration>().Query().AsNoTracking()
                     .FirstOrDefaultAsync(i => i.Key == IntegrationKey, cancellationToken);
-                if (integration is not { IsEnabled: true }) return;
+                if (integration is not { IsEnabled: true })
+                {
+                    _logger.LogInformation("Push skipped for user {UserId}: the Firebase (fcm) integration is missing or not enabled in Settings → Integrations.", userId);
+                    return;
+                }
 
                 var config = JsonSerializer.Deserialize<Dictionary<string, string?>>(integration.ConfigJson ?? "{}") ?? [];
                 var projectId = Value(config, "projectId");
                 var accountJson = Value(config, "serviceAccountKey");
-                if (projectId is null || accountJson is null) return;
+                if (projectId is null || accountJson is null)
+                {
+                    _logger.LogWarning("Push skipped for user {UserId}: the Firebase integration has no projectId or serviceAccountKey.", userId);
+                    return;
+                }
 
                 var installations = await _unitOfWork.Repository<MobileAppInstallation>().Query()
                     .Where(x => x.UserId == userId && x.PushToken != null && x.NotificationsEnabled)
                     .ToListAsync(cancellationToken);
-                if (installations.Count == 0) return;
+                if (installations.Count == 0)
+                {
+                    _logger.LogInformation("Push skipped for user {UserId}: no app installation with a push token and notifications enabled.", userId);
+                    return;
+                }
 
                 var accessToken = await GetAccessTokenAsync(accountJson, cancellationToken);
                 var client = _httpClientFactory.CreateClient(nameof(FcmPushSender));
@@ -66,6 +78,7 @@ namespace iucs.meettomanage.api.Services
                     }
                 }
 
+                if (staleTokens) _logger.LogInformation("Cleared a stale push token for user {UserId}.", userId);
                 if (staleTokens) await _unitOfWork.SaveChangesAsync(cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
