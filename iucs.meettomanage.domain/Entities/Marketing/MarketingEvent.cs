@@ -16,6 +16,11 @@ namespace iucs.meettomanage.domain.Entities.Marketing
     {
         public const string PageView = "page_view";
         public const string ChatStarted = "chat_started";
+        public const string FormStarted = "form_started";
+        public const string FormValidationFailed = "form_validation_failed";
+        public const string FormAbandoned = "form_abandoned";
+        public const string FormSubmitted = "form_submitted";
+        public const string WhatsAppClicked = "whatsapp_clicked";
 
         [MaxLength(32)]
         public string Type { get; set; } = PageView;

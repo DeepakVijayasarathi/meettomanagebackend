@@ -341,7 +341,7 @@ namespace iucs.meettomanage.application.Dto.Marketing
     public class TrackMarketingEventRequest
     {
         [Required]
-        [RegularExpression("^(page_view|chat_started)$")]
+        [RegularExpression("^(page_view|chat_started|form_started|form_validation_failed|form_abandoned|form_submitted|whatsapp_clicked)$")]
         public string Type { get; set; } = null!;
 
         [Required]
@@ -696,6 +696,11 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int ReturningVisitors { get; set; }
         public int ChatVisitors { get; set; }
         public int BookedVisitors { get; set; }
+        public int FormStartedVisitors { get; set; }
+        public int FormValidationFailedVisitors { get; set; }
+        public int FormAbandonedVisitors { get; set; }
+        public int FormSubmittedVisitors { get; set; }
+        public int WhatsAppVisitors { get; set; }
         public List<MarketingFunnelStepDto> Funnel { get; set; } = new();
         public List<MarketingPageBehaviourDto> Pages { get; set; } = new();
         public List<NamedCountDto> Devices { get; set; } = new();
