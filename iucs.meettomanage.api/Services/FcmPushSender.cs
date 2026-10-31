@@ -49,10 +49,10 @@ namespace iucs.meettomanage.api.Services
 
                 var config = JsonSerializer.Deserialize<Dictionary<string, string?>>(integration.ConfigJson ?? "{}") ?? [];
                 var projectId = Value(config, "projectId");
-                var accountJson = Value(config, "serviceAccountKey");
-                if (projectId is null || accountJson is null)
+                var account = ReadAccount(config);
+                if (projectId is null || account is null)
                 {
-                    _logger.LogWarning("Push skipped for user {UserId}: the Firebase integration has no projectId or serviceAccountKey.", userId);
+                    _logger.LogWarning("Push skipped for user {UserId}: the Firebase integration needs a projectId plus either serviceAccountKey or clientEmail + privateKey.", userId);
                     return;
                 }
 
@@ -65,7 +65,7 @@ namespace iucs.meettomanage.api.Services
                     return;
                 }
 
-                var accessToken = await GetAccessTokenAsync(accountJson, cancellationToken);
+                var accessToken = await GetAccessTokenAsync(account.Value, cancellationToken);
                 var client = _httpClientFactory.CreateClient(nameof(FcmPushSender));
                 var staleTokens = false;
                 foreach (var installation in installations)
@@ -113,13 +113,9 @@ namespace iucs.meettomanage.api.Services
         }
 
         /// <summary>Exchanges a signed service-account JWT for a short-lived OAuth token, cached until just before expiry.</summary>
-        private async Task<string> GetAccessTokenAsync(string accountJson, CancellationToken ct)
+        private async Task<string> GetAccessTokenAsync((string ClientEmail, string PrivateKey, string TokenUri) account, CancellationToken ct)
         {
-            using var document = JsonDocument.Parse(accountJson);
-            var root = document.RootElement;
-            var clientEmail = root.GetProperty("client_email").GetString()!;
-            var privateKey = root.GetProperty("private_key").GetString()!;
-            var tokenUri = root.TryGetProperty("token_uri", out var uri) ? uri.GetString() ?? DefaultTokenUri : DefaultTokenUri;
+            var (clientEmail, privateKey, tokenUri) = account;
 
             var cacheKey = clientEmail + "|" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(privateKey)))[..16];
             if (AccessTokens.TryGetValue(cacheKey, out var cached) && cached.ExpiresAtUtc > DateTime.UtcNow.AddMinutes(1)) return cached.Token;
@@ -145,6 +141,37 @@ namespace iucs.meettomanage.api.Services
             var lifetime = tokenDocument.RootElement.TryGetProperty("expires_in", out var seconds) ? seconds.GetInt32() : 3600;
             AccessTokens[cacheKey] = (token, DateTime.UtcNow.AddSeconds(lifetime));
             return token;
+        }
+
+        /// <summary>
+        /// The service account from either the whole key file (serviceAccountKey) or just its two needed values
+        /// (clientEmail + privateKey), which are each short enough to survive any field-length limit. The split
+        /// fields win when both are present. Returns null when neither is configured; throws a clear error when the
+        /// pasted JSON is incomplete.
+        /// </summary>
+        private static (string ClientEmail, string PrivateKey, string TokenUri)? ReadAccount(Dictionary<string, string?> config)
+        {
+            var email = Value(config, "clientEmail");
+            var key = Value(config, "privateKey");
+            if (email is not null && key is not null)
+                // Pasted straight from the key file, the PEM's line breaks arrive as the two characters \ and n.
+                return (email, key.Replace("\\n", "\n"), Value(config, "tokenUri") ?? DefaultTokenUri);
+
+            var json = Value(config, "serviceAccountKey");
+            if (json is null) return null;
+            try
+            {
+                using var document = JsonDocument.Parse(json);
+                var root = document.RootElement;
+                return (root.GetProperty("client_email").GetString()!, root.GetProperty("private_key").GetString()!,
+                    root.TryGetProperty("token_uri", out var uri) ? uri.GetString() ?? DefaultTokenUri : DefaultTokenUri);
+            }
+            catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
+            {
+                throw new InvalidOperationException(
+                    $"The Firebase serviceAccountKey is not a complete service-account JSON (it is {json.Length} characters; a full key file is about 2,200-2,400). " +
+                    "Paste the whole file again, or use the clientEmail + privateKey fields instead.", ex);
+            }
         }
 
         private static string Base64Url(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
