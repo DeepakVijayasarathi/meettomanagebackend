@@ -306,7 +306,17 @@ namespace iucs.meettomanage.application.Services
                 WhatsAppVisitors = events.Where(e => e.Type == MarketingEvent.WhatsAppClicked).Select(e => e.VisitorId).Distinct().Count(),
                 ExitIntentShownVisitors = events.Where(e => e.Type == MarketingEvent.ExitIntentShown).Select(e => e.VisitorId).Distinct().Count(),
                 ExitIntentSubmittedVisitors = events.Where(e => e.Type == MarketingEvent.ExitIntentSubmitted).Select(e => e.VisitorId).Distinct().Count(),
-                Experiments = events.Where(e => e.Variant != null).GroupBy(e => e.Variant!).Select(g =>
+                SignInClickedVisitors = events.Where(e => e.Type == MarketingEvent.SignInClicked).Select(e => e.VisitorId).Distinct().Count(),
+                DemoLoginVisitors = events.Where(e => e.Type == MarketingEvent.DemoLoginClicked).Select(e => e.VisitorId).Distinct().Count(),
+                DemoLogins = events.Where(e => e.Type == MarketingEvent.DemoLoginClicked && e.Variant != null)
+                    .GroupBy(e => e.Variant!.Split(':', 2)[^1])
+                    .Select(g => new NamedCountDto { Name = g.Key, Count = g.Select(e => e.VisitorId).Distinct().Count() })
+                    .OrderByDescending(x => x.Count).ToList(),
+                SignInFrom = events.Where(e => e.Type == MarketingEvent.SignInClicked)
+                    .GroupBy(e => e.Path)
+                    .Select(g => new NamedCountDto { Name = g.Key, Count = g.Select(e => e.VisitorId).Distinct().Count() })
+                    .OrderByDescending(x => x.Count).Take(10).ToList(),
+                Experiments = events.Where(e => e.Variant != null && e.Type != MarketingEvent.DemoLoginClicked).GroupBy(e => e.Variant!).Select(g =>
                 {
                     int Count(string type) => g.Where(e => e.Type == type).Select(e => e.VisitorId).Distinct().Count();
                     var seen = Count(MarketingEvent.ExperimentViewed);

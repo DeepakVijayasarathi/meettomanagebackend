@@ -25,6 +25,10 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         public const string ExitIntentSubmitted = "exit_intent_submitted";
         /// <summary>The visitor saw one variant of an A/B test; <see cref="Variant"/> says which.</summary>
         public const string ExperimentViewed = "experiment_viewed";
+        /// <summary>The visitor clicked "Sign in" in the marketing site's menu.</summary>
+        public const string SignInClicked = "signin_clicked";
+        /// <summary>The visitor clicked a demo account on the login page; <see cref="Variant"/> is "demo-login:&lt;role&gt;".</summary>
+        public const string DemoLoginClicked = "demo_login_clicked";
 
         [MaxLength(32)]
         public string Type { get; set; } = PageView;
@@ -54,7 +58,8 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         [MaxLength(2)]
         public string? Country { get; set; }
 
-        /// <summary>A/B test bucket as "experiment:variant" (e.g. "getstarted-copy:b"); null outside a test.</summary>
+        /// <summary>Extra label as "group:value": an A/B test bucket (e.g. "getstarted-copy:b") or the
+        /// demo account clicked (e.g. "demo-login:teacher"); null when there's nothing to add.</summary>
         [MaxLength(48)]
         public string? Variant { get; set; }
     }

@@ -341,7 +341,7 @@ namespace iucs.meettomanage.application.Dto.Marketing
     public class TrackMarketingEventRequest
     {
         [Required]
-        [RegularExpression("^(page_view|chat_started|form_started|form_validation_failed|form_abandoned|form_submitted|whatsapp_clicked|exit_intent_shown|exit_intent_submitted|experiment_viewed)$")]
+        [RegularExpression("^(page_view|chat_started|form_started|form_validation_failed|form_abandoned|form_submitted|whatsapp_clicked|exit_intent_shown|exit_intent_submitted|experiment_viewed|signin_clicked|demo_login_clicked)$")]
         public string Type { get; set; } = null!;
 
         [Required]
@@ -370,7 +370,7 @@ namespace iucs.meettomanage.application.Dto.Marketing
         [RegularExpression("^[A-Za-z]{2}$")]
         public string? Country { get; set; }
 
-        /// <summary>A/B test bucket, "experiment:variant" in lowercase letters, digits and dashes.</summary>
+        /// <summary>"group:value" in lowercase letters, digits and dashes: an A/B bucket or the demo role clicked.</summary>
         [RegularExpression("^[a-z0-9-]{1,30}:[a-z0-9-]{1,16}$")]
         public string? Variant { get; set; }
     }
@@ -720,6 +720,12 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int ExitIntentShownVisitors { get; set; }
         public int ExitIntentSubmittedVisitors { get; set; }
         public List<MarketingExperimentVariantDto> Experiments { get; set; } = new();
+        public int SignInClickedVisitors { get; set; }
+        public int DemoLoginVisitors { get; set; }
+        /// <summary>Demo-account clicks on the login page by role (Count = unique visitors).</summary>
+        public List<NamedCountDto> DemoLogins { get; set; } = new();
+        /// <summary>Marketing pages the "Sign in" clicks came from (Count = unique visitors).</summary>
+        public List<NamedCountDto> SignInFrom { get; set; } = new();
         public List<MarketingFunnelStepDto> Funnel { get; set; } = new();
         public List<MarketingPageBehaviourDto> Pages { get; set; } = new();
         public List<NamedCountDto> Devices { get; set; } = new();
