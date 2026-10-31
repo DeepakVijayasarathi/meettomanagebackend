@@ -43,9 +43,9 @@ namespace iucs.meettomanage.application.Services
             {
                 Id = Guid.NewGuid(),
                 FullName = request.FullName.Trim(),
-                WorkEmail = request.WorkEmail.Trim().ToLowerInvariant(),
-                Phone = request.Phone.Trim(),
-                AcademyName = request.AcademyName.Trim(),
+                WorkEmail = request.WorkEmail?.Trim().ToLowerInvariant() ?? "",
+                Phone = request.Phone?.Trim() ?? "",
+                AcademyName = string.IsNullOrWhiteSpace(request.AcademyName) ? "Not provided" : request.AcademyName.Trim(),
                 Message = string.IsNullOrWhiteSpace(request.Message) ? null : request.Message.Trim(),
                 VisitorId = Clean(request.VisitorId), Source = NormalizeSource(request.Source), Medium = NormalizeToken(request.Medium),
                 Campaign = NormalizeToken(request.Campaign), LandingPath = Clean(request.LandingPath),
@@ -108,8 +108,8 @@ namespace iucs.meettomanage.application.Services
             }
 
             var requests = await query.OrderByDescending(r => r.CreatedAtUtc).ToListAsync(cancellationToken);
-            var duplicates = requests.GroupBy(r => r.WorkEmail.ToLower()).Where(g => g.Count() > 1).SelectMany(g => g).Select(r => r.Id)
-                .Concat(requests.GroupBy(r => r.Phone).Where(g => g.Count() > 1).SelectMany(g => g).Select(r => r.Id)).ToHashSet();
+            var duplicates = requests.Where(r => !string.IsNullOrWhiteSpace(r.WorkEmail)).GroupBy(r => r.WorkEmail.ToLower()).Where(g => g.Count() > 1).SelectMany(g => g).Select(r => r.Id)
+                .Concat(requests.Where(r => !string.IsNullOrWhiteSpace(r.Phone)).GroupBy(r => r.Phone).Where(g => g.Count() > 1).SelectMany(g => g).Select(r => r.Id)).ToHashSet();
             return requests.Select(r => { var dto = r.ToDto(); dto.IsDuplicate = duplicates.Contains(r.Id); return dto; }).ToList();
         }
 
@@ -208,10 +208,16 @@ namespace iucs.meettomanage.application.Services
             var journeys = (await _unitOfWork.Repository<MarketingEvent>().Query().Where(x => visitorIds.Contains(x.VisitorId))
                     .Select(x => new JourneyEvent(x.VisitorId, x.Type, x.Path, x.CreatedAtUtc)).ToListAsync(cancellationToken))
                 .GroupBy(x => x.VisitorId).ToDictionary(g => g.Key, g => g.ToList());
-            var duplicates = await _unitOfWork.Repository<PlatformDemoRequest>().Query().Where(x => rows.Select(r => r.WorkEmail).Contains(x.WorkEmail) || rows.Select(r => r.Phone).Contains(x.Phone)).ToListAsync(cancellationToken);
+            var emails = rows.Select(r => r.WorkEmail).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToList();
+            var phones = rows.Select(r => r.Phone).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToList();
+            var duplicates = await _unitOfWork.Repository<PlatformDemoRequest>().Query().Where(x =>
+                (!string.IsNullOrEmpty(x.WorkEmail) && emails.Contains(x.WorkEmail)) ||
+                (!string.IsNullOrEmpty(x.Phone) && phones.Contains(x.Phone))).ToListAsync(cancellationToken);
             foreach (var row in rows)
             {
-                row.IsDuplicate = duplicates.Count(x => x.Id != row.Id && (x.WorkEmail == row.WorkEmail || x.Phone == row.Phone)) > 0;
+                row.IsDuplicate = duplicates.Count(x => x.Id != row.Id &&
+                    ((!string.IsNullOrWhiteSpace(row.WorkEmail) && x.WorkEmail == row.WorkEmail) ||
+                     (!string.IsNullOrWhiteSpace(row.Phone) && x.Phone == row.Phone))) > 0;
                 if (row.VisitorId is not null && journeys.TryGetValue(row.VisitorId, out var events))
                     (row.EngagementScoreBoost, row.EngagementReasons) = JourneyScore(events, row.CreatedAtUtc);
             }

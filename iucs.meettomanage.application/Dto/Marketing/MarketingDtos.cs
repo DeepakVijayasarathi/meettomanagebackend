@@ -4,24 +4,20 @@ using iucs.meettomanage.domain.Enums;
 namespace iucs.meettomanage.application.Dto.Marketing
 {
     /// <summary>Public — no login required. A prospective academy asking to see the platform.</summary>
-    public class CreatePlatformDemoRequestRequest
+    public class CreatePlatformDemoRequestRequest : IValidatableObject
     {
         [Required]
         [MaxLength(150)]
         public string FullName { get; set; } = null!;
 
-        [Required]
-        [EmailAddress]
         [MaxLength(256)]
-        public string WorkEmail { get; set; } = null!;
+        public string? WorkEmail { get; set; }
 
-        [Required]
         [MaxLength(20)]
-        public string Phone { get; set; } = null!;
+        public string? Phone { get; set; }
 
-        [Required]
         [MaxLength(150)]
-        public string AcademyName { get; set; } = null!;
+        public string? AcademyName { get; set; }
 
         [MaxLength(1000)]
         public string? Message { get; set; }
@@ -31,6 +27,16 @@ namespace iucs.meettomanage.application.Dto.Marketing
         [MaxLength(100)] public string? Medium { get; set; }
         [MaxLength(100)] public string? Campaign { get; set; }
         [MaxLength(200)] public string? LandingPath { get; set; }
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            var email = WorkEmail?.Trim();
+            var phone = Phone?.Trim();
+            if (string.IsNullOrWhiteSpace(email) && string.IsNullOrWhiteSpace(phone))
+                yield return new ValidationResult("Enter an email address or WhatsApp number.", [nameof(WorkEmail), nameof(Phone)]);
+            if (!string.IsNullOrWhiteSpace(email) && !new EmailAddressAttribute().IsValid(email))
+                yield return new ValidationResult("Please enter a valid email address.", [nameof(WorkEmail)]);
+        }
     }
 
     public class PlatformDemoRequestDto
