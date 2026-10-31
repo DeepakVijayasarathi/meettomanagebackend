@@ -3543,6 +3543,11 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at_utc");
 
+                    b.Property<string>("Variant")
+                        .HasMaxLength(48)
+                        .HasColumnType("character varying(48)")
+                        .HasColumnName("variant");
+
                     b.Property<string>("VisitorId")
                         .IsRequired()
                         .HasMaxLength(64)
