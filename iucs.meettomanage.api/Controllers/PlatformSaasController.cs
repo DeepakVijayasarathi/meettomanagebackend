@@ -459,7 +459,10 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
     public IActionResult Settings() => Ok(new
     {
         gateway = configuration["SaasBilling:Gateway"] ?? "Manual",
+        // Billing e-mail goes out by SMTP when configured, otherwise through the Resend account (PlatformEmailSender).
         smtpConfigured = !string.IsNullOrWhiteSpace(configuration["SaasBilling:Smtp:Host"]),
+        emailDelivery = !string.IsNullOrWhiteSpace(configuration["SaasBilling:Smtp:Host"]) ? "SMTP"
+            : !string.IsNullOrWhiteSpace(configuration["Resend:ApiKey"]) ? "Resend" : "None",
         signupEnabled = configuration.GetValue<bool>("SaasBilling:SignupEnabled"),
         graceDays = configuration.GetValue("SaasBilling:GraceDays", 7),
         taxRatePercent = configuration.GetValue("SaasBilling:TaxRatePercent", 18m),
