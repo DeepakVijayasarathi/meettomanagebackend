@@ -99,7 +99,7 @@ namespace iucs.meettomanage.tests
 
         private ChildSchedulePreferenceService CreateSchedulePreferenceService() => new(_db.UnitOfWork, _auditLog);
 
-        private EnrollmentService CreateEnrollmentService() => new(_db.UnitOfWork, _auditLog, CreateBillingService(), CreateBatchService(), _bulkFileReader);
+        private EnrollmentService CreateEnrollmentService() => new(_db.UnitOfWork, _auditLog, CreateBillingService(), CreateBatchService(), _bulkFileReader, _notifications);
 
         private MenuService CreateMenuService() => new(_db.UnitOfWork, _auditLog);
 

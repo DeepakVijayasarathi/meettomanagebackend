@@ -95,7 +95,14 @@ public sealed class PublicSaasController(MasterDbContext master, TenantProvision
         {
             Code = code, Name = request.OrganizationName.Trim(), AdminEmail = email, AdminPin = request.AdminPin,
         }, ct);
-        await subscriptions.EnsureSubscriptionAsync(tenant.Id, plan.Code, "signup", email, request.OrganizationName, ct);
+        var subscription = await subscriptions.EnsureSubscriptionAsync(tenant.Id, plan.Code, "signup", email, request.OrganizationName, ct);
+        // Proof of consent: who accepted the Terms & Privacy Policy at signup, when (the row's timestamp) and from where.
+        master.TenantSubscriptionEvents.Add(new TenantSubscriptionEvent
+        {
+            TenantId = tenant.Id, SubscriptionId = subscription.Id, EventType = "terms_accepted", Actor = "signup",
+            Detail = $"Terms of Service and Privacy Policy accepted at signup by {email} from {HttpContext.Connection.RemoteIpAddress}",
+        });
+        await master.SaveChangesAsync(ct);
         await NameOrganisationAsync(tenant, request.OrganizationName.Trim(), ct);
         return Ok(new { tenantCode = tenant.Code, loginPath = $"/t/{tenant.Code}/login", planCode = plan.Code, planName = plan.Name });
     }

@@ -381,6 +381,24 @@ namespace iucs.meettomanage.application.Common
                     """,
                     "TeacherFirstName", "StartAtLocal", "EndAtLocal", "Status", "ReviewNote"),
 
+                New("enrollment-submitted-staff", "New Enrollment to Review (Staff)",
+                    "Sent to Admin/Sub Admin when a parent submits an enrollment form, so it is approved without anyone having to keep checking Enrollment Review.",
+                    NotificationType.General, "New enrollment to review: {{ChildName}}",
+                    """
+                    <p><strong>{{ParentName}}</strong> submitted an enrollment for <strong>{{ChildName}}</strong>{{CourseLine}}.</p>
+                    <p>Open <strong>Enrollment Review</strong> in your admin portal to approve it. The child becomes a student and can join a batch as soon as you do.</p>
+                    """,
+                    "ParentName", "ChildName", "CourseLine"),
+
+                New("enrollment-approved-parent", "Enrollment Approved (Parent)",
+                    "Sent to the parent when their child's enrollment is approved.",
+                    NotificationType.General, "{{ChildName}} is enrolled",
+                    """
+                    <p>Hi {{ParentFirstName}},</p>
+                    <p>Good news: <strong>{{ChildName}}</strong>'s enrollment has been approved. Classes appear on your Schedule as soon as they are set up, and you can join them from there.</p>
+                    """,
+                    "ParentFirstName", "ChildName"),
+
                 New("leave-notify-core-team", "Teacher on Leave (Core Team)",
                     "Sent to Admin/Sub Admin when a teacher's leave is approved.",
                     NotificationType.LeaveStatusUpdate, "Teacher on leave: {{TeacherName}}",

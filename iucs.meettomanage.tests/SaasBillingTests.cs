@@ -337,6 +337,17 @@ public sealed class SaasSeederTests : IDisposable
 
 public sealed class SaasModuleTests
 {
+    [Theory]
+    [InlineData("{\"childName\":\" Aarav QA \",\"courseInterest\":\"QA Phonics Level 1\"}", "Aarav QA", "QA Phonics Level 1")]
+    [InlineData("{}", "your child", null)]
+    [InlineData("not json", "your child", null)]
+    public void EnrollmentEmailsReadChildAndCourseFromTheForm(string json, string child, string? course)
+    {
+        var (c, k) = application.Services.EnrollmentService.ReadNames(json);
+        Assert.Equal(child, c);
+        Assert.Equal(course, k);
+    }
+
     [Fact]
     public void MonthlyCountersNeverBlockADowngrade()
     {

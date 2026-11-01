@@ -92,6 +92,7 @@ namespace iucs.meettomanage.api.Data
             await EnsureStaffPayrollMenusAsync(context);
             await EnsureAccessRequestEmailTemplatesAsync(context);
             await EnsurePaymentPlanReminderEmailTemplatesAsync(context);
+            await EnsureEnrollmentNotificationEmailTemplatesAsync(context);
             await ReconcileOrgNameEmailTemplatesAsync(context);
             await EnsureProgressReportsMenuAsync(context);
             await EnsureStoreInquiriesMenuAsync(context);
@@ -2718,6 +2719,35 @@ namespace iucs.meettomanage.api.Data
         /// "payment-plan-reminder-sessions" / "payment-plan-reminder-date" rows if missing,
         /// mirroring EnsureProgressReportEmailTemplateAsync.
         /// </summary>
+        /// <summary>
+        /// Insert-if-missing for the enrollment notification templates (SeedEmailTemplatesAsync only
+        /// fills an empty table), mirroring EnsurePaymentPlanReminderEmailTemplatesAsync.
+        /// </summary>
+        private static async Task EnsureEnrollmentNotificationEmailTemplatesAsync(MeetToManageDbContext context)
+        {
+            foreach (var key in new[] { "enrollment-submitted-staff", "enrollment-approved-parent" })
+            {
+                if (context.EmailTemplates.Local.Any(t => t.Key == key) || await context.EmailTemplates.AnyAsync(t => t.Key == key))
+                {
+                    continue;
+                }
+                var seed = EmailTemplateSeedData.All.First(s => s.Key == key);
+                context.EmailTemplates.Add(new EmailTemplate
+                {
+                    Key = seed.Key,
+                    Name = seed.Name,
+                    Description = seed.Description,
+                    Category = seed.Category,
+                    Subject = seed.Subject,
+                    HtmlBody = seed.HtmlBody,
+                    PlaceholdersJson = JsonSerializer.Serialize(seed.Placeholders),
+                    IsActive = true,
+                    IsSystem = true,
+                });
+            }
+            await context.SaveChangesAsync();
+        }
+
         private static async Task EnsurePaymentPlanReminderEmailTemplatesAsync(MeetToManageDbContext context)
         {
             foreach (var key in new[] { "payment-plan-reminder-sessions", "payment-plan-reminder-date" })

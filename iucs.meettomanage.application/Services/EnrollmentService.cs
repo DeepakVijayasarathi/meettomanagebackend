@@ -22,14 +22,17 @@ namespace iucs.meettomanage.application.Services
         private readonly IBillingService _billingService;
         private readonly IBatchService _batchService;
         private readonly IBulkFileReader _bulkFileReader;
+        private readonly INotificationService _notifications;
 
         public EnrollmentService(
             IUnitOfWork unitOfWork,
             IAuditLogService auditLog,
             IBillingService billingService,
             IBatchService batchService,
-            IBulkFileReader bulkFileReader)
+            IBulkFileReader bulkFileReader,
+            INotificationService notifications)
         {
+            _notifications = notifications;
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _billingService = billingService;
@@ -84,7 +87,9 @@ namespace iucs.meettomanage.application.Services
 
                 await _auditLog.StageAsync(AuditAction.Create, nameof(EnrollmentForm), childForm.Id.ToString(), cancellationToken: cancellationToken);
                 await _unitOfWork.SaveChangesAsync(cancellationToken);
-                return await GetAsync(childForm.Id, cancellationToken);
+                var updated = await GetAsync(childForm.Id, cancellationToken);
+                await NotifyStaffOfSubmissionAsync(updated, cancellationToken);
+                return updated;
             }
 
             // A rejected form is resubmitted in place; otherwise every submission is a new child enrollment
@@ -125,7 +130,9 @@ namespace iucs.meettomanage.application.Services
             await _auditLog.StageAsync(AuditAction.Create, nameof(EnrollmentForm), form.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-            return await GetAsync(form.Id, cancellationToken);
+            var submitted = await GetAsync(form.Id, cancellationToken);
+            await NotifyStaffOfSubmissionAsync(submitted, cancellationToken);
+            return submitted;
         }
 
         public async Task<IReadOnlyList<EnrollmentFormDto>> ListForParentUserAsync(
@@ -359,7 +366,9 @@ namespace iucs.meettomanage.application.Services
                 await _batchService.AssignStudentAsync(request.BatchId.Value, child.Id, cancellationToken);
             }
 
-            return await GetAsync(form.Id, cancellationToken);
+            var reviewed = await GetAsync(form.Id, cancellationToken);
+            if (request.Approve) await NotifyParentOfApprovalAsync(reviewed, cancellationToken);
+            return reviewed;
         }
 
         /// <summary>
@@ -746,6 +755,69 @@ namespace iucs.meettomanage.application.Services
                 SubmittedAtUtc = form.SubmittedAtUtc,
                 ReviewedAtUtc = form.ReviewedAtUtc,
             };
+        }
+
+        // ---------------------------------------------------------------- notifications
+
+        /// <summary>Tells every active Admin/Sub Admin there is an enrollment to approve. Never fails the submission.</summary>
+        private async Task NotifyStaffOfSubmissionAsync(EnrollmentFormDto form, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var (childName, course) = ReadNames(form.FormDataJson);
+                var staff = await _unitOfWork.Repository<User>().Query()
+                    .Where(u => (u.Role == UserRole.Admin || u.Role == UserRole.SubAdmin) && u.Status == UserStatus.Active)
+                    .Select(u => new { u.Id, u.Email }).ToListAsync(cancellationToken);
+                foreach (var member in staff)
+                {
+                    await _notifications.SendTemplatedEmailAsync(member.Id, member.Email, NotificationType.General, "enrollment-submitted-staff",
+                        new Dictionary<string, string>
+                        {
+                            ["ParentName"] = form.ParentName,
+                            ["ChildName"] = childName,
+                            ["CourseLine"] = string.IsNullOrWhiteSpace(course) ? "" : $" ({course})",
+                        }, cancellationToken);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The enrollment is saved; a notification problem must not turn it into an error for the family.
+            }
+        }
+
+        /// <summary>Tells the parent their child is enrolled. Never fails the approval.</summary>
+        private async Task NotifyParentOfApprovalAsync(EnrollmentFormDto form, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var parentUser = await _unitOfWork.Repository<ParentProfile>().Query()
+                    .Where(p => p.Id == form.ParentProfileId).Select(p => p.User).FirstOrDefaultAsync(cancellationToken);
+                if (parentUser is null) return;
+                var (childName, _) = ReadNames(form.FormDataJson);
+                await _notifications.SendTemplatedEmailAsync(parentUser.Id, parentUser.Email, NotificationType.General, "enrollment-approved-parent",
+                    new Dictionary<string, string> { ["ParentFirstName"] = parentUser.FirstName, ["ChildName"] = childName }, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The approval stands; a notification problem must not undo it for staff.
+            }
+        }
+
+        /// <summary>Child and course names from the submitted form (fields childName / courseInterest).</summary>
+        public static (string ChildName, string? Course) ReadNames(string formDataJson)
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(string.IsNullOrWhiteSpace(formDataJson) ? "{}" : formDataJson);
+                string? Read(string name) => doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+                    && doc.RootElement.TryGetProperty(name, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String ? v.GetString() : null;
+                var child = Read("childName");
+                return (string.IsNullOrWhiteSpace(child) ? "your child" : child.Trim(), Read("courseInterest")?.Trim());
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return ("your child", null);
+            }
         }
     }
 }
