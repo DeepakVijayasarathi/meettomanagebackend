@@ -338,6 +338,16 @@ public sealed class SaasSeederTests : IDisposable
 public sealed class SaasModuleTests
 {
     [Theory]
+    [InlineData("Aarav", "Aarav")]
+    [InlineData("Sharma, Priya", "\"Sharma, Priya\"")]
+    [InlineData("say \"hi\"", "\"say \"\"hi\"\"\"")]
+    [InlineData("=HYPERLINK(\"x\")", "\"'=HYPERLINK(\"\"x\"\")\"")]
+    [InlineData("@SUM(A1)", "'@SUM(A1)")]
+    [InlineData("-250.50", "-250.50")]
+    public void ExportCellsAreQuotedAndNeverRunAsFormulas(string value, string expected) =>
+        Assert.Equal(expected, api.Controllers.AcademyDataController.Cell(value));
+
+    [Theory]
     [InlineData("{\"childName\":\" Aarav QA \",\"courseInterest\":\"QA Phonics Level 1\"}", "Aarav QA", "QA Phonics Level 1")]
     [InlineData("{}", "your child", null)]
     [InlineData("not json", "your child", null)]
