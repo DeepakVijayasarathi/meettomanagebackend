@@ -116,6 +116,10 @@ public static class SaasRules
         return (plan, active.OrderBy(x => x.BillingInterval).FirstOrDefault());
     }
 
+    /// <summary>Usage that must fit the target plan before a downgrade: current holdings, not monthly counters.</summary>
+    public static readonly IReadOnlyList<string> DowngradeMustFitKeys =
+        [EntitlementKeys.MaxStudents, EntitlementKeys.MaxStaff, EntitlementKeys.MaxStorageMb];
+
     /// <summary>A customer moving from a paid period to a free plan keeps what they paid for; an operator's move applies at once.</summary>
     public static bool FreeMoveWaitsForPeriodEnd(bool isOperator) => !isOperator;
 

@@ -338,6 +338,29 @@ public sealed class SaasSeederTests : IDisposable
 public sealed class SaasModuleTests
 {
     [Fact]
+    public void MonthlyCountersNeverBlockADowngrade()
+    {
+        Assert.DoesNotContain(EntitlementKeys.MaxRecordingsPerMonth, SaasRules.DowngradeMustFitKeys);
+        Assert.DoesNotContain(EntitlementKeys.MaxSessionsPerMonth, SaasRules.DowngradeMustFitKeys);
+        Assert.Contains(EntitlementKeys.MaxStudents, SaasRules.DowngradeMustFitKeys);
+        Assert.Contains(EntitlementKeys.MaxStaff, SaasRules.DowngradeMustFitKeys);
+    }
+
+    [Fact]
+    public void ResavingUnchangedOrDefaultBrandingIsNotABrandingChange()
+    {
+        var stored = new Dictionary<string, string?> { ["brand.name"] = "Meet to Manage", ["brand.primaryColor"] = "#1E3A5F", ["brand.logoUrl"] = null };
+        // the Settings page sends never-stored keys with their defaults: not a change
+        Assert.False(api.Controllers.SettingsController.BrandChanged(stored, "brand.fontFamily", "DM Sans"));
+        Assert.False(api.Controllers.SettingsController.BrandChanged(stored, "brand.logoUrl", ""));
+        Assert.False(api.Controllers.SettingsController.BrandChanged(stored, "brand.primaryColor", "#1e3a5f"));
+        // real changes are
+        Assert.True(api.Controllers.SettingsController.BrandChanged(stored, "brand.primaryColor", "#123456"));
+        Assert.True(api.Controllers.SettingsController.BrandChanged(stored, "brand.fontFamily", "Poppins"));
+        Assert.True(api.Controllers.SettingsController.BrandChanged(stored, "brand.name", "Bright Minds"));
+    }
+
+    [Fact]
     public void PlanWithoutModuleKeysIncludesEveryModule()
     {
         var plan = new TenantEntitlements(true, "old", "Old", SaasSubscriptionStatus.Active, new Dictionary<string, long>());

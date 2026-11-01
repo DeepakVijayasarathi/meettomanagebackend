@@ -42,14 +42,33 @@ namespace iucs.meettomanage.api.Controllers
             CancellationToken cancellationToken)
         {
             // Changing your own branding (brand.*) is a paid feature; re-saving the page with branding unchanged is not.
+            // The Settings page sends every key, filling never-stored ones with the platform default, so a missing
+            // stored value counts as that default (otherwise a Free academy could not save any setting at all).
             if (updates.Any(u => u.Key.StartsWith("brand.", StringComparison.Ordinal)))
             {
                 var current = (await _settingsService.GetAllAsync(cancellationToken)).ToDictionary(x => x.Key, x => x.Value);
-                if (updates.Any(u => u.Key.StartsWith("brand.", StringComparison.Ordinal)
-                    && (current.GetValueOrDefault(u.Key) ?? "") != (u.Value ?? "")))
+                if (updates.Any(u => u.Key.StartsWith("brand.", StringComparison.Ordinal) && BrandChanged(current, u.Key, u.Value)))
                     await PlanFeatures.RequireAsync(HttpContext, EntitlementKeys.WhiteLabel, "Your own branding");
             }
             return Ok(await _settingsService.UpsertAsync(updates, cancellationToken));
+        }
+
+        /// <summary>Platform defaults for the brand.* keys (match DatabaseInitializer and the Settings page fallbacks).</summary>
+        private static readonly IReadOnlyDictionary<string, string> BrandDefaults = new Dictionary<string, string>
+        {
+            ["brand.name"] = "Meet to Manage",
+            ["brand.logoUrl"] = "",
+            ["brand.primaryColor"] = "#1E3A5F",
+            ["brand.accentColor"] = "#E63329",
+            ["brand.fontFamily"] = "DM Sans",
+            ["brand.headingFont"] = "Plus Jakarta Sans",
+        };
+
+        public static bool BrandChanged(IReadOnlyDictionary<string, string?> current, string key, string? value)
+        {
+            // Only a key that was never stored falls back to the default; a stored empty value stays empty.
+            var stored = current.TryGetValue(key, out var v) ? v ?? "" : BrandDefaults.GetValueOrDefault(key, "");
+            return !string.Equals(stored.Trim(), (value ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
         }
     }
 }

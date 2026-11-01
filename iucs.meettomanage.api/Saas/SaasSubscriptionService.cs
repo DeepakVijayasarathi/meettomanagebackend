@@ -224,7 +224,9 @@ public sealed class SaasSubscriptionService(IDbContextFactory<MasterDbContext> f
     private async Task EnsureFitsAsync(Guid tenantId, PlanPrice target, CancellationToken ct)
     {
         var used = await usage.GetLiveAsync(tenantId, ct);
-        foreach (var key in SaasUsageService.MeteredKeys.Where(k => k != EntitlementKeys.MaxSessionMinutesPerMonth))
+        // Only what the academy holds right now must fit (students, staff, storage). Monthly counters (minutes,
+        // sessions, recordings) reset each month and cannot be "reduced", so they never block a downgrade.
+        foreach (var key in SaasRules.DowngradeMustFitKeys)
         {
             var limit = target.Plan.Entitlements.FirstOrDefault(x => x.Key == key)?.Value ?? EntitlementKeys.Unlimited;
             var current = used.For(key) ?? 0;
