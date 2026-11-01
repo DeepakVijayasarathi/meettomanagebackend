@@ -113,6 +113,15 @@ public sealed class AcademyDataController(MeetToManageDbContext db, ILogger<Acad
             if (sub.Status is not (SaasSubscriptionStatus.Cancelled or SaasSubscriptionStatus.Expired))
                 await subscriptions.CancelAsync(tenantId, immediate: true, actor: adminEmail, ct);
         }
+        else
+        {
+            // An academy from before billing has no subscription to cancel: suspend the workspace directly, or
+            // "closing" would sign the admin out while everyone else kept working.
+            var record = await master.Tenants.SingleAsync(x => x.Id == tenantId, ct);
+            if (record.Status == domain.Entities.Tenancy.TenantStatus.Active) record.Status = domain.Entities.Tenancy.TenantStatus.Suspended;
+            await master.SaveChangesAsync(ct);
+            logger.LogWarning("Academy {TenantCode} (no subscription) was closed by {Admin}. Reason: {Reason}", tenant.TenantCode, adminEmail, reason);
+        }
 
         await TellOperatorAsync(services, tenant.TenantCode ?? tenantId.ToString(), adminEmail, reason, ct);
         return Ok(new { closed = true });
