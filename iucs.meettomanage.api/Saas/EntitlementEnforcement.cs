@@ -163,3 +163,28 @@ public sealed class RequiresFeatureAttribute(string feature) : Attribute, IAsync
         await next();
     }
 }
+
+/// <summary>
+/// In-action check for a plan feature, for endpoints where only some requests use it (e.g. turning
+/// WhatsApp on, or changing a brand.* setting). Platform operators and non-tenant requests pass.
+/// </summary>
+public static class PlanFeatures
+{
+    public static async Task RequireAsync(HttpContext http, string feature, string what)
+    {
+        if (http.User.IsInRole("PlatformAdmin")) return;
+        if (http.RequestServices.GetService<TenantContext>()?.TenantId is not { } tenantId) return;
+        if (http.RequestServices.GetService<IEntitlementService>() is not { } entitlements) return;
+        var granted = await entitlements.GetAsync(tenantId, http.RequestAborted);
+        if (!granted.Can(feature))
+            throw new PlanLimitException($"{what} isn't included in your {granted.PlanName} plan. Upgrade your plan to use it.");
+    }
+
+    /// <summary>Which plan feature turning on this integration needs, if any (email, push, cash and video stay on every plan).</summary>
+    public static string? ForIntegration(IntegrationCategory category, string key) => category switch
+    {
+        IntegrationCategory.Messaging when key is "whatsapp" or "sms" => EntitlementKeys.Whatsapp,
+        IntegrationCategory.PaymentGateway when key != "cash" => EntitlementKeys.PaymentGateway,
+        _ => null,
+    };
+}

@@ -29,7 +29,7 @@ public sealed class SignupRequest
 /// <summary>Anonymous endpoints: the public plan list, tenant-code check and self-service signup.</summary>
 [ApiController, Route("api/platform/public"), AllowAnonymous]
 public sealed class PublicSaasController(MasterDbContext master, TenantProvisioner provisioner, SaasSubscriptionService subscriptions,
-    IOptions<SaasOptions> options) : ControllerBase
+    IOptions<SaasOptions> options, TenantScopeFactory scopes, ILogger<PublicSaasController> logger) : ControllerBase
 {
     [HttpGet("plans")]
     public async Task<IActionResult> Plans(CancellationToken ct)
@@ -96,7 +96,27 @@ public sealed class PublicSaasController(MasterDbContext master, TenantProvision
             Code = code, Name = request.OrganizationName.Trim(), AdminEmail = email, AdminPin = request.AdminPin,
         }, ct);
         await subscriptions.EnsureSubscriptionAsync(tenant.Id, plan.Code, "signup", email, request.OrganizationName, ct);
+        await NameOrganisationAsync(tenant, request.OrganizationName.Trim(), ct);
         return Ok(new { tenantCode = tenant.Code, loginPath = $"/t/{tenant.Code}/login", planCode = plan.Code, planName = plan.Name });
+    }
+
+    /// <summary>
+    /// A new academy starts from the default settings, whose organisation name is the platform's own; use the name
+    /// the academy signed up with instead. Best effort: the workspace already exists, so a failure here is only logged.
+    /// </summary>
+    private async Task NameOrganisationAsync(domain.Entities.Tenancy.Tenant tenant, string name, CancellationToken ct)
+    {
+        try
+        {
+            using var scope = scopes.CreateScope(tenant);
+            using var ambient = application.Common.TenantExecution.Enter(tenant.Id, tenant.Code);
+            await scope.ServiceProvider.GetRequiredService<application.Services.ISettingsService>()
+                .UpsertAsync([new application.Dto.Settings.UpdateSettingRequest { Key = "org.name", Value = name }], ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogWarning(ex, "Could not set the organisation name for new tenant {TenantCode}.", tenant.Code);
+        }
     }
 
     /// <summary>A public plan that is sold, and every active price is zero.</summary>

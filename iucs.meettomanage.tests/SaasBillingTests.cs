@@ -310,6 +310,28 @@ public sealed class SaasSeederTests : IDisposable
         Assert.Equal(1, await db.Plans.CountAsync(x => x.Code == SaasSeeder.FreePlanCode));
     }
 
+    [Fact]
+    public async Task TrialPlanGetsEveryFeatureItPromisesButOperatorEditsAreKept()
+    {
+        var options = Options.Create(new SaasOptions());
+        await SaasSeeder.SeedAsync(_factory, options, NullLogger.Instance);
+        await using (var db = _factory.CreateDbContext())
+        {
+            var trial = await db.Plans.Include(x => x.Entitlements).SingleAsync(x => x.Code == "trial");
+            Assert.Equal(1, trial.Entitlements.Single(x => x.Key == EntitlementKeys.WhiteLabel).Value);
+            Assert.Equal(1, trial.Entitlements.Single(x => x.Key == EntitlementKeys.Whatsapp).Value);
+            // the operator turns WhatsApp off again: a later start must not undo that
+            trial.Entitlements.Single(x => x.Key == EntitlementKeys.Whatsapp).Value = 0;
+            trial.Entitlements.Single(x => x.Key == EntitlementKeys.WhiteLabel).Value = 0;
+            trial.Entitlements.Single(x => x.Key == EntitlementKeys.PaymentGateway).Value = 0;
+            trial.Entitlements.Single(x => x.Key == EntitlementKeys.Recordings).Value = 0;
+            await db.SaveChangesAsync();
+        }
+        await SaasSeeder.SeedAsync(_factory, options, NullLogger.Instance);
+        await using var check = _factory.CreateDbContext();
+        Assert.Equal(0, (await check.PlanEntitlements.SingleAsync(x => x.Plan.Code == "trial" && x.Key == EntitlementKeys.Whatsapp)).Value);
+    }
+
     public void Dispose() => _connection.Dispose();
 }
 
@@ -361,6 +383,17 @@ public sealed class SaasModuleTests
         Assert.True(SaasRules.FreeMoveWaitsForPeriodEnd(isOperator: false));
         Assert.False(SaasRules.FreeMoveWaitsForPeriodEnd(isOperator: true));
     }
+
+    [Theory]
+    [InlineData(domain.Enums.IntegrationCategory.Messaging, "whatsapp", EntitlementKeys.Whatsapp)]
+    [InlineData(domain.Enums.IntegrationCategory.Messaging, "sms", EntitlementKeys.Whatsapp)]
+    [InlineData(domain.Enums.IntegrationCategory.Messaging, "fcm", null)]
+    [InlineData(domain.Enums.IntegrationCategory.PaymentGateway, "razorpay", EntitlementKeys.PaymentGateway)]
+    [InlineData(domain.Enums.IntegrationCategory.PaymentGateway, "cash", null)]
+    [InlineData(domain.Enums.IntegrationCategory.Email, "email", null)]
+    [InlineData(domain.Enums.IntegrationCategory.VideoConferencing, "zoom", null)]
+    public void TurningOnAnIntegrationNeedsTheMatchingPlanFeature(domain.Enums.IntegrationCategory category, string key, string? feature) =>
+        Assert.Equal(feature, PlanFeatures.ForIntegration(category, key));
 
     [Fact]
     public void TrialBannerMentionsFreeFallbackWhenEnabled()

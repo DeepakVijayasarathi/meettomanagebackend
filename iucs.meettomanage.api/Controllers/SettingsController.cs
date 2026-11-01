@@ -1,4 +1,5 @@
 using iucs.meettomanage.api.Auth;
+using iucs.meettomanage.api.Saas;
 using iucs.meettomanage.application.Dto.Settings;
 using iucs.meettomanage.application.Services;
 using iucs.meettomanage.domain.Enums;
@@ -40,6 +41,14 @@ namespace iucs.meettomanage.api.Controllers
             List<UpdateSettingRequest> updates,
             CancellationToken cancellationToken)
         {
+            // Changing your own branding (brand.*) is a paid feature; re-saving the page with branding unchanged is not.
+            if (updates.Any(u => u.Key.StartsWith("brand.", StringComparison.Ordinal)))
+            {
+                var current = (await _settingsService.GetAllAsync(cancellationToken)).ToDictionary(x => x.Key, x => x.Value);
+                if (updates.Any(u => u.Key.StartsWith("brand.", StringComparison.Ordinal)
+                    && (current.GetValueOrDefault(u.Key) ?? "") != (u.Value ?? "")))
+                    await PlanFeatures.RequireAsync(HttpContext, EntitlementKeys.WhiteLabel, "Your own branding");
+            }
             return Ok(await _settingsService.UpsertAsync(updates, cancellationToken));
         }
     }

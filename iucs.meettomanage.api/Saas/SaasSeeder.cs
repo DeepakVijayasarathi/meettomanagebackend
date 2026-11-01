@@ -33,7 +33,7 @@ public static class SaasSeeder
         {
             db.Plans.AddRange(
                 NewPlan("trial", "Free Trial", "Try everything for a limited time.", false, options.Value.DefaultTrialDays, 0,
-                    new Limits(25, 5, 2 * 1024, 600, 100, 100, 7), Features(recordings: true, whiteLabel: false, gateway: false), []),
+                    new Limits(25, 5, 2 * 1024, 600, 100, 100, 7), Features(recordings: true, whiteLabel: true, gateway: true, whatsapp: true), []),
                 NewPlan("starter", "Starter", "For a single academy getting started.", true, 0, 1,
                     new Limits(100, 15, 20 * 1024, 6_000, 1_000, 1_000, 16), Features(recordings: true, whiteLabel: true, gateway: true),
                     [(BillingInterval.Month, 2999m), (BillingInterval.Year, 29990m)]),
@@ -61,6 +61,20 @@ public static class SaasSeeder
             logger.LogInformation("Seeded the public Free plan.");
         }
         await db.SaveChangesAsync(ct);
+
+        // The trial was first seeded with branding, gateway and WhatsApp off, back when no feature flag was enforced.
+        // Now that they are, a trial must still show everything it promises; only an untouched trial plan is changed.
+        var trialPlan = await db.Plans.Include(x => x.Entitlements).SingleOrDefaultAsync(x => x.Code == "trial", ct);
+        if (trialPlan is not null)
+        {
+            long Flag(string key) => trialPlan.Entitlements.FirstOrDefault(x => x.Key == key)?.Value ?? -1;
+            var asSeeded = Flag(EntitlementKeys.WhiteLabel) == 0 && Flag(EntitlementKeys.PaymentGateway) == 0
+                && Flag(EntitlementKeys.Whatsapp) == 0 && Flag(EntitlementKeys.Recordings) == 1;
+            if (asSeeded)
+                foreach (var row in trialPlan.Entitlements.Where(x => x.Key is EntitlementKeys.WhiteLabel or EntitlementKeys.PaymentGateway or EntitlementKeys.Whatsapp))
+                    row.Value = 1;
+            await db.SaveChangesAsync(ct);
+        }
 
         // Plans created before session/recording metering was introduced do not have these
         // catalogue rows. Backfill only missing values: operator-edited limits are never

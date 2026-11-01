@@ -1,3 +1,4 @@
+using iucs.meettomanage.api.Saas;
 using iucs.meettomanage.api.Auth;
 using iucs.meettomanage.api.Services;
 using iucs.meettomanage.application.Common.Interfaces;
@@ -32,6 +33,7 @@ namespace iucs.meettomanage.api.Controllers
         [RequestSizeLimit(BrandLogo.MaxBytes + 4096)]
         public async Task<IActionResult> Upload(IFormFile file, CancellationToken cancellationToken)
         {
+            await PlanFeatures.RequireAsync(HttpContext, EntitlementKeys.WhiteLabel, "Your own logo");
             await using var stream = file.OpenReadStream();
             var url = await BrandLogo.SaveAsync(storage, settings, stream, file.FileName,
                 BrandLogo.PublicBaseUrl(configuration, Request), cancellationToken);

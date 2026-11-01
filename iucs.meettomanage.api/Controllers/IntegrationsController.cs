@@ -1,4 +1,5 @@
 using iucs.meettomanage.api.Auth;
+using iucs.meettomanage.api.Saas;
 using iucs.meettomanage.api.Services;
 using iucs.meettomanage.application.Dto.Integrations;
 using iucs.meettomanage.application.Services;
@@ -33,6 +34,7 @@ namespace iucs.meettomanage.api.Controllers
         [HasPermission(PermissionModule.Settings, PermissionAction.Edit)]
         public async Task<ActionResult<IntegrationDto>> Create(SaveIntegrationRequest request, CancellationToken cancellationToken)
         {
+            await RequirePlanFeatureAsync(request);
             var integration = await _integrationService.CreateAsync(request, cancellationToken);
             return CreatedAtAction(nameof(List), null, integration);
         }
@@ -44,10 +46,19 @@ namespace iucs.meettomanage.api.Controllers
             SaveIntegrationRequest request,
             CancellationToken cancellationToken)
         {
+            await RequirePlanFeatureAsync(request);
             return Ok(await _integrationService.UpdateAsync(id, request, cancellationToken));
         }
 
-        [HttpDelete("{id:guid}")]
+        /// <summary>Turning on WhatsApp/SMS or an online payment gateway needs the plan feature; switching off never does.</summary>
+        private async Task RequirePlanFeatureAsync(SaveIntegrationRequest request)
+        {
+            if (!request.IsEnabled || PlanFeatures.ForIntegration(request.Category, request.Key) is not { } feature) return;
+            var what = feature == EntitlementKeys.Whatsapp ? "WhatsApp / SMS notifications" : "Online fee collection";
+            await PlanFeatures.RequireAsync(HttpContext, feature, what);
+        }
+
+                [HttpDelete("{id:guid}")]
         [HasPermission(PermissionModule.Settings, PermissionAction.Edit)]
         public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
         {

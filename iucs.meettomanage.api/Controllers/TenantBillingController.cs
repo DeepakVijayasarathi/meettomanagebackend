@@ -51,7 +51,8 @@ public sealed class TenantBillingController(MasterDbContext master, TenantContex
                 percent = limit <= 0 ? 0 : (int)Math.Min(100, current * 100 / limit),
             };
         });
-        var features = EntitlementKeys.Catalog.Where(x => x.Type == EntitlementValueType.Bool)
+        // API access has no tenant-facing product yet, so it is not advertised to academies.
+        var features = EntitlementKeys.Catalog.Where(x => x.Type == EntitlementValueType.Bool && x.Key != EntitlementKeys.ApiAccess)
             .Select(x => new { x.Key, x.Label, enabled = granted.Can(x.Key) });
         var modules = EntitlementKeys.Modules
             .Select(x => new { x.Key, label = x.Label["Module: ".Length..], enabled = granted.HasModule(x.Key) });
