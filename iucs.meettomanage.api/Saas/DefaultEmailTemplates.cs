@@ -12,16 +12,26 @@ public static class DefaultEmailTemplates
 
     private const string Portal = "<p>Manage your subscription: <a href=\"{{portal_url}}\">{{portal_url}}</a></p>";
 
+    /// <summary>Bodies these keys shipped with before trials fell back to Free; stored copies still equal to them are upgraded.</summary>
+    public static readonly IReadOnlyDictionary<string, string> PreviousBodies = new Dictionary<string, string>
+    {
+        ["trial_ending_7"] = "<p>Hello {{tenant_name}},</p><p>Your trial ends on <b>{{trial_end_date}}</b>. Choose a plan to keep your workspace running without interruption.</p>" + Portal,
+        ["trial_ending_3"] = "<p>Hello {{tenant_name}},</p><p>Your trial ends on <b>{{trial_end_date}}</b>. Choose a plan now so your classes are not interrupted.</p>" + Portal,
+        ["trial_ending_1"] = "<p>Hello {{tenant_name}},</p><p>Your trial ends tomorrow (<b>{{trial_end_date}}</b>). After that your workspace is paused until you choose a plan.</p>" + Portal,
+    };
+
     public static readonly IReadOnlyList<Template> All =
     [
         new("trial_started", "Welcome / trial started", "Welcome to {{platform_name}} - your trial has started",
             "<p>Hello {{tenant_name}},</p><p>Your free trial is active until <b>{{trial_end_date}}</b>. Set up your branding, add teachers and invite parents.</p>" + Portal),
         new("trial_ending_7", "Trial ending (7 days)", "Your {{platform_name}} trial ends in 7 days",
-            "<p>Hello {{tenant_name}},</p><p>Your trial ends on <b>{{trial_end_date}}</b>. Choose a plan to keep your workspace running without interruption.</p>" + Portal),
+            "<p>Hello {{tenant_name}},</p><p>Your trial ends on <b>{{trial_end_date}}</b>. After that your academy moves to the Free plan and the paid modules (fees, payouts, reports, admissions) lock. Choose a plan to keep every module.</p>" + Portal),
         new("trial_ending_3", "Trial ending (3 days)", "Only 3 days left in your {{platform_name}} trial",
-            "<p>Hello {{tenant_name}},</p><p>Your trial ends on <b>{{trial_end_date}}</b>. Choose a plan now so your classes are not interrupted.</p>" + Portal),
+            "<p>Hello {{tenant_name}},</p><p>Your trial ends on <b>{{trial_end_date}}</b>. Your classes keep running on the Free plan afterwards; choose a plan now to keep fees, payouts, reports and admissions.</p>" + Portal),
         new("trial_ending_1", "Trial ending (1 day)", "Your {{platform_name}} trial ends tomorrow",
-            "<p>Hello {{tenant_name}},</p><p>Your trial ends tomorrow (<b>{{trial_end_date}}</b>). After that your workspace is paused until you choose a plan.</p>" + Portal),
+            "<p>Hello {{tenant_name}},</p><p>Your trial ends tomorrow (<b>{{trial_end_date}}</b>). After that your academy moves to the Free plan and the paid modules lock until you choose a plan.</p>" + Portal),
+        new("trial_moved_to_free", "Trial ended - moved to Free", "Your {{platform_name}} trial has ended - you're on the Free plan",
+            "<p>Hello {{tenant_name}},</p><p>Your trial has ended and your academy is now on the <b>{{plan_name}}</b> plan. Your classes, students and content keep working; fees, payouts, reports and admissions are locked. Choose a paid plan any time to unlock them again.</p>" + Portal),
         new("trial_expired", "Trial expired", "Your {{platform_name}} trial has ended",
             "<p>Hello {{tenant_name}},</p><p>Your trial has ended and the workspace is paused. Your data is safe. Choose a plan to restore access.</p>{{pay_block}}<p>Questions? {{support_email}}</p>"),
         new("renewal_upcoming", "Upcoming renewal / invoice", "Invoice {{invoice_number}} for your {{platform_name}} subscription",

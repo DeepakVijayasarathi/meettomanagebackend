@@ -102,16 +102,33 @@ public static class SaasRules
         return due;
     }
 
+    /// <summary>
+    /// The plan (and its ₹0 price) an unpaid trial moves to when it ends: the configured code, only if that
+    /// plan is active and costs nothing. Null means the trial pauses the workspace as before.
+    /// </summary>
+    public static (Plan Plan, PlanPrice? Price)? TrialFallback(IEnumerable<Plan> plans, string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return null;
+        var plan = plans.FirstOrDefault(x => x.Code == code.Trim().ToLowerInvariant() && x.IsActive && x.TrialDays == 0);
+        if (plan is null) return null;
+        var active = plan.Prices.Where(x => x.IsActive).ToList();
+        if (active.Any(x => x.Amount > 0)) return null; // never move anyone onto a paid plan without paying
+        return (plan, active.OrderBy(x => x.BillingInterval).FirstOrDefault());
+    }
+
     /// <summary>Banner shown inside the tenant's admin portal; null when nothing needs attention.</summary>
-    public static (string Level, string Message)? Banner(TenantSubscription sub, DateTime now)
+    public static (string Level, string Message)? Banner(TenantSubscription sub, DateTime now, bool trialFallsBackToFree = false)
     {
         switch (sub.Status)
         {
             case SaasSubscriptionStatus.Trialing when sub.TrialEndsAtUtc is { } end:
                 var left = Math.Max(0, (int)Math.Ceiling((end - now).TotalDays));
+                var after = trialFallsBackToFree
+                    ? "After that you move to the Free plan. Choose a plan to keep every module."
+                    : "Choose a plan to keep your workspace active.";
                 return (left <= 3 ? "warning" : "info",
-                    left == 0 ? "Your free trial ends today. Choose a plan to keep your workspace active."
-                    : $"{left} day{(left == 1 ? "" : "s")} left in your free trial. Choose a plan to keep your workspace active.");
+                    left == 0 ? $"Your free trial ends today. {after}"
+                    : $"{left} day{(left == 1 ? "" : "s")} left in your free trial. {after}");
             case SaasSubscriptionStatus.PastDue:
                 var grace = sub.GraceEndsAtUtc is { } g ? $" Your workspace will be suspended on {g:dd MMM yyyy}." : "";
                 return ("danger", "Your subscription payment is overdue." + grace + " Please pay the open invoice.");

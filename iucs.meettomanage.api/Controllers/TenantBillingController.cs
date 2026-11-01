@@ -38,7 +38,7 @@ public sealed class TenantBillingController(MasterDbContext master, TenantContex
             ? await master.PlanPrices.AsNoTracking().Include(x => x.Plan).SingleOrDefaultAsync(x => x.Id == pendingId, ct) : null;
         var open = await master.PlatformInvoices.AsNoTracking().Where(x => x.TenantId == tenantId && x.Status == PlatformInvoiceStatus.Open)
             .OrderBy(x => x.DueAtUtc).ToListAsync(ct);
-        var banner = SaasRules.Banner(sub, now);
+        var banner = SaasRules.Banner(sub, now, !string.IsNullOrWhiteSpace(options.Value.TrialFallbackPlanCode));
 
         var limits = SaasUsageService.MeteredKeys.Select(key =>
         {
@@ -75,7 +75,7 @@ public sealed class TenantBillingController(MasterDbContext master, TenantContex
     public async Task<IActionResult> Banner(CancellationToken ct)
     {
         var sub = await master.TenantSubscriptions.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == TenantId, ct);
-        var banner = sub is null ? null : SaasRules.Banner(sub, DateTime.UtcNow);
+        var banner = sub is null ? null : SaasRules.Banner(sub, DateTime.UtcNow, !string.IsNullOrWhiteSpace(options.Value.TrialFallbackPlanCode));
         return Ok(new { banner = banner is null ? null : new { level = banner.Value.Level, message = banner.Value.Message } });
     }
 

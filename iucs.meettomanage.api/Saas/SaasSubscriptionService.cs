@@ -417,13 +417,30 @@ public sealed class SaasSubscriptionService(IDbContextFactory<MasterDbContext> f
         switch (action)
         {
             case LifecycleAction.ExpireTrial:
+            {
+                // With a Free plan configured, an unpaid trial keeps working on Free instead of pausing.
+                var trialEnd = sub.TrialEndsAtUtc!.Value;
+                var candidates = string.IsNullOrWhiteSpace(Options.TrialFallbackPlanCode) ? []
+                    : await db.Plans.Include(x => x.Prices).Where(x => x.Code == Options.TrialFallbackPlanCode.Trim().ToLowerInvariant()).ToListAsync(ct);
+                if (SaasRules.TrialFallback(candidates, Options.TrialFallbackPlanCode) is { } fallback)
+                {
+                    ApplyNoRenewalPlan(sub, fallback.Plan, fallback.Price);
+                    await SyncTenantAsync(db, sub, suspend: false, ct);
+                    AddEvent(db, sub, "trial_ended_moved_to_free", $"Trial ended; moved to {fallback.Plan.Code}", "system");
+                    await db.SaveChangesAsync(ct);
+                    entitlements.Invalidate(tenantId);
+                    await reminders.NotifyAsync(tenantId, "trial_moved_to_free", trialEnd.ToString("yyyyMMdd"),
+                        extra: new Dictionary<string, string> { ["plan_name"] = fallback.Plan.Name }, ct: ct);
+                    break;
+                }
                 sub.Status = SaasSubscriptionStatus.Expired;
                 await SyncTenantAsync(db, sub, suspend: true, ct);
                 AddEvent(db, sub, "trial_expired", null, "system");
                 await db.SaveChangesAsync(ct);
                 entitlements.Invalidate(tenantId);
-                await reminders.NotifyAsync(tenantId, "trial_expired", sub.TrialEndsAtUtc!.Value.ToString("yyyyMMdd"), ct: ct);
+                await reminders.NotifyAsync(tenantId, "trial_expired", trialEnd.ToString("yyyyMMdd"), ct: ct);
                 break;
+            }
 
             case LifecycleAction.GenerateRenewalInvoice:
                 await IssueRenewalInvoiceAsync(db, sub, now, ct);

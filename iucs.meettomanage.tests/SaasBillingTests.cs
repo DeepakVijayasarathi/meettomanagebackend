@@ -332,6 +332,31 @@ public sealed class SaasModuleTests
     public void EnrollmentReviewStaysOnEveryPlan(string path, bool anyPlan) =>
         Assert.Equal(anyPlan, EntitlementKeys.IsAnyPlanMenuPath(path));
 
+    private static Plan PlanWith(string code, bool active, int trialDays, params decimal[] prices)
+    {
+        var plan = new Plan { Code = code, Name = code, IsActive = active, TrialDays = trialDays };
+        foreach (var amount in prices) plan.Prices.Add(new PlanPrice { Amount = amount, BillingInterval = BillingInterval.Month });
+        return plan;
+    }
+
+    [Fact]
+    public void ExpiredTrialFallsBackOnlyToAnActiveZeroPricePlan()
+    {
+        Assert.Equal("free", SaasRules.TrialFallback([PlanWith("free", true, 0, 0m)], "free")!.Value.Plan.Code);
+        Assert.Null(SaasRules.TrialFallback([PlanWith("free", true, 0, 0m)], ""));          // turned off
+        Assert.Null(SaasRules.TrialFallback([PlanWith("free", false, 0, 0m)], "free"));     // inactive
+        Assert.Null(SaasRules.TrialFallback([PlanWith("starter", true, 0, 2999m)], "starter")); // never a paid plan
+        Assert.Null(SaasRules.TrialFallback([], "free"));                                   // no such plan
+    }
+
+    [Fact]
+    public void TrialBannerMentionsFreeFallbackWhenEnabled()
+    {
+        var sub = new TenantSubscription { Status = SaasSubscriptionStatus.Trialing, TrialEndsAtUtc = DateTime.UtcNow.AddDays(5) };
+        Assert.Contains("Free plan", SaasRules.Banner(sub, DateTime.UtcNow, trialFallsBackToFree: true)!.Value.Message);
+        Assert.DoesNotContain("Free plan", SaasRules.Banner(sub, DateTime.UtcNow)!.Value.Message);
+    }
+
     [Fact]
     public void EveryPermissionModuleHasAPlanKey()
     {

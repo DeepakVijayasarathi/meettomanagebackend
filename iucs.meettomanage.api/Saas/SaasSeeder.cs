@@ -81,6 +81,15 @@ public static class SaasSeeder
             db.PlatformEmailTemplates.Add(new PlatformEmailTemplate { Key = template.Key, Subject = template.Subject, Body = template.Body });
         await db.SaveChangesAsync(ct);
 
+        // Trial emails were reworded when trials began falling back to Free; upgrade only copies the operator never edited.
+        var reworded = DefaultEmailTemplates.PreviousBodies.Keys.ToArray();
+        foreach (var stored in await db.PlatformEmailTemplates.Where(x => reworded.Contains(x.Key)).ToListAsync(ct))
+        {
+            if (DefaultEmailTemplates.PreviousBodies[stored.Key] != stored.Body) continue;
+            stored.Body = DefaultEmailTemplates.All.Single(x => x.Key == stored.Key).Body;
+        }
+        await db.SaveChangesAsync(ct);
+
         var legacy = await db.Plans.SingleAsync(x => x.Code == LegacyPlanCode, ct);
         var unmanaged = await db.Tenants.Where(x => (x.Status == TenantStatus.Active || x.Status == TenantStatus.Suspended)
             && !db.TenantSubscriptions.Any(s => s.TenantId == x.Id)).ToListAsync(ct);

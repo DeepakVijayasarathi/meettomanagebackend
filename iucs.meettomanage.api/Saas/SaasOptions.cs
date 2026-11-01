@@ -12,6 +12,8 @@ public sealed class SaasOptions
     /// <summary>Plan new operator-created tenants start on when the request names none (an attached existing database always gets "legacy").</summary>
     public string DefaultPlanForNewTenants { get; set; } = "trial";
     public int DefaultTrialDays { get; set; } = 14;
+    /// <summary>Plan an unpaid trial moves to when it ends (a free plan); empty pauses the workspace instead.</summary>
+    public string TrialFallbackPlanCode { get; set; } = "free";
 
     /// <summary>Days between a missed renewal payment and automatic suspension.</summary>
     public int GraceDays { get; set; } = 7;
