@@ -177,7 +177,7 @@ public static class PlanFeatures
         if (http.RequestServices.GetService<IEntitlementService>() is not { } entitlements) return;
         var granted = await entitlements.GetAsync(tenantId, http.RequestAborted);
         if (!granted.Can(feature))
-            throw new PlanLimitException($"{what} isn't included in your {granted.PlanName} plan. Upgrade your plan to use it.");
+            throw new PlanLimitException($"Your {granted.PlanName} plan doesn't include {what}. Upgrade your plan to use it.");
     }
 
     /// <summary>Which plan feature turning on this integration needs, if any (email, push, cash and video stay on every plan).</summary>

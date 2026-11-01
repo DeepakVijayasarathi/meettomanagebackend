@@ -33,7 +33,7 @@ namespace iucs.meettomanage.api.Controllers
         [RequestSizeLimit(BrandLogo.MaxBytes + 4096)]
         public async Task<IActionResult> Upload(IFormFile file, CancellationToken cancellationToken)
         {
-            await PlanFeatures.RequireAsync(HttpContext, EntitlementKeys.WhiteLabel, "Your own logo");
+            await PlanFeatures.RequireAsync(HttpContext, EntitlementKeys.WhiteLabel, "your own logo");
             await using var stream = file.OpenReadStream();
             var url = await BrandLogo.SaveAsync(storage, settings, stream, file.FileName,
                 BrandLogo.PublicBaseUrl(configuration, Request), cancellationToken);

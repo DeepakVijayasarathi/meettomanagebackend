@@ -48,7 +48,7 @@ namespace iucs.meettomanage.api.Controllers
             {
                 var current = (await _settingsService.GetAllAsync(cancellationToken)).ToDictionary(x => x.Key, x => x.Value);
                 if (updates.Any(u => u.Key.StartsWith("brand.", StringComparison.Ordinal) && BrandChanged(current, u.Key, u.Value)))
-                    await PlanFeatures.RequireAsync(HttpContext, EntitlementKeys.WhiteLabel, "Your own branding");
+                    await PlanFeatures.RequireAsync(HttpContext, EntitlementKeys.WhiteLabel, "your own branding");
             }
             return Ok(await _settingsService.UpsertAsync(updates, cancellationToken));
         }

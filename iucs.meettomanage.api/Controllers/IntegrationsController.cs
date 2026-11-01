@@ -54,7 +54,7 @@ namespace iucs.meettomanage.api.Controllers
         private async Task RequirePlanFeatureAsync(SaveIntegrationRequest request)
         {
             if (!request.IsEnabled || PlanFeatures.ForIntegration(request.Category, request.Key) is not { } feature) return;
-            var what = feature == EntitlementKeys.Whatsapp ? "WhatsApp / SMS notifications" : "Online fee collection";
+            var what = feature == EntitlementKeys.Whatsapp ? "WhatsApp and SMS notifications" : "online fee collection";
             await PlanFeatures.RequireAsync(HttpContext, feature, what);
         }
 
