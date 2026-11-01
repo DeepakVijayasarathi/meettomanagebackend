@@ -58,6 +58,10 @@ public sealed class SaasSubscriptionService(IDbContextFactory<MasterDbContext> f
         entitlements.Invalidate(tenantId);
         if (sub.Status == SaasSubscriptionStatus.Trialing)
             await reminders.NotifyAsync(tenantId, "trial_started", sub.Id.ToString("N"), ct: ct);
+        else if (actor == "signup")
+            // Self-service signups on a free plan get a welcome too, not just trials.
+            await reminders.NotifyAsync(tenantId, "free_started", sub.Id.ToString("N"),
+                extra: new Dictionary<string, string> { ["plan_name"] = plan.Name }, ct: ct);
         return sub;
     }
 
@@ -150,8 +154,22 @@ public sealed class SaasSubscriptionService(IDbContextFactory<MasterDbContext> f
             throw new ConflictException("You are already on this plan.");
         }
 
+        var hasPaidPeriod = current is not null && sub.Status is SaasSubscriptionStatus.Active or SaasSubscriptionStatus.PastDue
+            && sub.CurrentPeriodStartUtc is not null && sub.CurrentPeriodEndUtc > now;
+
         if (price.Amount <= 0)
         {
+            if (!isOperator) await EnsureFitsAsync(tenantId, price, ct);
+            if (hasPaidPeriod && SaasRules.FreeMoveWaitsForPeriodEnd(isOperator))
+            {
+                // Already paid for this period: keep it, and move to the free plan when it ends (applied at renewal).
+                sub.PendingPlanPriceId = price.Id;
+                AddEvent(db, sub, "downgrade_scheduled", $"To {price.Plan.Code} at renewal", actor);
+                await db.SaveChangesAsync(ct);
+                await reminders.NotifyAsync(tenantId, "downgrade_scheduled", price.Id.ToString("N") + sub.CurrentPeriodEndUtc!.Value.ToString("yyyyMMdd"),
+                    extra: new Dictionary<string, string> { ["plan_name"] = price.Plan.Name }, ct: ct);
+                return new PlanChangeResult("scheduled", null, null, $"Your plan will change to {price.Plan.Name} on {sub.CurrentPeriodEndUtc:dd MMM yyyy}.");
+            }
             ApplyNoRenewalPlan(sub, price.Plan, price);
             AddEvent(db, sub, "plan_changed", $"Moved to free price of {price.Plan.Code}", actor);
             await SyncTenantAsync(db, sub, false, ct);
@@ -159,9 +177,6 @@ public sealed class SaasSubscriptionService(IDbContextFactory<MasterDbContext> f
             entitlements.Invalidate(tenantId);
             return new PlanChangeResult("applied", null, null, "Your plan has been changed.");
         }
-
-        var hasPaidPeriod = current is not null && sub.Status is SaasSubscriptionStatus.Active or SaasSubscriptionStatus.PastDue
-            && sub.CurrentPeriodStartUtc is not null && sub.CurrentPeriodEndUtc > now;
         decimal credit = 0m;
         if (hasPaidPeriod)
         {
@@ -480,7 +495,20 @@ public sealed class SaasSubscriptionService(IDbContextFactory<MasterDbContext> f
         var price = sub.PendingPlanPriceId is { } pendingId
             ? await db.PlanPrices.Include(x => x.Plan).SingleAsync(x => x.Id == pendingId, ct)
             : sub.PlanPriceId is { } currentId ? await db.PlanPrices.Include(x => x.Plan).SingleAsync(x => x.Id == currentId, ct) : null;
-        if (price is null || price.Amount <= 0) return;
+        if (price is null) return;
+        if (price.Amount <= 0)
+        {
+            // Nothing to invoice. A scheduled move to a free plan takes effect once the paid period is over;
+            // without this the lifecycle kept retrying the renewal and the paid plan never ended.
+            if (SaasRules.ScheduledFreeMoveIsDue(sub, price.Id, now))
+            {
+                ApplyNoRenewalPlan(sub, price.Plan, price);
+                AddEvent(db, sub, "downgraded", $"Moved to {price.Plan.Code} at renewal", "system");
+                await db.SaveChangesAsync(ct);
+                entitlements.Invalidate(sub.TenantId);
+            }
+            return;
+        }
         var tenant = await db.Tenants.SingleAsync(x => x.Id == sub.TenantId, ct);
         var start = sub.CurrentPeriodEndUtc!.Value;
         var interval = price.BillingInterval == BillingInterval.Year ? "yearly" : "monthly";

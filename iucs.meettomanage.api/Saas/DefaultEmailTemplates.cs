@@ -24,6 +24,8 @@ public static class DefaultEmailTemplates
     [
         new("trial_started", "Welcome / trial started", "Welcome to {{platform_name}} - your trial has started",
             "<p>Hello {{tenant_name}},</p><p>Your free trial is active until <b>{{trial_end_date}}</b>. Set up your branding, add teachers and invite parents.</p>" + Portal),
+        new("free_started", "Welcome / Free plan", "Welcome to {{platform_name}} - your academy is ready",
+            "<p>Hello {{tenant_name}},</p><p>Your academy is set up on the <b>{{plan_name}}</b> plan, free forever. Add your courses and batches, invite teachers and parents, and run your first live class. Upgrade any time to unlock fees, payouts, reports and admissions.</p>" + Portal),
         new("trial_ending_7", "Trial ending (7 days)", "Your {{platform_name}} trial ends in 7 days",
             "<p>Hello {{tenant_name}},</p><p>Your trial ends on <b>{{trial_end_date}}</b>. After that your academy moves to the Free plan and the paid modules (fees, payouts, reports, admissions) lock. Choose a plan to keep every module.</p>" + Portal),
         new("trial_ending_3", "Trial ending (3 days)", "Only 3 days left in your {{platform_name}} trial",

@@ -350,6 +350,19 @@ public sealed class SaasModuleTests
     }
 
     [Fact]
+    public void ScheduledMoveToFreeAppliesOnlyAfterThePaidPeriodEnds()
+    {
+        var free = Guid.NewGuid();
+        var end = new DateTime(2026, 12, 1, 0, 0, 0, DateTimeKind.Utc);
+        var sub = new TenantSubscription { Status = SaasSubscriptionStatus.Active, PendingPlanPriceId = free, CurrentPeriodEndUtc = end };
+        Assert.False(SaasRules.ScheduledFreeMoveIsDue(sub, free, end.AddDays(-3)));   // still inside the paid month
+        Assert.True(SaasRules.ScheduledFreeMoveIsDue(sub, free, end));
+        Assert.False(SaasRules.ScheduledFreeMoveIsDue(sub, Guid.NewGuid(), end));     // a different pending price
+        Assert.True(SaasRules.FreeMoveWaitsForPeriodEnd(isOperator: false));
+        Assert.False(SaasRules.FreeMoveWaitsForPeriodEnd(isOperator: true));
+    }
+
+    [Fact]
     public void TrialBannerMentionsFreeFallbackWhenEnabled()
     {
         var sub = new TenantSubscription { Status = SaasSubscriptionStatus.Trialing, TrialEndsAtUtc = DateTime.UtcNow.AddDays(5) };

@@ -116,6 +116,13 @@ public static class SaasRules
         return (plan, active.OrderBy(x => x.BillingInterval).FirstOrDefault());
     }
 
+    /// <summary>A customer moving from a paid period to a free plan keeps what they paid for; an operator's move applies at once.</summary>
+    public static bool FreeMoveWaitsForPeriodEnd(bool isOperator) => !isOperator;
+
+    /// <summary>The scheduled move to the free price <paramref name="freePriceId"/> is due: the paid period has ended.</summary>
+    public static bool ScheduledFreeMoveIsDue(TenantSubscription sub, Guid freePriceId, DateTime now) =>
+        sub.PendingPlanPriceId == freePriceId && sub.CurrentPeriodEndUtc is { } end && now >= end;
+
     /// <summary>Banner shown inside the tenant's admin portal; null when nothing needs attention.</summary>
     public static (string Level, string Message)? Banner(TenantSubscription sub, DateTime now, bool trialFallsBackToFree = false)
     {
