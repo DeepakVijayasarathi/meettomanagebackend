@@ -52,7 +52,8 @@ namespace iucs.meettomanage.api.Controllers
             {
                 var disabled = (await entitlements.GetAsync(tenantId, cancellationToken)).DisabledModules;
                 if (disabled.Count > 0)
-                    items = items.Where(m => m.RequiredModule is null || !disabled.Contains(m.RequiredModule)).ToList();
+                    items = items.Where(m => m.RequiredModule is null || !disabled.Contains(m.RequiredModule)
+                        || EntitlementKeys.IsAnyPlanMenuPath(m.Path)).ToList();
             }
             return Ok(items);
         }

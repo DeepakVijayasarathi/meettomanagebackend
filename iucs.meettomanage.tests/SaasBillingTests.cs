@@ -324,6 +324,14 @@ public sealed class SaasModuleTests
         Assert.True(TenantEntitlements.Unmanaged.HasModule(EntitlementKeys.ModuleKey("Anything")));
     }
 
+    [Theory]
+    [InlineData("/admin/enrollments", true)]
+    [InlineData("/executive/enrollments", true)]
+    [InlineData("/admin/leads", false)]
+    [InlineData("/admin/billing", false)]
+    public void EnrollmentReviewStaysOnEveryPlan(string path, bool anyPlan) =>
+        Assert.Equal(anyPlan, EntitlementKeys.IsAnyPlanMenuPath(path));
+
     [Fact]
     public void EveryPermissionModuleHasAPlanKey()
     {

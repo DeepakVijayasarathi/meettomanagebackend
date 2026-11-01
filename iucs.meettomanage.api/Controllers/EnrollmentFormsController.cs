@@ -46,6 +46,7 @@ namespace iucs.meettomanage.api.Controllers
         // otherwise let Coordinator read/download every family's enrollment data too.
         [HttpGet]
         [HasPermission(PermissionModule.Admission, PermissionAction.View)]
+        [AnyPlan] // approving a parent's child is how every plan gets students; the rest of Admissions stays paid
         public async Task<ActionResult<IReadOnlyList<EnrollmentFormDto>>> List(
             [FromQuery] EnrollmentFormStatus? status,
             CancellationToken cancellationToken)
@@ -56,6 +57,7 @@ namespace iucs.meettomanage.api.Controllers
         /// <summary>Approval creates the Child record and unlocks the parent dashboard.</summary>
         [HttpPost("{id:guid}/review")]
         [HasPermission(PermissionModule.Admission, PermissionAction.Approve)]
+        [AnyPlan] // approving a parent's child is how every plan gets students; the rest of Admissions stays paid
         public async Task<ActionResult<EnrollmentFormDto>> Review(
             Guid id,
             ReviewEnrollmentFormRequest request,
@@ -67,6 +69,7 @@ namespace iucs.meettomanage.api.Controllers
         /// <summary>Admin edits the submitted answers before approval.</summary>
         [HttpPut("{id:guid}")]
         [HasPermission(PermissionModule.Admission, PermissionAction.Edit)]
+        [AnyPlan] // approving a parent's child is how every plan gets students; the rest of Admissions stays paid
         public async Task<ActionResult<EnrollmentFormDto>> Update(
             Guid id,
             SubmitEnrollmentFormRequest request,
@@ -78,6 +81,7 @@ namespace iucs.meettomanage.api.Controllers
         /// <summary>Admin download of the submitted form as a JSON document.</summary>
         [HttpGet("{id:guid}/download")]
         [HasPermission(PermissionModule.Admission, PermissionAction.View)]
+        [AnyPlan] // approving a parent's child is how every plan gets students; the rest of Admissions stays paid
         public async Task<IActionResult> Download(Guid id, CancellationToken cancellationToken)
         {
             var form = await _enrollmentService.GetAsync(id, cancellationToken);

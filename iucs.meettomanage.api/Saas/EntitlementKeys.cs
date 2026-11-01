@@ -78,5 +78,12 @@ public static class EntitlementKeys
 
     public static readonly IReadOnlyList<Definition> All = [.. Catalog, .. Modules];
 
+    /// <summary>
+    /// Menu pages every plan keeps even when their module is switched off. Enrollment Review
+    /// (approving a parent's child) is how any academy gets students; its endpoints carry
+    /// [AnyPlan]. The frontend mirrors this rule in AppShell's plan-lock check.
+    /// </summary>
+    public static bool IsAnyPlanMenuPath(string path) => path.EndsWith("/enrollments", StringComparison.OrdinalIgnoreCase);
+
     public static Definition? Find(string key) => All.FirstOrDefault(x => x.Key == key);
 }
