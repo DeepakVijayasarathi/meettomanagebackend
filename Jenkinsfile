@@ -139,6 +139,7 @@ pipeline {
                       -e Seed__MarketingEmail="marketing@meettomanage.cloud" \
                       -e Seed__MarketingPin="1234" \
                       -e MultiTenancy__Enabled=true \
+                      -e SaasBilling__SignupEnabled=true \
                       -e ConnectionStrings__MasterDb="Host=${DB_HOST};Port=${DB_PORT};Database=${DB_NAME};Username=${DB_USER};Password=\${DB_PASS}" \
                       -e ConnectionStrings__TenantServer="Host=${DB_HOST};Port=${DB_PORT};Database=postgres;Username=${DB_USER};Password=\${DB_PASS};Maximum Pool Size=20" \
                       -e MultiTenancy__PlatformAdmin__Email="${PLATFORM_ADMIN_EMAIL}" \

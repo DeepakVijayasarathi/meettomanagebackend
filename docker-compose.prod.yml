@@ -32,6 +32,8 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_HTTP_PORTS: "8080"
       MultiTenancy__Enabled: "true"
+      # Public self-service signup at /signup (Free plan or trial); off makes /signup a request form.
+      SaasBilling__SignupEnabled: "true"
       ConnectionStrings__MasterDb: >-
         Host=postgres;Port=5432;Database=meettomanage_master;Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
       ConnectionStrings__TenantServer: >-
