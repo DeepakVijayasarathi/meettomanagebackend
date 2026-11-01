@@ -76,12 +76,16 @@ public sealed class SaasUsageService(IDbContextFactory<MasterDbContext> factory,
         return await ComputeAsync(scope.ServiceProvider.GetRequiredService<MeetToManageDbContext>(), DateTime.UtcNow, ct);
     }
 
-    /// <summary>Writes today's snapshot for every active tenant that does not have one yet.</summary>
-    public async Task<IReadOnlyList<(Guid TenantId, UsageFigures Figures)>> SnapshotAllAsync(CancellationToken ct)
+    /// <summary>
+    /// Writes today's snapshot for every active tenant that does not have one yet. With <paramref name="refreshToday"/>
+    /// (an operator's "Run billing cycle now") today's existing snapshots are re-measured too, so the console is current.
+    /// </summary>
+    public async Task<IReadOnlyList<(Guid TenantId, UsageFigures Figures)>> SnapshotAllAsync(CancellationToken ct, bool refreshToday = false)
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         await using var master = await factory.CreateDbContextAsync(ct);
-        var done = await master.TenantUsageSnapshots.AsNoTracking().Where(x => x.SnapshotDate == today).Select(x => x.TenantId).ToListAsync(ct);
+        var done = refreshToday ? []
+            : await master.TenantUsageSnapshots.AsNoTracking().Where(x => x.SnapshotDate == today).Select(x => x.TenantId).ToListAsync(ct);
         var tenants = await master.Tenants.AsNoTracking().Where(x => x.Status == TenantStatus.Active && !done.Contains(x.Id)).ToListAsync(ct);
         var results = new List<(Guid, UsageFigures)>();
         foreach (var tenant in tenants)
@@ -89,12 +93,12 @@ public sealed class SaasUsageService(IDbContextFactory<MasterDbContext> factory,
             try
             {
                 var figures = await MeasureAsync(tenant, ct);
-                master.TenantUsageSnapshots.Add(new TenantUsageSnapshot
-                {
-                    TenantId = tenant.Id, SnapshotDate = today, ActiveStudents = figures.ActiveStudents, StaffCount = figures.StaffCount,
-                    StorageBytes = figures.StorageBytes, SessionMinutesMonth = figures.SessionMinutesMonth,
-                    SessionsMonth = figures.SessionsMonth, RecordingsMonth = figures.RecordingsMonth,
-                });
+                var row = refreshToday
+                    ? await master.TenantUsageSnapshots.SingleOrDefaultAsync(x => x.TenantId == tenant.Id && x.SnapshotDate == today, ct)
+                    : null;
+                if (row is null) master.TenantUsageSnapshots.Add(row = new TenantUsageSnapshot { TenantId = tenant.Id, SnapshotDate = today });
+                row.ActiveStudents = figures.ActiveStudents; row.StaffCount = figures.StaffCount; row.StorageBytes = figures.StorageBytes;
+                row.SessionMinutesMonth = figures.SessionMinutesMonth; row.SessionsMonth = figures.SessionsMonth; row.RecordingsMonth = figures.RecordingsMonth;
                 await master.SaveChangesAsync(ct);
                 results.Add((tenant.Id, figures));
             }

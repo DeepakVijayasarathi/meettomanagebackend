@@ -426,7 +426,7 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
     public async Task<IActionResult> RunCycle(CancellationToken ct)
     {
         var billing = await lifecycle.RunOnceAsync(ct);
-        var usage = await usageWorker.RunOnceAsync(ct);
+        var usage = await usageWorker.RunOnceAsync(ct, refreshToday: true);
         return Ok(new { billingRan = billing, usageRan = usage });
     }
 

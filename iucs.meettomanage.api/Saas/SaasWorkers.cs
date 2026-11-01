@@ -73,10 +73,11 @@ public sealed class SaasUsageBackgroundService(IDbContextFactory<MasterDbContext
         }
     }
 
-    public async Task<bool> RunOnceAsync(CancellationToken ct) => await SaasWorkerLock.RunExclusiveAsync(factory, "saas-usage", async token =>
+    /// <param name="refreshToday">Re-measure today's snapshots too (the console's "Run billing cycle now").</param>
+    public async Task<bool> RunOnceAsync(CancellationToken ct, bool refreshToday = false) => await SaasWorkerLock.RunExclusiveAsync(factory, "saas-usage", async token =>
     {
         var month = DateTime.UtcNow.ToString("yyyyMM");
-        foreach (var (tenantId, figures) in await usage.SnapshotAllAsync(token))
+        foreach (var (tenantId, figures) in await usage.SnapshotAllAsync(token, refreshToday))
         {
             var granted = await entitlements.GetAsync(tenantId, token);
             if (!granted.Managed) continue;
