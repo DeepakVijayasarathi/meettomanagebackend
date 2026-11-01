@@ -72,12 +72,14 @@ namespace iucs.meettomanage.api.Services
                 var accessToken = await GetAccessTokenAsync(account.Value, cancellationToken);
                 var client = _httpClientFactory.CreateClient(nameof(FcmPushSender));
                 var staleTokens = false;
-                foreach (var installation in installations)
+                // One device token can sit on several installation rows (a reinstall or cleared app data gets a new
+                // installation id): send to each distinct token once, or the phone shows the same notification twice.
+                foreach (var token in installations.Select(x => x.PushToken!).Distinct())
                 {
-                    var outcome = await SendOneAsync(client, projectId, accessToken, installation.PushToken!, title, body, data, cancellationToken);
+                    var outcome = await SendOneAsync(client, projectId, accessToken, token, title, body, data, cancellationToken);
                     if (outcome == Outcome.Unregistered)
                     {
-                        installation.PushToken = null;
+                        foreach (var installation in installations.Where(x => x.PushToken == token)) installation.PushToken = null;
                         staleTokens = true;
                     }
                 }
@@ -101,7 +103,15 @@ namespace iucs.meettomanage.api.Services
                 ["token"] = deviceToken,
                 ["notification"] = new { title, body },
                 ["data"] = data ?? new Dictionary<string, string>(),
-                ["android"] = new { priority = "HIGH", notification = new { channel_id = "default" } },
+                ["android"] = new Dictionary<string, object?>
+                {
+                    ["priority"] = "HIGH",
+                    // The notification id as the tag makes a repeat of the same notification replace the first one in the
+                    // tray instead of stacking beside it.
+                    ["notification"] = data is not null && data.TryGetValue("notificationId", out var notificationId)
+                        ? new { channel_id = "default", tag = notificationId }
+                        : (object)new { channel_id = "default" },
+                },
             };
             using var request = new HttpRequestMessage(HttpMethod.Post, $"https://fcm.googleapis.com/v1/projects/{Uri.EscapeDataString(projectId)}/messages:send");
             request.Headers.Add("Authorization", $"Bearer {accessToken}");

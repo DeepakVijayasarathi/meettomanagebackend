@@ -74,6 +74,9 @@ public sealed class MobileAppTelemetryController(MeetToManageDbContext db) : Con
         {
             installation.PushToken = pushToken;
             installation.PushTokenUpdatedAtUtc = now;
+            // A device token belongs to one installation: drop it from any older row so it can't be notified twice.
+            await db.MobileAppInstallations.Where(x => x.PushToken == pushToken && x.InstallationId != request.InstallationId)
+                .ExecuteUpdateAsync(set => set.SetProperty(x => x.PushToken, (string?)null), ct);
         }
         if (request.SuccessfulSync) installation.LastSuccessfulSyncAtUtc = now;
         installation.LastErrorCategory = request.ErrorCategory?.ToLowerInvariant();
