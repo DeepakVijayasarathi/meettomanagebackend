@@ -44,6 +44,8 @@ namespace iucs.meettomanage.api.Auth
             var httpContext = http.HttpContext;
             // Authorization runs before TenantRequestMiddleware binds the context, so the
             // (already validated) tenant claim is the primary source.
+            // Some endpoints (e.g. the admin home dashboard) must work on every plan.
+            if (httpContext?.GetEndpoint()?.Metadata.GetMetadata<AnyPlanAttribute>() is not null) return true;
             Guid? claimed = Guid.TryParse(user.FindFirst(TenantContext.TenantIdClaim)?.Value, out var id) ? id : null;
             if ((claimed ?? httpContext?.RequestServices.GetService<TenantContext>()?.TenantId) is not { } tenantId) return true;
             // SaaS services exist only in multi-tenant mode.
@@ -59,6 +61,15 @@ namespace iucs.meettomanage.api.Auth
                 return true;
             }
         }
+    }
+
+    /// <summary>
+    /// Keeps the role/permission check on an endpoint but skips the plan's module switch, for
+    /// screens every plan needs (the admin home dashboard reads its numbers from Reports).
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
+    public sealed class AnyPlanAttribute : Attribute
+    {
     }
 
     /// <summary>

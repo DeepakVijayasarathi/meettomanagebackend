@@ -23,6 +23,7 @@ namespace iucs.meettomanage.api.Controllers
         /// <summary>Admin/Management BI dashboard aggregates.</summary>
         [HttpGet("dashboard-summary")]
         [HasPermission(PermissionModule.ReportsAnalytics, PermissionAction.View)]
+        [AnyPlan] // the admin home page; the Reports module itself stays plan-gated
         public async Task<ActionResult<DashboardSummaryDto>> DashboardSummary(CancellationToken cancellationToken)
         {
             return Ok(await _reportsService.GetDashboardSummaryAsync(cancellationToken));
