@@ -288,7 +288,48 @@ public sealed class SaasSeederTests : IDisposable
         Assert.Equal(321, saved.Value);
     }
 
+    [Fact]
+    public async Task SeedsPublicFreePlanWithCoreModulesAndKeepsEveryModuleOnExistingPlans()
+    {
+        var options = Options.Create(new SaasOptions());
+        await SaasSeeder.SeedAsync(_factory, options, NullLogger.Instance);
+        await SaasSeeder.SeedAsync(_factory, options, NullLogger.Instance); // idempotent
+
+        await using var db = _factory.CreateDbContext();
+        var free = await db.Plans.Include(x => x.Entitlements).Include(x => x.Prices).SingleAsync(x => x.Code == SaasSeeder.FreePlanCode);
+        Assert.True(free.IsPublic);
+        Assert.Equal(0, free.TrialDays);
+        Assert.All(free.Prices, p => Assert.Equal(0m, p.Amount));
+        var plan = new TenantEntitlements(true, free.Code, free.Name, SaasSubscriptionStatus.Active, free.Entitlements.ToDictionary(x => x.Key, x => x.Value));
+        Assert.True(plan.HasModule(EntitlementKeys.ModuleKey(domain.Enums.PermissionModule.CourseBatchManagement)));
+        Assert.False(plan.HasModule(EntitlementKeys.ModuleKey(domain.Enums.PermissionModule.BillingFinance)));
+        Assert.Contains(nameof(domain.Enums.PermissionModule.Payouts), plan.DisabledModules);
+
+        var starter = await db.Plans.Include(x => x.Entitlements).SingleAsync(x => x.Code == "starter");
+        Assert.All(EntitlementKeys.Modules, m => Assert.Equal(1, starter.Entitlements.Single(x => x.Key == m.Key).Value));
+        Assert.Equal(1, await db.Plans.CountAsync(x => x.Code == SaasSeeder.FreePlanCode));
+    }
+
     public void Dispose() => _connection.Dispose();
+}
+
+public sealed class SaasModuleTests
+{
+    [Fact]
+    public void PlanWithoutModuleKeysIncludesEveryModule()
+    {
+        var plan = new TenantEntitlements(true, "old", "Old", SaasSubscriptionStatus.Active, new Dictionary<string, long>());
+        Assert.True(plan.HasModule(EntitlementKeys.ModuleKey(domain.Enums.PermissionModule.ReportsAnalytics)));
+        Assert.Empty(plan.DisabledModules);
+        Assert.True(TenantEntitlements.Unmanaged.HasModule(EntitlementKeys.ModuleKey("Anything")));
+    }
+
+    [Fact]
+    public void EveryPermissionModuleHasAPlanKey()
+    {
+        foreach (var module in Enum.GetValues<domain.Enums.PermissionModule>())
+            Assert.NotNull(EntitlementKeys.Find(EntitlementKeys.ModuleKey(module)));
+    }
 }
 
 public sealed class SaasEntitlementServiceTests : IDisposable

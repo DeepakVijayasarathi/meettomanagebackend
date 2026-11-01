@@ -34,10 +34,13 @@ public sealed class SaasSubscriptionService(IDbContextFactory<MasterDbContext> f
             return existing;
         }
         var code = string.IsNullOrWhiteSpace(planCode) ? Options.DefaultPlanForNewTenants : planCode.Trim().ToLowerInvariant();
-        var plan = await db.Plans.SingleOrDefaultAsync(x => x.Code == code && x.IsActive, ct)
+        var plan = await db.Plans.Include(x => x.Prices).SingleOrDefaultAsync(x => x.Code == code && x.IsActive, ct)
             ?? throw new DomainValidationException($"Plan '{code}' does not exist or is inactive.");
         var now = DateTime.UtcNow;
         var sub = new TenantSubscription { TenantId = tenantId, PlanId = plan.Id, Status = SaasSubscriptionStatus.Active };
+        // A free plan (₹0 price, no trial) points at that price so the billing page shows it as the current plan.
+        if (plan.TrialDays == 0 && plan.Prices.Where(x => x.IsActive).OrderBy(x => x.BillingInterval).FirstOrDefault() is { Amount: 0 } freePrice)
+            sub.PlanPriceId = freePrice.Id;
         if (plan.TrialDays > 0)
         {
             sub.Status = SaasSubscriptionStatus.Trialing;

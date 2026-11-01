@@ -17,6 +17,14 @@ public sealed record TenantEntitlements(
 
     /// <summary>Feature flag; a managed plan must grant it explicitly.</summary>
     public bool Can(string feature) => !Managed || (Values.TryGetValue(feature, out var value) && value != 0);
+
+    /// <summary>Module switch (a module_* key); a plan includes a module unless it switches it off explicitly.</summary>
+    public bool HasModule(string moduleKey) => !Managed || !Values.TryGetValue(moduleKey, out var value) || value != 0;
+
+    /// <summary>Permission-module names (e.g. "BillingFinance") this plan switches off.</summary>
+    public IReadOnlySet<string> DisabledModules => !Managed ? new HashSet<string>()
+        : Values.Where(x => EntitlementKeys.IsModuleKey(x.Key) && x.Value == 0)
+            .Select(x => x.Key[EntitlementKeys.ModulePrefix.Length..]).ToHashSet(StringComparer.Ordinal);
 }
 
 public interface IEntitlementService

@@ -1,4 +1,5 @@
 using iucs.meettomanage.domain.Entities.Saas;
+using iucs.meettomanage.domain.Enums;
 
 namespace iucs.meettomanage.api.Saas;
 
@@ -43,5 +44,39 @@ public static class EntitlementKeys
         new(Recordings, "Session recordings", EntitlementValueType.Bool, ""),
     ];
 
-    public static Definition? Find(string key) => Catalog.FirstOrDefault(x => x.Key == key);
+    // Modules (Bool, 0/1). Unlike features, a plan that does not mention a module includes it,
+    // so plans created before module gating keep every module until the operator switches one off.
+    public const string ModulePrefix = "module_";
+
+    public static string ModuleKey(PermissionModule module) => ModulePrefix + module;
+    public static string ModuleKey(string module) => ModulePrefix + module;
+    public static bool IsModuleKey(string key) => key.StartsWith(ModulePrefix, StringComparison.Ordinal);
+
+    private static readonly IReadOnlyDictionary<PermissionModule, string> ModuleLabels = new Dictionary<PermissionModule, string>
+    {
+        [PermissionModule.UserManagement] = "Users & students",
+        [PermissionModule.CourseBatchManagement] = "Courses & batches",
+        [PermissionModule.SessionCalendarManagement] = "Sessions & calendar",
+        [PermissionModule.ContentAccessManagement] = "Content & resources",
+        [PermissionModule.BillingFinance] = "Fees, invoices & finance",
+        [PermissionModule.Payouts] = "Teacher payouts & payroll",
+        [PermissionModule.ReportsAnalytics] = "Reports & analytics",
+        [PermissionModule.Admission] = "Admissions & enquiries",
+        [PermissionModule.LeaveManagement] = "Leave management",
+        [PermissionModule.Communication] = "Communication",
+        [PermissionModule.Settings] = "Settings",
+        [PermissionModule.SystemMonitoring] = "Live monitoring",
+        [PermissionModule.Marketing] = "Marketing",
+        [PermissionModule.ClassSessionLogs] = "Class session logs",
+        [PermissionModule.SupportTickets] = "Support tickets",
+        [PermissionModule.LearningPlugins] = "Learning plug-ins",
+    };
+
+    public static readonly IReadOnlyList<Definition> Modules = Enum.GetValues<PermissionModule>()
+        .Select(m => new Definition(ModuleKey(m), "Module: " + ModuleLabels.GetValueOrDefault(m, m.ToString()), EntitlementValueType.Bool, ""))
+        .ToList();
+
+    public static readonly IReadOnlyList<Definition> All = [.. Catalog, .. Modules];
+
+    public static Definition? Find(string key) => All.FirstOrDefault(x => x.Key == key);
 }

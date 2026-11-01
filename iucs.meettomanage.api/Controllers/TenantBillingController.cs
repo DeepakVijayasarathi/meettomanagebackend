@@ -53,6 +53,8 @@ public sealed class TenantBillingController(MasterDbContext master, TenantContex
         });
         var features = EntitlementKeys.Catalog.Where(x => x.Type == EntitlementValueType.Bool)
             .Select(x => new { x.Key, x.Label, enabled = granted.Can(x.Key) });
+        var modules = EntitlementKeys.Modules
+            .Select(x => new { x.Key, label = x.Label["Module: ".Length..], enabled = granted.HasModule(x.Key) });
 
         return Ok(new
         {
@@ -62,7 +64,7 @@ public sealed class TenantBillingController(MasterDbContext master, TenantContex
             sub.PlanPriceId, sub.TrialEndsAtUtc, sub.CurrentPeriodEndUtc, sub.GraceEndsAtUtc, sub.CancelAtPeriodEnd,
             pendingPlan = pending is null ? null : new { pending.Plan.Name, pending.Amount, interval = pending.BillingInterval.ToString() },
             banner = banner is null ? null : new { level = banner.Value.Level, message = banner.Value.Message },
-            limits, features,
+            limits, features, modules,
             openInvoices = open.Select(x => new { x.Id, x.InvoiceNumber, x.Total, x.Currency, x.DueAtUtc, x.PaymentUrl }),
             taxRatePercent = options.Value.TaxRatePercent,
         });

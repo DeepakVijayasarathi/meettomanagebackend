@@ -1,3 +1,5 @@
+using iucs.meettomanage.api.Saas;
+using iucs.meettomanage.api.Tenancy;
 using iucs.meettomanage.domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
@@ -15,22 +17,47 @@ namespace iucs.meettomanage.api.Auth
         public string Permission { get; }
     }
 
-    public class PermissionAuthorizationHandler : AuthorizationHandler<PermissionRequirement>
+    /// <summary>
+    /// Grants a "Module:Action" requirement to Admins and to users holding the matching claim,
+    /// unless the tenant's plan switches that module off (e.g. Finance on the Free plan), which
+    /// applies to Admins too. The plan check fails open if billing data can't be read.
+    /// </summary>
+    public class PermissionAuthorizationHandler(IHttpContextAccessor http,
+        ILogger<PermissionAuthorizationHandler> logger) : AuthorizationHandler<PermissionRequirement>
     {
-        protected override Task HandleRequirementAsync(
+        protected override async Task HandleRequirementAsync(
             AuthorizationHandlerContext context,
             PermissionRequirement requirement)
         {
-            if (context.User.IsInRole(nameof(UserRole.Admin)))
-            {
-                context.Succeed(requirement);
-            }
-            else if (context.User.HasClaim(JwtTokenService.PermissionClaimType, requirement.Permission))
-            {
-                context.Succeed(requirement);
-            }
+            var granted = context.User.IsInRole(nameof(UserRole.Admin))
+                || context.User.HasClaim(JwtTokenService.PermissionClaimType, requirement.Permission);
+            if (!granted) return;
 
-            return Task.CompletedTask;
+            if (await ModuleInPlanAsync(context.User, requirement.Permission.Split(':')[0]))
+            {
+                context.Succeed(requirement);
+            }
+        }
+
+        private async Task<bool> ModuleInPlanAsync(System.Security.Claims.ClaimsPrincipal user, string module)
+        {
+            var httpContext = http.HttpContext;
+            // Authorization runs before TenantRequestMiddleware binds the context, so the
+            // (already validated) tenant claim is the primary source.
+            Guid? claimed = Guid.TryParse(user.FindFirst(TenantContext.TenantIdClaim)?.Value, out var id) ? id : null;
+            if ((claimed ?? httpContext?.RequestServices.GetService<TenantContext>()?.TenantId) is not { } tenantId) return true;
+            // SaaS services exist only in multi-tenant mode.
+            if (httpContext?.RequestServices.GetService<IEntitlementService>() is not { } entitlements) return true;
+            try
+            {
+                var plan = await entitlements.GetAsync(tenantId, httpContext.RequestAborted);
+                return plan.HasModule(EntitlementKeys.ModuleKey(module));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Plan modules could not be read for tenant {TenantId}; allowing the request.", tenantId);
+                return true;
+            }
         }
     }
 

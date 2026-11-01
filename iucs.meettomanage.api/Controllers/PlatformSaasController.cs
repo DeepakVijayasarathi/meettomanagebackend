@@ -83,7 +83,7 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
     // ------------------------------------------------------------------ plans
 
     [HttpGet("entitlement-catalog")]
-    public IActionResult Catalog() => Ok(EntitlementKeys.Catalog.Select(x => new { x.Key, x.Label, type = x.Type.ToString(), x.Unit }));
+    public IActionResult Catalog() => Ok(EntitlementKeys.All.Select(x => new { x.Key, x.Label, type = x.Type.ToString(), x.Unit }));
 
     [HttpGet("plans")]
     public async Task<IActionResult> Plans(CancellationToken ct)

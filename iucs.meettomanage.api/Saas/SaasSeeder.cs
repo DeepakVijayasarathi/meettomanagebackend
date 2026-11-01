@@ -1,6 +1,7 @@
 using iucs.meettomanage.domain.Data;
 using iucs.meettomanage.domain.Entities.Saas;
 using iucs.meettomanage.domain.Entities.Tenancy;
+using iucs.meettomanage.domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -15,6 +16,14 @@ namespace iucs.meettomanage.api.Saas;
 public static class SaasSeeder
 {
     public const string LegacyPlanCode = "legacy";
+    public const string FreePlanCode = "free";
+
+    /// <summary>Core modules the Free plan includes; the operator can change this in the platform console.</summary>
+    public static readonly IReadOnlySet<PermissionModule> FreeModules = new HashSet<PermissionModule>
+    {
+        PermissionModule.UserManagement, PermissionModule.CourseBatchManagement, PermissionModule.SessionCalendarManagement,
+        PermissionModule.ContentAccessManagement, PermissionModule.Communication, PermissionModule.Settings, PermissionModule.SupportTickets,
+    };
 
     public static async Task SeedAsync(IDbContextFactory<MasterDbContext> factory, IOptions<SaasOptions> options, ILogger logger, CancellationToken ct = default)
     {
@@ -39,6 +48,18 @@ public static class SaasSeeder
             db.Plans.Add(NewPlan(LegacyPlanCode, "Legacy (unlimited)", "Clients that existed before billing. No limits, never renews.", false, 0, 99,
                 new Limits(-1, -1, -1, -1, -1, -1, -1), Features(true, true, true, true, true, true), []));
         }
+        if (!await db.Plans.AnyAsync(x => x.Code == FreePlanCode, ct))
+        {
+            var free = NewPlan(FreePlanCode, "Free", "Free forever for small academies: students, courses, batches, live classes and content.", true, 0, 0,
+                new Limits(20, 3, 1024, 1_200, 60, 0, 0), Features(), [(BillingInterval.Month, 0m)]);
+            foreach (var module in Enum.GetValues<PermissionModule>())
+                free.Entitlements.Add(new PlanEntitlement
+                {
+                    Key = EntitlementKeys.ModuleKey(module), ValueType = EntitlementValueType.Bool, Value = FreeModules.Contains(module) ? 1 : 0,
+                });
+            db.Plans.Add(free);
+            logger.LogInformation("Seeded the public Free plan.");
+        }
         await db.SaveChangesAsync(ct);
 
         // Plans created before session/recording metering was introduced do not have these
@@ -49,6 +70,9 @@ public static class SaasSeeder
         {
             AddMissingLimit(plan, EntitlementKeys.MaxSessionsPerMonth, DefaultUsageLimit(plan.Code));
             AddMissingLimit(plan, EntitlementKeys.MaxRecordingsPerMonth, DefaultUsageLimit(plan.Code));
+            // Plans created before module gating include every module, as they always did.
+            foreach (var module in EntitlementKeys.Modules)
+                AddMissingFlag(db, plan, module.Key, 1);
         }
         await db.SaveChangesAsync(ct);
 
@@ -83,6 +107,12 @@ public static class SaasSeeder
         "growth" => 5_000,
         _ => EntitlementKeys.Unlimited,
     };
+
+    private static void AddMissingFlag(MasterDbContext db, Plan plan, string key, long value)
+    {
+        if (plan.Entitlements.Any(x => x.Key == key)) return;
+        db.PlanEntitlements.Add(new PlanEntitlement { PlanId = plan.Id, Key = key, ValueType = EntitlementValueType.Bool, Value = value });
+    }
 
     private static void AddMissingLimit(Plan plan, string key, long value)
     {

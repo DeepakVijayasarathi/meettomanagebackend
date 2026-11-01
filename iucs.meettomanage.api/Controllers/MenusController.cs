@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using iucs.meettomanage.api.Auth;
+using iucs.meettomanage.api.Saas;
+using iucs.meettomanage.api.Tenancy;
 using iucs.meettomanage.application.Dto.Navigation;
 using iucs.meettomanage.application.Services;
 using iucs.meettomanage.domain.Enums;
@@ -41,7 +43,18 @@ namespace iucs.meettomanage.api.Controllers
                 .Distinct()
                 .ToList();
 
-            return Ok(await _menuService.GetForUserAsync(userId, role, viewable, cancellationToken));
+            var items = await _menuService.GetForUserAsync(userId, role, viewable, cancellationToken);
+
+            // Hide menus for modules the tenant's plan doesn't include (e.g. Finance on Free).
+            // (SaaS services exist only in multi-tenant mode.)
+            var entitlements = HttpContext.RequestServices.GetService<IEntitlementService>();
+            if (entitlements is not null && HttpContext.RequestServices.GetService<TenantContext>()?.TenantId is { } tenantId)
+            {
+                var disabled = (await entitlements.GetAsync(tenantId, cancellationToken)).DisabledModules;
+                if (disabled.Count > 0)
+                    items = items.Where(m => m.RequiredModule is null || !disabled.Contains(m.RequiredModule)).ToList();
+            }
+            return Ok(items);
         }
 
         /// <summary>

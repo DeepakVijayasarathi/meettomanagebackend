@@ -22,6 +22,8 @@ public sealed class SignupRequest
     [Required, RegularExpression(@"^\d{4}$")] public string AdminPin { get; set; } = "";
     [MaxLength(30)] public string? Phone { get; set; }
     public bool AcceptTerms { get; set; }
+    /// <summary>"free" (or another public ₹0 plan) or "trial". Empty keeps the old behaviour: a free trial.</summary>
+    [MaxLength(50)] public string? PlanCode { get; set; }
 }
 
 /// <summary>Anonymous endpoints: the public plan list, tenant-code check and self-service signup.</summary>
@@ -36,7 +38,7 @@ public sealed class PublicSaasController(MasterDbContext master, TenantProvision
             .Where(x => x.IsPublic && x.IsActive).OrderBy(x => x.SortOrder).ToListAsync(ct);
         return Ok(plans.Select(p => new
         {
-            p.Id, p.Code, p.Name, p.Description, p.TrialDays,
+            p.Id, p.Code, p.Name, p.Description, p.TrialDays, isFree = IsFreePlan(p),
             prices = p.Prices.Where(x => x.IsActive).OrderBy(x => x.BillingInterval)
                 .Select(x => new { x.Id, billingInterval = x.BillingInterval.ToString(), x.Currency, x.Amount }),
             entitlements = p.Entitlements.Select(x => new { x.Key, x.Value }),
@@ -44,7 +46,17 @@ public sealed class PublicSaasController(MasterDbContext master, TenantProvision
     }
 
     [HttpGet("signup/settings")]
-    public IActionResult Settings() => Ok(new { enabled = options.Value.SignupEnabled, trialDays = options.Value.DefaultTrialDays, platformName = options.Value.PlatformName });
+    public async Task<IActionResult> Settings(CancellationToken ct)
+    {
+        var free = await master.Plans.AsNoTracking().Include(x => x.Prices).Where(x => x.IsActive && x.IsPublic && x.TrialDays == 0)
+            .OrderBy(x => x.SortOrder).ToListAsync(ct);
+        var freePlan = free.FirstOrDefault(IsFreePlan);
+        return Ok(new
+        {
+            enabled = options.Value.SignupEnabled, trialDays = options.Value.DefaultTrialDays, platformName = options.Value.PlatformName,
+            freePlanCode = freePlan?.Code, freePlanName = freePlan?.Name,
+        });
+    }
 
     [HttpGet("signup/check-code"), EnableRateLimiting("login")]
     public async Task<IActionResult> CheckCode([FromQuery] string code, CancellationToken ct)
@@ -72,13 +84,24 @@ public sealed class PublicSaasController(MasterDbContext master, TenantProvision
             || await master.LoginIdentifiers.AnyAsync(x => x.Identifier == TenantResolver.NormalizeIdentifier(email), ct))
             throw new ConflictException("An account already exists for this e-mail address. Sign in instead.");
 
+        // Self-signup may start only on the trial or on a public plan that costs nothing.
+        var planCode = string.IsNullOrWhiteSpace(request.PlanCode) ? "trial" : request.PlanCode.Trim().ToLowerInvariant();
+        var plan = await master.Plans.AsNoTracking().Include(x => x.Prices)
+            .SingleOrDefaultAsync(x => x.Code == planCode && x.IsActive, ct);
+        if (plan is null || (planCode != "trial" && !IsFreePlan(plan)))
+            throw new DomainValidationException("That plan cannot be chosen at signup.");
+
         var tenant = await provisioner.CreateAsync(new CreateTenantRequest
         {
             Code = code, Name = request.OrganizationName.Trim(), AdminEmail = email, AdminPin = request.AdminPin,
         }, ct);
-        await subscriptions.EnsureSubscriptionAsync(tenant.Id, "trial", "signup", email, request.OrganizationName, ct);
-        return Ok(new { tenantCode = tenant.Code, loginPath = $"/t/{tenant.Code}/login" });
+        await subscriptions.EnsureSubscriptionAsync(tenant.Id, plan.Code, "signup", email, request.OrganizationName, ct);
+        return Ok(new { tenantCode = tenant.Code, loginPath = $"/t/{tenant.Code}/login", planCode = plan.Code, planName = plan.Name });
     }
+
+    /// <summary>A public plan that is sold, and every active price is zero.</summary>
+    private static bool IsFreePlan(Plan plan) =>
+        plan.IsPublic && plan.TrialDays == 0 && plan.Prices.Any(x => x.IsActive) && plan.Prices.Where(x => x.IsActive).All(x => x.Amount == 0);
 }
 
 /// <summary>Payment-gateway callbacks. Authenticated by the gateway's HMAC signature, never by a bearer token.</summary>
