@@ -294,10 +294,40 @@ namespace iucs.meettomanage.api.Services
         {
             var fallback = BuildMarketingFallback(dashboard);
             if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
-            var evidence = JsonSerializer.Serialize(new { dashboard.Days, dashboard.StartDate, dashboard.EndDate, dashboard.Totals, dashboard.Previous, dashboard.Daily, dashboard.TopPages, dashboard.TopBlogPosts, dashboard.Sources, dashboard.Campaigns, dashboard.Mediums, dashboard.Countries, dashboard.Devices, dashboard.DemoRequestsByStatus });
+            var evidence = JsonSerializer.Serialize(new
+            {
+                definitions = new
+                {
+                    authoritativePeriodUniqueVisitors = dashboard.Totals.Visitors,
+                    dailyVisitorsAreUniqueWithinEachDayAndMustNeverBeSummed = true,
+                    pageViewsAreNotVisitors = true,
+                    zeroDemoRequestsMeansNoRequestsWereRecorded_NotProofOfTrackingFailure = true,
+                    directMeansNoAttributionWasCaptured_NotProofOfBrandAwareness = true,
+                },
+                period = new { dashboard.Days, dashboard.StartDate, dashboard.EndDate },
+                currentPeriodTotals = dashboard.Totals,
+                previousEqualPeriodTotals = dashboard.Previous,
+                dailyActivity = dashboard.Daily.Select(d => new { d.Date, d.PageViews, UniqueVisitorsThatDay = d.Visitors, d.ChatsStarted, d.DemoRequests }),
+                topPagesByViews = dashboard.TopPages.Select(p => new { Page = p.Name, Views = p.Count }),
+                topBlogPostsByViews = dashboard.TopBlogPosts.Select(p => new { Page = p.Name, Views = p.Count }),
+                visitorsBySource = dashboard.Sources,
+                visitorsByCampaign = dashboard.Campaigns,
+                dashboard.Mediums,
+                dashboard.Countries,
+                dashboard.Devices,
+                dashboard.DemoRequestsByStatus,
+            });
             var messages = new JsonArray
             {
-                new JsonObject { ["role"] = "system", ["content"] = "You are a growth analyst for an academy-management SaaS. Use only supplied aggregate evidence. Never invent causes, revenue, demographics, or attribution. Return strict JSON: summary string, observations array (2-4), nextActions array (3-5). Prioritize specific actions and mention uncertainty for small samples. No markdown." },
+                new JsonObject { ["role"] = "system", ["content"] =
+                    "You are a careful growth analyst for an academy-management SaaS. Use only supplied aggregate evidence. " +
+                    "The authoritative period visitor total is currentPeriodTotals.Visitors. NEVER sum daily UniqueVisitorsThatDay because returning people can appear on several days. Page views are not visitors. " +
+                    "Never report a visitor count above the authoritative total. Never describe a change above 100% as a share of visitors; distinguish percentage growth from percentage share. " +
+                    "Zero recorded demo requests does not prove a broken funnel or tracking error. State both possible explanations neutrally: no conversion was recorded, and tracking should be verified before changing UX. " +
+                    "Direct means attribution was not captured; it does not prove brand traffic, organic traffic, a launch, a campaign, or internal testing. A traffic increase is an observation, not evidence of its cause. " +
+                    "Do not prescribe A/B testing when there are zero recorded conversions; first verify tracking and gather enough baseline conversions. Never invent causes, revenue, demographics or intent. " +
+                    "Use exact labels: views for TopPages, visitors for Totals/Sources. Prefer checks that distinguish measurement problems from real behaviour. " +
+                    "Return strict JSON: summary string, observations array (2-4), nextActions array (3-5). Prioritize specific actions and state uncertainty. No markdown." },
                 new JsonObject { ["role"] = "user", ["content"] = evidence },
             };
             try
@@ -313,7 +343,12 @@ namespace iucs.meettomanage.api.Services
                     var observations = ReadStringArray(parsed?["observations"]);
                     var actions = ReadStringArray(parsed?["nextActions"] ?? parsed?["next_actions"]);
                     if (!string.IsNullOrWhiteSpace(summary) && observations.Count > 0 && actions.Count > 0)
-                        return new MarketingAiInsightsDto { Summary = summary[..Math.Min(summary.Length, 800)], Observations = observations.Take(4).ToList(), NextActions = actions.Take(5).ToList(), AiPowered = true, GeneratedAtUtc = DateTime.UtcNow };
+                    {
+                        var combinedActions = actions.Concat(fallback.NextActions).Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToList();
+                        var result = new MarketingAiInsightsDto { Summary = summary[..Math.Min(summary.Length, 800)], Observations = observations.Take(4).ToList(), NextActions = combinedActions, AiPowered = true, GeneratedAtUtc = DateTime.UtcNow };
+                        if (!HasImpossibleVisitorClaim(result, dashboard.Totals.Visitors)) return result;
+                        _logger.LogWarning("Rejected marketing AI analysis because a claimed visitor count exceeded the authoritative total of {Visitors}", dashboard.Totals.Visitors);
+                    }
                 }
             }
             catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException)
@@ -321,6 +356,14 @@ namespace iucs.meettomanage.api.Services
                 _logger.LogWarning(ex, "Hetzner marketing analysis unavailable; using measured-data fallback.");
             }
             return fallback;
+        }
+
+        private static bool HasImpossibleVisitorClaim(MarketingAiInsightsDto insight, int authoritativeTotal)
+        {
+            var text = string.Join(" ", new[] { insight.Summary }.Concat(insight.Observations).Concat(insight.NextActions));
+            foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(text, @"\b([\d,]+)\s+(?:unique\s+)?visitors?\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                if (int.TryParse(match.Groups[1].Value.Replace(",", ""), out var claimed) && claimed > authoritativeTotal) return true;
+            return false;
         }
 
         public async Task<MarketingVisitorInsightDto> AnalyzeVisitorAsync(MarketingVisitorDetailDto visitor, CancellationToken cancellationToken = default)
@@ -743,10 +786,20 @@ namespace iucs.meettomanage.api.Services
             var t = dashboard.Totals;
             var actions = new List<string>();
             if (t.Visitors < 50) actions.Add("Increase qualified traffic with UTM-tagged links before drawing strong conversion conclusions.");
-            if (t.ChatStartRate < 10) actions.Add("Test a clearer chat call-to-action on the highest-traffic page and compare the next equal period.");
+            if (t.Visitors >= 20 && t.DemoRequests == 0)
+                actions.Add("Run one complete test booking through /get-started and one through website chat; confirm the request appears in Demo Requests before diagnosing a conversion problem.");
+            var attributed = dashboard.Sources.Where(s => !s.Name.Equals("Direct", StringComparison.OrdinalIgnoreCase)).Sum(s => s.Count);
+            if (t.Visitors >= 20 && attributed * 100d / Math.Max(1, t.Visitors) < 30)
+                actions.Add("Add UTM source, medium and campaign parameters to every email, social, partner and advertising link so new traffic can be attributed.");
+            if (t.ChatStartRate < 10 && t.Visitors >= 20) actions.Add("Test a clearer chat call-to-action on the highest-traffic page and compare the next equal period.");
+            var pricingViews = dashboard.TopPages.FirstOrDefault(p => p.Name.Equals("/pricing", StringComparison.OrdinalIgnoreCase))?.Count ?? 0;
+            var startedViews = dashboard.TopPages.FirstOrDefault(p => p.Name.Equals("/get-started", StringComparison.OrdinalIgnoreCase))?.Count ?? 0;
+            if (t.DemoRequests == 0 && (pricingViews >= 20 || startedViews >= 20))
+                actions.Add($"After tracking is verified, review the path from pricing ({pricingViews} views) and Get Started ({startedViews} views) to form completion; inspect validation errors and mobile usability before running an A/B test.");
             if (t.DemoRequests > 0 && t.DemoPipelineConversionRate == 0) actions.Add("Follow up every open demo request and record its status so the sales conversion gap is measurable.");
             if (dashboard.TopPages.FirstOrDefault() is { } page) actions.Add($"Review the demo CTA and mobile experience on {page.Name}, the highest-traffic page.");
-            if (actions.Count < 3) actions.Add("Repeat the strongest source and content combination, changing one variable at a time.");
+            if (actions.Count < 3) actions.Add("Compare the next equal period and change only one acquisition or page variable at a time.");
+            if (actions.Count < 3) actions.Add("Exclude known staff and automated test traffic from marketing analysis where possible.");
             return new MarketingAiInsightsDto { Summary = $"{t.Visitors} visitors produced {t.DemoRequests} demo requests ({t.ConversionRate:0.#}%) during this {dashboard.Days}-day period.", Observations = [$"Visitors viewed {t.PagesPerVisitor:0.#} pages each on average.", $"{t.ChatStartRate:0.#}% started chat; {t.ChatBookings} demo requests came through chat."], NextActions = actions, AiPowered = false, GeneratedAtUtc = DateTime.UtcNow };
         }
 

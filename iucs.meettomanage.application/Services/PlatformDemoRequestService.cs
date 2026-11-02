@@ -206,11 +206,13 @@ namespace iucs.meettomanage.application.Services
         {
             _ = await _unitOfWork.Repository<PlatformDemoRequest>().FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(PlatformDemoRequest), id);
+            var type = Clean(request.Type) ?? "Note";
+            var detail = Clean(request.Detail) ?? "Activity recorded.";
             var activity = new MarketingLeadActivity
             {
                 Id = Guid.NewGuid(), PlatformDemoRequestId = id,
-                Type = Clean(request.Type)[..Math.Min(Clean(request.Type).Length, 50)],
-                Detail = Clean(request.Detail)[..Math.Min(Clean(request.Detail).Length, 1000)],
+                Type = type[..Math.Min(type.Length, 50)],
+                Detail = detail[..Math.Min(detail.Length, 1000)],
             };
             await _unitOfWork.Repository<MarketingLeadActivity>().AddAsync(activity, cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);

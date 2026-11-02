@@ -70,6 +70,50 @@ public class HetznerSalesAssistantTests
         Assert.NotEmpty(result.NextActions);
     }
 
+    [Fact]
+    public async Task Marketing_analysis_rejects_visitor_counts_above_authoritative_total()
+    {
+        const string body = """{"choices":[{"message":{"content":"{\"summary\":\"282 visitors arrived.\",\"observations\":[\"Traffic increased.\"],\"nextActions\":[\"Verify tracking.\"]}"}}]}""";
+        var handler = new FakeHandler((HttpStatusCode.OK, body));
+        var result = await Create(handler, new() { ApiKey = "key", Model = "primary" })
+            .AnalyzeMarketingAsync(new MarketingDashboardDto { Days = 30, Totals = new() { Visitors = 110, PageViews = 282 } });
+
+        Assert.False(result.AiPowered);
+        Assert.Contains("110 visitors", result.Summary);
+        Assert.Contains("dailyVisitorsAreUniqueWithinEachDayAndMustNeverBeSummed", handler.Requests[0].Body);
+    }
+
+    [Fact]
+    public async Task Marketing_fallback_suggests_tracking_and_attribution_checks_before_experiments()
+    {
+        var result = await Create(new FakeHandler((HttpStatusCode.OK, OkBody)), new()).AnalyzeMarketingAsync(new MarketingDashboardDto
+        {
+            Days = 30,
+            Totals = new() { Visitors = 110, PageViews = 700, DemoRequests = 0, ChatsStarted = 18, ChatStartRate = 16.4 },
+            Sources = [new() { Name = "Direct", Count = 107 }, new() { Name = "Google", Count = 3 }],
+            TopPages = [new() { Name = "/pricing", Count = 69 }, new() { Name = "/get-started", Count = 37 }],
+        });
+
+        Assert.Contains(result.NextActions, x => x.Contains("complete test booking", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.NextActions, x => x.Contains("UTM", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.NextActions, x => x.Contains("After tracking is verified", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(result.NextActions, x => x.Contains("A/B test", StringComparison.OrdinalIgnoreCase) && !x.Contains("before", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Site_improvements_do_not_invent_causes_for_tiny_samples()
+    {
+        var handler = new FakeHandler((HttpStatusCode.OK, OkBody));
+        var result = await Create(handler, new() { ApiKey = "key", Model = "primary" })
+            .SuggestSiteImprovementsAsync(new MarketingSiteBehaviourDto { Visitors = 2, Visits = 2, SinglePageVisits = 2 });
+
+        Assert.False(result.AiPowered);
+        Assert.Contains("not enough evidence", result.Summary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(result.Behaviour, x => x.Contains("do not mean an immediate exit", StringComparison.OrdinalIgnoreCase));
+        Assert.All(result.Improvements, x => Assert.Equal("Low", x.Impact));
+        Assert.Empty(handler.Requests);
+    }
+
     private static HetznerSalesAssistant Create(FakeHandler handler, HetznerAiOptions options) =>
         new(new FakeHttpClientFactory(handler), new FakeDemoRequests(), Microsoft.Extensions.Options.Options.Create(options), NullLogger<HetznerSalesAssistant>.Instance);
 
