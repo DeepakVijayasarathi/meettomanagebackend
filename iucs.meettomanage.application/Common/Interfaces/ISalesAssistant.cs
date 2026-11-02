@@ -16,6 +16,7 @@ namespace iucs.meettomanage.application.Common.Interfaces
         Task<MarketingAiInsightsDto> AnalyzeMarketingAsync(MarketingDashboardDto dashboard, CancellationToken cancellationToken = default);
         Task<OutreachAiInsightsDto> AnalyzeOutreachAsync(object evidence, CancellationToken cancellationToken = default);
         Task<string> DraftOutreachMessageAsync(object evidence, string purpose, CancellationToken cancellationToken = default);
+        Task<OutreachCampaignDraftDto> DraftOutreachCampaignAsync(object brief, CancellationToken cancellationToken = default);
         Task<MarketingBlogAnalysisDto> AnalyzeBlogPerformanceAsync(MarketingContentPerformanceDto performance, CancellationToken cancellationToken = default);
         Task<MarketingLeadRecommendationDto> RecommendLeadAsync(PlatformDemoRequestDto lead, CancellationToken cancellationToken = default);
         /// <summary>Five next blog post ideas from what readers engage with and what visitors ask; a rule-based fallback when AI is unavailable.</summary>

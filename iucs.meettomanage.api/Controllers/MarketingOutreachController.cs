@@ -37,6 +37,14 @@ public sealed class ProspectNoteInput { [Required, MaxLength(10000)] public stri
 public sealed class ProspectTaskInput { [Required, MaxLength(200)] public string Title { get; set; } = ""; [MaxLength(120)] public string? AssignedTo { get; set; } public DateTime DueAtUtc { get; set; } }
 public sealed class InboundReplyInput { [Required, MaxLength(256)] public string From { get; set; } = ""; [MaxLength(200)] public string? Subject { get; set; } [Required, MaxLength(10000)] public string Text { get; set; } = ""; [MaxLength(200)] public string? ExternalId { get; set; } }
 public sealed class DraftMessageInput { [RegularExpression("^(first-contact|reply)$")] public string Purpose { get; set; } = "first-contact"; }
+public sealed class CampaignAiBriefInput
+{
+    [Required, MaxLength(300)] public string Audience { get; set; } = "";
+    [MaxLength(120)] public string? Region { get; set; }
+    [Required, MaxLength(500)] public string Goal { get; set; } = "Book a 15-minute product demo";
+    [MaxLength(500)] public string? Offer { get; set; }
+    [RegularExpression("^(Warm|Professional|Direct)$")] public string Tone { get; set; } = "Warm";
+}
 
 public sealed class ProspectImport
 {
@@ -246,6 +254,16 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         var latestReply = input.Purpose == "reply" ? await db.OutreachProspectActivities.AsNoTracking().Where(x => x.ProspectId == id && x.Type == OutreachActivityType.ReplyReceived).OrderByDescending(x => x.CreatedAtUtc).Select(x => new { x.Subject, x.Detail }).FirstOrDefaultAsync(ct) : null;
         var evidence = new { p.FirstName, p.AcademyName, p.City, p.Region, p.Source, p.Notes, p.LeadScore, p.ScoreReason, latestReply };
         return Ok(new { message = await salesAssistant.DraftOutreachMessageAsync(evidence, input.Purpose, ct) });
+    }
+
+    [HttpPost("campaigns/ai-draft"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
+    public async Task<IActionResult> DraftCampaign(CampaignAiBriefInput input, CancellationToken ct)
+    {
+        return Ok(await salesAssistant.DraftOutreachCampaignAsync(new
+        {
+            input.Audience, input.Region, input.Goal, input.Offer, input.Tone,
+            product = "Meet to Manage: live classes, attendance, fee collection, admissions and parent communication in one academy-management platform"
+        }, ct));
     }
 
     [HttpPut("prospects/{id:guid}"), Authorize(Roles = nameof(UserRole.Marketing))]

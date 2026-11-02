@@ -493,6 +493,21 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public DateTime GeneratedAtUtc { get; set; }
     }
 
+    public class OutreachCampaignDraftDto
+    {
+        public string Name { get; set; } = "";
+        public List<OutreachCampaignDraftStepDto> Steps { get; set; } = new();
+        public string Strategy { get; set; } = "";
+        public bool AiPowered { get; set; }
+    }
+
+    public class OutreachCampaignDraftStepDto
+    {
+        public int DelayDays { get; set; }
+        public string Subject { get; set; } = "";
+        public string Body { get; set; } = "";
+    }
+
     /// <summary>One website chat conversation, for the marketing console's list.</summary>
     public class MarketingChatConversationDto
     {

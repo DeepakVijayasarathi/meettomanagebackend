@@ -426,6 +426,60 @@ namespace iucs.meettomanage.api.Services
             return fallback;
         }
 
+        public async Task<OutreachCampaignDraftDto> DraftOutreachCampaignAsync(object brief, CancellationToken cancellationToken = default)
+        {
+            var fallback = new OutreachCampaignDraftDto
+            {
+                Name = "Academy growth campaign",
+                Strategy = "A short, helpful introduction followed by two low-pressure reminders.",
+                AiPowered = false,
+                Steps =
+                [
+                    new() { DelayDays = 0, Subject = "Quick question about {{AcademyName}}", Body = "Hi {{FirstName}},\n\nI came across {{AcademyName}} and wanted to ask how you currently manage live classes, attendance, fees and parent updates.\n\nMeet to Manage brings these into one simple platform for academies. Would a short 15-minute walkthrough be useful?\n\nThanks,\nThe Meet to Manage team" },
+                    new() { DelayDays = 3, Subject = "Re: Quick question about {{AcademyName}}", Body = "Hi {{FirstName}},\n\nJust following up in case my note was missed. I can show how Meet to Manage would work for {{AcademyName}} using your current class setup.\n\nWould this week suit a short demo?\n\nThanks" },
+                    new() { DelayDays = 5, Subject = "Should I close this?", Body = "Hi {{FirstName}},\n\nI don't want to crowd your inbox, so this is my last note. If simplifying classes, fees and parent communication becomes a priority, I would be happy to help.\n\nShould I send a quick overview?\n\nThanks" }
+                ]
+            };
+            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            var messages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] =
+                    "You write ethical cold-email campaigns for Meet to Manage, an academy-management SaaS for Indian academies, tutoring, phonics, storytelling and enrichment businesses. " +
+                    "Use only the supplied brief. Never invent customer results, student counts, pain points or discounts. Produce exactly 3 concise plain-text emails, each under 120 words, with one low-pressure CTA. " +
+                    "Use only these personalization tokens when useful: {{FirstName}}, {{AcademyName}}, {{City}}. Do not add an unsubscribe line; the platform adds it. " +
+                    "Return strict JSON: {name:string,strategy:string,steps:[{delayDays:number,subject:string,body:string}]}. First delay is 0; later delays must be 2-7 days. No markdown." },
+                new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(brief) }
+            };
+            try
+            {
+                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
+                {
+                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.35, ["max_tokens"] = 1400, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
+                    var (status, body) = await SendAsync(model, payload, cancellationToken);
+                    if (status != 200) continue;
+                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(content) || JsonNode.Parse(content) is not JsonObject parsed || parsed["steps"] is not JsonArray rawSteps) continue;
+                    var steps = rawSteps.Take(3).Select((node, index) => new OutreachCampaignDraftStepDto
+                    {
+                        DelayDays = index == 0 ? 0 : Math.Clamp(node?["delayDays"]?.GetValue<int>() ?? (index == 1 ? 3 : 5), 2, 7),
+                        Subject = (node?["subject"]?.GetValue<string>() ?? "").Trim(),
+                        Body = (node?["body"]?.GetValue<string>() ?? "").Trim()
+                    }).Where(x => x.Subject.Length > 0 && x.Body.Length > 0).ToList();
+                    if (steps.Count != 3) continue;
+                    return new OutreachCampaignDraftDto
+                    {
+                        Name = (parsed["name"]?.GetValue<string>() ?? fallback.Name).Trim()[..Math.Min((parsed["name"]?.GetValue<string>() ?? fallback.Name).Trim().Length, 150)],
+                        Strategy = (parsed["strategy"]?.GetValue<string>() ?? fallback.Strategy).Trim(), Steps = steps, AiPowered = true
+                    };
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException or InvalidOperationException)
+            {
+                _logger.LogWarning(ex, "AI campaign draft unavailable; using safe fallback.");
+            }
+            return fallback;
+        }
+
         private static bool HasImpossibleVisitorClaim(MarketingAiInsightsDto insight, int authoritativeTotal)
         {
             var text = string.Join(" ", new[] { insight.Summary }.Concat(insight.Observations).Concat(insight.NextActions));
