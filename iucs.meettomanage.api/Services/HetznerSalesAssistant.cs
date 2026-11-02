@@ -398,6 +398,34 @@ namespace iucs.meettomanage.api.Services
             return fallback;
         }
 
+        public async Task<string> DraftOutreachMessageAsync(object evidence, string purpose, CancellationToken cancellationToken = default)
+        {
+            var fallback = purpose == "reply"
+                ? "Thanks for getting back to us. I’d be happy to show how Meet to Manage can simplify your classes, attendance, fees, and parent communication. Would a 15-minute demo this week work for you?"
+                : "I came across your academy and thought Meet to Manage could help you manage classes, attendance, fees, and parent updates in one place. Would you be open to a quick 15-minute demo?";
+            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            var messages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] =
+                    "You are a concise B2B sales writer for Meet to Manage, an academy-management SaaS. Use only supplied facts. Never invent achievements, student counts, or problems. " +
+                    "Write a warm, specific message under 110 words with one clear call to action. Plain text only. Do not include a subject line or markdown." },
+                new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(new { purpose, evidence }) }
+            };
+            try
+            {
+                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
+                {
+                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.35, ["max_tokens"] = 350, ["stream"] = false, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
+                    var (status, body) = await SendAsync(model, payload, cancellationToken);
+                    if (status != 200) continue;
+                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>()?.Trim();
+                    if (!string.IsNullOrWhiteSpace(content)) return content[..Math.Min(content.Length, 1200)];
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException) { _logger.LogWarning(ex, "AI outreach draft unavailable; using fallback."); }
+            return fallback;
+        }
+
         private static bool HasImpossibleVisitorClaim(MarketingAiInsightsDto insight, int authoritativeTotal)
         {
             var text = string.Join(" ", new[] { insight.Summary }.Concat(insight.Observations).Concat(insight.NextActions));

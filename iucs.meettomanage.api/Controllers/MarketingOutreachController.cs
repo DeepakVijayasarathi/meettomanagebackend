@@ -36,6 +36,7 @@ public sealed class ProspectUpdate
 public sealed class ProspectNoteInput { [Required, MaxLength(10000)] public string Detail { get; set; } = ""; }
 public sealed class ProspectTaskInput { [Required, MaxLength(200)] public string Title { get; set; } = ""; [MaxLength(120)] public string? AssignedTo { get; set; } public DateTime DueAtUtc { get; set; } }
 public sealed class InboundReplyInput { [Required, MaxLength(256)] public string From { get; set; } = ""; [MaxLength(200)] public string? Subject { get; set; } [Required, MaxLength(10000)] public string Text { get; set; } = ""; [MaxLength(200)] public string? ExternalId { get; set; } }
+public sealed class DraftMessageInput { [RegularExpression("^(first-contact|reply)$")] public string Purpose { get; set; } = "first-contact"; }
 
 public sealed class ProspectImport
 {
@@ -222,6 +223,31 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         return Ok(await salesAssistant.AnalyzeOutreachAsync(evidence, ct));
     }
 
+    [HttpGet("today"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> Today(CancellationToken ct)
+    {
+        var hotLeads = await db.OutreachProspects.AsNoTracking().Where(x => x.LeadScore >= 60 && (x.PipelineStage == OutreachPipelineStage.New || x.PipelineStage == OutreachPipelineStage.Qualified)).OrderByDescending(x => x.LeadScore).Take(10).Select(x => new { x.Id, x.Email, x.FirstName, x.AcademyName, x.Region, x.LeadScore, pipelineStage = x.PipelineStage.ToString(), x.ScoreReason }).ToListAsync(ct);
+        var replies = await db.OutreachProspects.AsNoTracking().Where(x => x.PipelineStage == OutreachPipelineStage.Replied || x.Status == OutreachProspectStatus.Interested).OrderByDescending(x => x.UpdatedAtUtc).Take(10).Select(x => new { x.Id, x.Email, x.FirstName, x.AcademyName, x.Region, x.LeadScore, pipelineStage = x.PipelineStage.ToString(), x.NextActionAtUtc }).ToListAsync(ct);
+        var tasks = await db.OutreachTasks.AsNoTracking().Where(x => x.CompletedAtUtc == null).OrderBy(x => x.DueAtUtc).Take(20).Select(x => new { x.Id, x.ProspectId, x.Title, x.AssignedTo, x.DueAtUtc, x.Prospect.Email, x.Prospect.AcademyName, x.Prospect.Region }).ToListAsync(ct);
+        return Ok(new { hotLeads, replies, tasks, generatedAtUtc = DateTime.UtcNow });
+    }
+
+    [HttpGet("replies"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> Replies(CancellationToken ct)
+    {
+        var items = await db.OutreachProspectActivities.AsNoTracking().Where(x => x.Type == OutreachActivityType.ReplyReceived).OrderByDescending(x => x.CreatedAtUtc).Take(100).Select(x => new { x.Id, x.ProspectId, x.Subject, x.Detail, x.CreatedAtUtc, x.Prospect.Email, x.Prospect.FirstName, x.Prospect.AcademyName, x.Prospect.Region, status = x.Prospect.Status.ToString(), pipelineStage = x.Prospect.PipelineStage.ToString() }).ToListAsync(ct);
+        return Ok(items);
+    }
+
+    [HttpPost("prospects/{id:guid}/draft"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
+    public async Task<IActionResult> DraftMessage(Guid id, DraftMessageInput input, CancellationToken ct)
+    {
+        var p = await db.OutreachProspects.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Prospect", id);
+        var latestReply = input.Purpose == "reply" ? await db.OutreachProspectActivities.AsNoTracking().Where(x => x.ProspectId == id && x.Type == OutreachActivityType.ReplyReceived).OrderByDescending(x => x.CreatedAtUtc).Select(x => new { x.Subject, x.Detail }).FirstOrDefaultAsync(ct) : null;
+        var evidence = new { p.FirstName, p.AcademyName, p.City, p.Region, p.Source, p.Notes, p.LeadScore, p.ScoreReason, latestReply };
+        return Ok(new { message = await salesAssistant.DraftOutreachMessageAsync(evidence, input.Purpose, ct) });
+    }
+
     [HttpPut("prospects/{id:guid}"), Authorize(Roles = nameof(UserRole.Marketing))]
     public async Task<IActionResult> UpdateProspect(Guid id, ProspectUpdate input, CancellationToken ct)
     {
@@ -298,7 +324,14 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         var p = await db.OutreachProspects.FirstOrDefaultAsync(x => x.Email == email, ct);
         if (p is null) return Ok(new { matched = false });
         if (!string.IsNullOrWhiteSpace(input.ExternalId) && await db.OutreachProspectActivities.AnyAsync(x => x.ExternalId == input.ExternalId, ct)) return Ok(new { matched = true, duplicate = true });
-        p.Status = OutreachProspectStatus.Replied; p.PipelineStage = OutreachPipelineStage.Replied; p.NextActionAtUtc = DateTime.UtcNow.AddHours(24);
+        var normalized = input.Text.ToLowerInvariant();
+        var unsubscribe = normalized.Contains("unsubscribe") || normalized.Contains("remove me") || normalized.Contains("stop emailing");
+        var negative = normalized.Contains("not interested") || normalized.Contains("no thanks") || normalized.Contains("do not contact");
+        var positive = normalized.Contains("interested") || normalized.Contains("demo") || normalized.Contains("pricing") || normalized.Contains("price") || normalized.Contains("call me") || normalized.Contains("yes");
+        p.Status = unsubscribe ? OutreachProspectStatus.Unsubscribed : negative ? OutreachProspectStatus.NotInterested : positive ? OutreachProspectStatus.Interested : OutreachProspectStatus.Replied;
+        p.PipelineStage = negative || unsubscribe ? OutreachPipelineStage.Lost : OutreachPipelineStage.Replied;
+        p.NextActionAtUtc = negative || unsubscribe ? null : DateTime.UtcNow.AddHours(24);
+        if (unsubscribe) p.UnsubscribedAtUtc ??= DateTime.UtcNow;
         db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = p.Id, Type = OutreachActivityType.ReplyReceived, Subject = Clean(input.Subject, 200), Detail = Clean(input.Text, 10000), ExternalId = Clean(input.ExternalId, 200), CreatedBy = "Inbound email" });
         await db.OutreachCampaignRecipients.Where(r => r.ProspectId == p.Id && r.Status == OutreachRecipientStatus.Scheduled).ExecuteUpdateAsync(u => u.SetProperty(r => r.Status, OutreachRecipientStatus.Stopped), ct);
         await db.SaveChangesAsync(ct); return Ok(new { matched = true, prospectId = p.Id });
