@@ -128,6 +128,17 @@ namespace iucs.meettomanage.api.Controllers
             CancellationToken cancellationToken = default) =>
             Ok(await _analytics.GetContentPerformanceAsync(days, tzOffsetMinutes, cancellationToken, from, to));
 
+        [HttpPost("analytics/content-analysis")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingBlogAnalysisDto>> ContentAnalysis(
+            [FromQuery] int days = 90, [FromQuery] int tzOffsetMinutes = 0,
+            [FromQuery] DateOnly? from = null, [FromQuery] DateOnly? to = null,
+            CancellationToken cancellationToken = default)
+        {
+            var performance = await _analytics.GetContentPerformanceAsync(days, tzOffsetMinutes, cancellationToken, from, to);
+            return Ok(await _salesAssistant.AnalyzeBlogPerformanceAsync(performance, cancellationToken));
+        }
+
         /// <summary>AI: five next blog post ideas from content performance and what visitors ask the chat.</summary>
         [HttpPost("analytics/blog-ideas")]
         [Authorize(Roles = nameof(UserRole.Marketing))]

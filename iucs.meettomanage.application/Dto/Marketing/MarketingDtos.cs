@@ -577,6 +577,16 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public List<MarketingContentStatDto> Posts { get; set; } = new();
     }
 
+    public class MarketingBlogAnalysisDto
+    {
+        public string ExecutiveSummary { get; set; } = "";
+        public List<string> WinningPatterns { get; set; } = new();
+        public List<string> ContentGaps { get; set; } = new();
+        public List<string> NextActions { get; set; } = new();
+        public bool AiPowered { get; set; }
+        public DateTime GeneratedAtUtc { get; set; }
+    }
+
     /// <summary>Everything the AI sees to suggest the next blog posts — aggregate stats and anonymised visitor questions only.</summary>
     public class MarketingBlogIdeaEvidence
     {

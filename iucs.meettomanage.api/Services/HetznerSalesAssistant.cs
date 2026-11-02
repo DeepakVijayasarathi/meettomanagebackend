@@ -582,6 +582,48 @@ namespace iucs.meettomanage.api.Services
             };
         }
 
+        public async Task<MarketingBlogAnalysisDto> AnalyzeBlogPerformanceAsync(MarketingContentPerformanceDto performance, CancellationToken cancellationToken = default)
+        {
+            var best = performance.Posts.OrderByDescending(p => p.BookedDemo).ThenByDescending(p => p.ToBuyingPages).ThenByDescending(p => p.Readers).FirstOrDefault();
+            var fallback = new MarketingBlogAnalysisDto
+            {
+                ExecutiveSummary = performance.BlogReaders == 0
+                    ? "There is not enough reader data yet. Publish consistently and review this report after traffic starts arriving."
+                    : $"{performance.BlogReaders} people read blog content in this period. {(best is null ? "No article has produced a measurable buying action yet." : $"The strongest article is {best.Title ?? best.Path}, with {best.Readers} readers and {best.ToBuyingPages} visits to a buying page.")}",
+                WinningPatterns = best is null ? [] : [$"{best.Title ?? best.Path} leads current performance: {best.Readers} readers, {best.WentOn} continued, and {best.BookedDemo} booked a demo."],
+                ContentGaps = performance.Posts.Count == 0 ? ["No published article received measurable traffic in this period."] : performance.Posts.Where(p => p.Readers > 0 && p.WentOn == 0).Take(3).Select(p => $"{p.Title ?? p.Path} loses every reader after the article; strengthen internal links and its demo call-to-action.").ToList(),
+                NextActions = ["Add one contextual link to pricing and one clear demo call-to-action to every article.", "Create a follow-up article for the highest-converting topic and link the two articles together.", "Promote the strongest article through email and social channels with campaign tracking."],
+                AiPowered = false,
+                GeneratedAtUtc = DateTime.UtcNow,
+            };
+            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            var messages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] =
+                    "You are a senior content marketing analyst for Meet to Manage, an academy-management SaaS. Analyze only the supplied measured blog data. Explain what performs, what is weak, and the next actions likely to increase demo bookings. Treat small samples cautiously and never invent data. Return strict JSON: {\"executiveSummary\":string,\"winningPatterns\":[string],\"contentGaps\":[string],\"nextActions\":[string]}. Use 2-4 concise items per list, no markdown." },
+                new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(performance) },
+            };
+            try
+            {
+                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
+                {
+                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.2, ["max_tokens"] = 1200, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
+                    var (status, body) = await SendAsync(model, payload, cancellationToken);
+                    if (status != 200) continue;
+                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(content) || JsonNode.Parse(content) is not JsonNode parsed) continue;
+                    var summary = parsed["executiveSummary"]?.GetValue<string>()?.Trim();
+                    if (string.IsNullOrWhiteSpace(summary)) continue;
+                    return new MarketingBlogAnalysisDto { ExecutiveSummary = summary, WinningPatterns = ReadStringArray(parsed["winningPatterns"]).Take(4).ToList(), ContentGaps = ReadStringArray(parsed["contentGaps"]).Take(4).ToList(), NextActions = ReadStringArray(parsed["nextActions"]).Take(5).ToList(), AiPowered = true, GeneratedAtUtc = DateTime.UtcNow };
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException or InvalidOperationException)
+            {
+                _logger.LogWarning(ex, "Hetzner blog analysis unavailable; using measured-data fallback.");
+            }
+            return fallback;
+        }
+
         public async Task<MarketingBlogIdeasDto> SuggestBlogPostsAsync(MarketingBlogIdeaEvidence evidence, CancellationToken cancellationToken = default)
         {
             var fallback = BuildBlogIdeasFallback(evidence);
