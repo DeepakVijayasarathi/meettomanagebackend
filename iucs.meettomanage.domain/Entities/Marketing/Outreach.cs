@@ -35,7 +35,7 @@ namespace iucs.meettomanage.domain.Entities.Marketing
     }
 
     public enum OutreachPipelineStage { New, Qualified, Contacted, Replied, DemoBooked, Trial, Negotiation, Won, Lost }
-    public enum OutreachActivityType { Imported, Note, EmailSent, ReplyReceived, StatusChanged, TaskCreated, TaskCompleted, AiQualified }
+    public enum OutreachActivityType { Imported, Note, EmailSent, ReplyReceived, StatusChanged, TaskCreated, TaskCompleted, AiQualified, ReplyHandled }
 
     /// <summary>
     /// A person the marketing team may e-mail about the platform (an academy owner, typically). One row per e-mail

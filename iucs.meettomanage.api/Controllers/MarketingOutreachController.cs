@@ -243,8 +243,34 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     [HttpGet("replies"), Authorize(Roles = nameof(UserRole.Marketing))]
     public async Task<IActionResult> Replies(CancellationToken ct)
     {
-        var items = await db.OutreachProspectActivities.AsNoTracking().Where(x => x.Type == OutreachActivityType.ReplyReceived).OrderByDescending(x => x.CreatedAtUtc).Take(100).Select(x => new { x.Id, x.ProspectId, x.Subject, x.Detail, x.CreatedAtUtc, x.Prospect.Email, x.Prospect.FirstName, x.Prospect.AcademyName, x.Prospect.Region, status = x.Prospect.Status.ToString(), pipelineStage = x.Prospect.PipelineStage.ToString() }).ToListAsync(ct);
-        return Ok(items);
+        var replies = await db.OutreachProspectActivities.AsNoTracking().Where(x => x.Type == OutreachActivityType.ReplyReceived).OrderByDescending(x => x.CreatedAtUtc).Take(100).Select(x => new { x.Id, x.ProspectId, x.Subject, x.Detail, x.CreatedAtUtc, x.Prospect.Email, x.Prospect.FirstName, x.Prospect.AcademyName, x.Prospect.Region, status = x.Prospect.Status.ToString(), pipelineStage = x.Prospect.PipelineStage.ToString() }).ToListAsync(ct);
+        var prospectIds = replies.Select(x => x.ProspectId).Distinct().ToList();
+        var handled = await db.OutreachProspectActivities.AsNoTracking().Where(x => prospectIds.Contains(x.ProspectId) && x.Type == OutreachActivityType.ReplyHandled).Select(x => new { x.ProspectId, x.CreatedAtUtc }).ToListAsync(ct);
+        var items = replies.Select(x =>
+        {
+            var text = (x.Subject + " " + x.Detail).ToLowerInvariant();
+            var intent = text.Contains("unsubscribe") || text.Contains("remove me") ? "Unsubscribe" : text.Contains("not interested") || text.Contains("no thanks") ? "NotInterested" : text.Contains("price") || text.Contains("cost") ? "Pricing" : text.Contains("demo") || text.Contains("call") || text.Contains("meeting") ? "DemoRequest" : text.Contains("interested") || text.Contains("yes") ? "Interested" : "Question";
+            var isHandled = handled.Any(h => h.ProspectId == x.ProspectId && h.CreatedAtUtc > x.CreatedAtUtc);
+            var ageHours = Math.Max(0, (DateTime.UtcNow - x.CreatedAtUtc).TotalHours);
+            return new { x.Id, x.ProspectId, x.Subject, x.Detail, x.CreatedAtUtc, x.Email, x.FirstName, x.AcademyName, x.Region, x.status, x.pipelineStage, intent, urgency = !isHandled && ageHours >= 24 ? "High" : ageHours >= 8 ? "Normal" : "Low", handled = isHandled, ageHours = Math.Round(ageHours, 1) };
+        }).ToList();
+        return Ok(new { total = items.Count, needsResponse = items.Count(x => !x.handled), overdue = items.Count(x => !x.handled && x.ageHours >= 24), interested = items.Count(x => x.intent is "Interested" or "DemoRequest" or "Pricing"), items });
+    }
+
+    [HttpPost("replies/{id:guid}/analyze"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
+    public async Task<IActionResult> AnalyzeReply(Guid id, CancellationToken ct)
+    {
+        var reply = await db.OutreachProspectActivities.AsNoTracking().Where(x => x.Id == id && x.Type == OutreachActivityType.ReplyReceived).Select(x => new { x.Subject, x.Detail, prospect = new { x.Prospect.FirstName, x.Prospect.AcademyName, x.Prospect.City, x.Prospect.Region, x.Prospect.Status, x.Prospect.PipelineStage } }).FirstOrDefaultAsync(ct) ?? throw new NotFoundException("Reply", id);
+        return Ok(await salesAssistant.AnalyzeOutreachReplyAsync(reply, ct));
+    }
+
+    [HttpPost("replies/{id:guid}/handled"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> MarkReplyHandled(Guid id, CancellationToken ct)
+    {
+        var reply = await db.OutreachProspectActivities.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id && x.Type == OutreachActivityType.ReplyReceived, ct) ?? throw new NotFoundException("Reply", id);
+        db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = reply.ProspectId, Type = OutreachActivityType.ReplyHandled, Detail = "Reply reviewed and handled.", CreatedBy = User.Identity?.Name });
+        var p = await db.OutreachProspects.FirstAsync(x => x.Id == reply.ProspectId, ct); p.NextActionAtUtc = null;
+        await db.SaveChangesAsync(ct); return NoContent();
     }
 
     [HttpPost("prospects/{id:guid}/draft"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]

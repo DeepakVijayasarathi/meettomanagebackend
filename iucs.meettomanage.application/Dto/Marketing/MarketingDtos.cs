@@ -508,6 +508,17 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public string Body { get; set; } = "";
     }
 
+    public class OutreachReplyAnalysisDto
+    {
+        public string Intent { get; set; } = "Question";
+        public string Sentiment { get; set; } = "Neutral";
+        public string Urgency { get; set; } = "Normal";
+        public string Summary { get; set; } = "";
+        public string NextAction { get; set; } = "Reply within one business day.";
+        public string SuggestedReply { get; set; } = "";
+        public bool AiPowered { get; set; }
+    }
+
     /// <summary>One website chat conversation, for the marketing console's list.</summary>
     public class MarketingChatConversationDto
     {

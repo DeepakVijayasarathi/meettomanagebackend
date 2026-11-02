@@ -480,6 +480,58 @@ namespace iucs.meettomanage.api.Services
             return fallback;
         }
 
+        public async Task<OutreachReplyAnalysisDto> AnalyzeOutreachReplyAsync(object evidence, CancellationToken cancellationToken = default)
+        {
+            var fallback = new OutreachReplyAnalysisDto
+            {
+                Summary = "A prospect replied and needs a human-reviewed response.",
+                NextAction = "Review their message and reply within one business day.",
+                SuggestedReply = "Thanks for getting back to us. I’d be happy to answer your questions and show how Meet to Manage can simplify classes, attendance, fees and parent communication. Would a short 15-minute call this week work for you?",
+                AiPowered = false
+            };
+            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            var messages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] =
+                    "You analyze inbound B2B replies for Meet to Manage, an academy-management SaaS. Use only supplied facts. Never invent needs, budget, authority or commitments. " +
+                    "Classify intent as Interested, Pricing, DemoRequest, Question, Objection, NotInterested, Unsubscribe, or AutoReply. Sentiment must be Positive, Neutral, or Negative. Urgency must be High, Normal, or Low. " +
+                    "Write a concise summary, one concrete next action, and a warm plain-text suggestedReply under 120 words with one CTA. Respect rejection and unsubscribe requests; for those, acknowledge briefly without selling. " +
+                    "Return strict JSON: {intent,sentiment,urgency,summary,nextAction,suggestedReply}. No markdown." },
+                new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(evidence) }
+            };
+            try
+            {
+                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
+                {
+                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.2, ["max_tokens"] = 700, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
+                    var (status, body) = await SendAsync(model, payload, cancellationToken);
+                    if (status != 200) continue;
+                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+                    if (string.IsNullOrWhiteSpace(content) || JsonNode.Parse(content) is not JsonObject parsed) continue;
+                    var reply = parsed["suggestedReply"]?.GetValue<string>()?.Trim();
+                    var summary = parsed["summary"]?.GetValue<string>()?.Trim();
+                    if (string.IsNullOrWhiteSpace(reply) || string.IsNullOrWhiteSpace(summary)) continue;
+                    var intent = parsed["intent"]?.GetValue<string>()?.Trim();
+                    var sentiment = parsed["sentiment"]?.GetValue<string>()?.Trim();
+                    var urgency = parsed["urgency"]?.GetValue<string>()?.Trim();
+                    return new OutreachReplyAnalysisDto
+                    {
+                        Intent = new[] { "Interested", "Pricing", "DemoRequest", "Question", "Objection", "NotInterested", "Unsubscribe", "AutoReply" }.Contains(intent) ? intent! : "Question",
+                        Sentiment = new[] { "Positive", "Neutral", "Negative" }.Contains(sentiment) ? sentiment! : "Neutral",
+                        Urgency = new[] { "High", "Normal", "Low" }.Contains(urgency) ? urgency! : "Normal",
+                        Summary = summary[..Math.Min(summary.Length, 600)],
+                        NextAction = (parsed["nextAction"]?.GetValue<string>() ?? fallback.NextAction).Trim(),
+                        SuggestedReply = reply[..Math.Min(reply.Length, 1500)], AiPowered = true
+                    };
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException or InvalidOperationException)
+            {
+                _logger.LogWarning(ex, "AI reply analysis unavailable; using safe fallback.");
+            }
+            return fallback;
+        }
+
         private static bool HasImpossibleVisitorClaim(MarketingAiInsightsDto insight, int authoritativeTotal)
         {
             var text = string.Join(" ", new[] { insight.Summary }.Concat(insight.Observations).Concat(insight.NextActions));
