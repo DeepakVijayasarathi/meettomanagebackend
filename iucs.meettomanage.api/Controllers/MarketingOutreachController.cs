@@ -45,6 +45,11 @@ public sealed class CampaignAiBriefInput
     [MaxLength(500)] public string? Offer { get; set; }
     [RegularExpression("^(Warm|Professional|Direct)$")] public string Tone { get; set; } = "Warm";
 }
+public sealed class SendReplyInput
+{
+    [Required, MaxLength(200)] public string Subject { get; set; } = "";
+    [Required, MaxLength(10000)] public string Body { get; set; } = "";
+}
 
 public sealed class ProspectImport
 {
@@ -250,11 +255,13 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         {
             var text = (x.Subject + " " + x.Detail).ToLowerInvariant();
             var intent = text.Contains("unsubscribe") || text.Contains("remove me") ? "Unsubscribe" : text.Contains("not interested") || text.Contains("no thanks") ? "NotInterested" : text.Contains("price") || text.Contains("cost") ? "Pricing" : text.Contains("demo") || text.Contains("call") || text.Contains("meeting") ? "DemoRequest" : text.Contains("interested") || text.Contains("yes") ? "Interested" : "Question";
-            var isHandled = handled.Any(h => h.ProspectId == x.ProspectId && h.CreatedAtUtc > x.CreatedAtUtc);
+            var handledAt = handled.Where(h => h.ProspectId == x.ProspectId && h.CreatedAtUtc > x.CreatedAtUtc).OrderBy(h => h.CreatedAtUtc).Select(h => (DateTime?)h.CreatedAtUtc).FirstOrDefault();
+            var isHandled = handledAt != null;
             var ageHours = Math.Max(0, (DateTime.UtcNow - x.CreatedAtUtc).TotalHours);
-            return new { x.Id, x.ProspectId, x.Subject, x.Detail, x.CreatedAtUtc, x.Email, x.FirstName, x.AcademyName, x.Region, x.status, x.pipelineStage, intent, urgency = !isHandled && ageHours >= 24 ? "High" : ageHours >= 8 ? "Normal" : "Low", handled = isHandled, ageHours = Math.Round(ageHours, 1) };
+            return new { x.Id, x.ProspectId, x.Subject, x.Detail, x.CreatedAtUtc, x.Email, x.FirstName, x.AcademyName, x.Region, x.status, x.pipelineStage, intent, urgency = !isHandled && ageHours >= 24 ? "High" : ageHours >= 8 ? "Normal" : "Low", handled = isHandled, ageHours = Math.Round(ageHours, 1), responseHours = handledAt is { } at ? Math.Round(Math.Max(0, (at - x.CreatedAtUtc).TotalHours), 1) : (double?)null };
         }).ToList();
-        return Ok(new { total = items.Count, needsResponse = items.Count(x => !x.handled), overdue = items.Count(x => !x.handled && x.ageHours >= 24), interested = items.Count(x => x.intent is "Interested" or "DemoRequest" or "Pricing"), items });
+        var responseTimes = items.Where(x => x.responseHours != null).Select(x => x.responseHours!.Value).ToList();
+        return Ok(new { total = items.Count, needsResponse = items.Count(x => !x.handled), overdue = items.Count(x => !x.handled && x.ageHours >= 24), interested = items.Count(x => x.intent is "Interested" or "DemoRequest" or "Pricing"), averageResponseHours = responseTimes.Count == 0 ? (double?)null : Math.Round(responseTimes.Average(), 1), items });
     }
 
     [HttpPost("replies/{id:guid}/analyze"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
@@ -271,6 +278,25 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = reply.ProspectId, Type = OutreachActivityType.ReplyHandled, Detail = "Reply reviewed and handled.", CreatedBy = User.Identity?.Name });
         var p = await db.OutreachProspects.FirstAsync(x => x.Id == reply.ProspectId, ct); p.NextActionAtUtc = null;
         await db.SaveChangesAsync(ct); return NoContent();
+    }
+
+    [HttpGet("replies/{id:guid}/thread"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> ReplyThread(Guid id, CancellationToken ct)
+    {
+        var reply = await db.OutreachProspectActivities.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id && x.Type == OutreachActivityType.ReplyReceived, ct) ?? throw new NotFoundException("Reply", id);
+        var messages = await db.OutreachProspectActivities.AsNoTracking().Where(x => x.ProspectId == reply.ProspectId && (x.Type == OutreachActivityType.EmailSent || x.Type == OutreachActivityType.ReplyReceived || x.Type == OutreachActivityType.ReplySent)).OrderBy(x => x.CreatedAtUtc).Select(x => new { x.Id, direction = x.Type == OutreachActivityType.ReplyReceived ? "Inbound" : "Outbound", x.Subject, x.Detail, x.CreatedAtUtc, x.CreatedBy }).ToListAsync(ct);
+        return Ok(messages);
+    }
+
+    [HttpPost("replies/{id:guid}/send"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
+    public async Task<IActionResult> SendReply(Guid id, SendReplyInput input, CancellationToken ct)
+    {
+        var reply = await db.OutreachProspectActivities.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id && x.Type == OutreachActivityType.ReplyReceived, ct) ?? throw new NotFoundException("Reply", id);
+        var prospect = await db.OutreachProspects.FirstAsync(x => x.Id == reply.ProspectId, ct);
+        if (prospect.Status == OutreachProspectStatus.Unsubscribed) throw new DomainValidationException("This contact unsubscribed. A reply cannot be sent.");
+        var error = await outreach.SendReplyAsync(prospect, input.Subject.Trim(), input.Body.Trim(), User.Identity?.Name, ct);
+        if (error is not null) throw new ExternalServiceException(error);
+        return NoContent();
     }
 
     [HttpPost("prospects/{id:guid}/draft"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
@@ -377,6 +403,8 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         p.NextActionAtUtc = negative || unsubscribe ? null : DateTime.UtcNow.AddHours(24);
         if (unsubscribe) p.UnsubscribedAtUtc ??= DateTime.UtcNow;
         db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = p.Id, Type = OutreachActivityType.ReplyReceived, Subject = Clean(input.Subject, 200), Detail = Clean(input.Text, 10000), ExternalId = Clean(input.ExternalId, 200), CreatedBy = "Inbound email" });
+        if (!negative && !unsubscribe && !await db.OutreachTasks.AnyAsync(x => x.ProspectId == p.Id && x.CompletedAtUtc == null, ct))
+            db.OutreachTasks.Add(new OutreachTask { ProspectId = p.Id, Title = positive ? "Respond to interested lead" : "Review inbound reply", DueAtUtc = DateTime.UtcNow.AddHours(4), AssignedTo = p.AssignedTo });
         await db.OutreachCampaignRecipients.Where(r => r.ProspectId == p.Id && r.Status == OutreachRecipientStatus.Scheduled).ExecuteUpdateAsync(u => u.SetProperty(r => r.Status, OutreachRecipientStatus.Stopped), ct);
         await db.SaveChangesAsync(ct); return Ok(new { matched = true, prospectId = p.Id });
     }

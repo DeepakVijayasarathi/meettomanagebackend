@@ -169,6 +169,22 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
         return $"{(int)response.StatusCode}: {detail[..Math.Min(detail.Length, 300)]}";
     }
 
+    /// <summary>Sends one human-approved reply and records it in the prospect conversation.</summary>
+    public async Task<string?> SendReplyAsync(OutreachProspect prospect, string subject, string body, string? sentBy, CancellationToken ct)
+    {
+        if (NotReadyReason is { } reason) return reason;
+        var error = await SendAsync(prospect, subject, body, await GetSettingsAsync(ct), ct);
+        if (error is null)
+        {
+            prospect.LastContactedAtUtc = DateTime.UtcNow;
+            prospect.NextActionAtUtc = null;
+            db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = prospect.Id, Type = OutreachActivityType.ReplySent, Subject = subject, Detail = body, CreatedBy = sentBy });
+            db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = prospect.Id, Type = OutreachActivityType.ReplyHandled, Detail = "Approved reply sent.", CreatedBy = sentBy });
+            await db.SaveChangesAsync(ct);
+        }
+        return error;
+    }
+
     /// <summary>A test of one step to the marketing team's own address. Not counted towards the daily limit.</summary>
     public async Task<string?> SendTestAsync(Guid campaignId, int stepOrder, string to, CancellationToken ct)
     {
