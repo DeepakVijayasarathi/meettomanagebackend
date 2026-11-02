@@ -98,6 +98,12 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public DateTime CreatedAtUtc { get; set; }
     }
 
+    public class CreateMarketingLeadActivityRequest
+    {
+        [Required, MaxLength(50)] public string Type { get; set; } = "Note";
+        [Required, MaxLength(1000)] public string Detail { get; set; } = "";
+    }
+
     public class MarketingLeadDetailDto
     {
         public PlatformDemoRequestDto Lead { get; set; } = new();

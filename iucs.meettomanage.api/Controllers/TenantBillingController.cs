@@ -19,7 +19,7 @@ public sealed class ChangePlanRequest { public Guid PlanPriceId { get; set; } }
 /// </summary>
 [ApiController, Route("api/saas-billing"), Authorize(Roles = nameof(UserRole.Admin))]
 public sealed class TenantBillingController(MasterDbContext master, TenantContext tenant, MeetToManageDbContext business,
-    SaasSubscriptionService subscriptions, IEntitlementService entitlements, IOptions<SaasOptions> options) : ControllerBase
+    SaasSubscriptionService subscriptions, IEntitlementService entitlements, IOptions<SaasOptions> options, PlatformRulesService platformRules) : ControllerBase
 {
     private Guid TenantId => tenant.TenantId ?? throw new ForbiddenException("A tenant-bound session is required.");
 
@@ -38,7 +38,8 @@ public sealed class TenantBillingController(MasterDbContext master, TenantContex
             ? await master.PlanPrices.AsNoTracking().Include(x => x.Plan).SingleOrDefaultAsync(x => x.Id == pendingId, ct) : null;
         var open = await master.PlatformInvoices.AsNoTracking().Where(x => x.TenantId == tenantId && x.Status == PlatformInvoiceStatus.Open)
             .OrderBy(x => x.DueAtUtc).ToListAsync(ct);
-        var banner = SaasRules.Banner(sub, now, !string.IsNullOrWhiteSpace(options.Value.TrialFallbackPlanCode));
+        var rules = await platformRules.GetAsync(ct);
+        var banner = SaasRules.Banner(sub, now, !string.IsNullOrWhiteSpace(rules.TrialFallbackPlanCode));
 
         var limits = SaasUsageService.MeteredKeys.Select(key =>
         {
@@ -66,6 +67,7 @@ public sealed class TenantBillingController(MasterDbContext master, TenantContex
             pendingPlan = pending is null ? null : new { pending.Plan.Name, pending.Amount, interval = pending.BillingInterval.ToString() },
             banner = banner is null ? null : new { level = banner.Value.Level, message = banner.Value.Message },
             limits, features, modules,
+            usageWarningPercent = rules.UsageWarningPercent,
             openInvoices = open.Select(x => new { x.Id, x.InvoiceNumber, x.Total, x.Currency, x.DueAtUtc, x.PaymentUrl }),
             taxRatePercent = options.Value.TaxRatePercent,
         });
@@ -76,7 +78,7 @@ public sealed class TenantBillingController(MasterDbContext master, TenantContex
     public async Task<IActionResult> Banner(CancellationToken ct)
     {
         var sub = await master.TenantSubscriptions.AsNoTracking().SingleOrDefaultAsync(x => x.TenantId == TenantId, ct);
-        var banner = sub is null ? null : SaasRules.Banner(sub, DateTime.UtcNow, !string.IsNullOrWhiteSpace(options.Value.TrialFallbackPlanCode));
+        var banner = sub is null ? null : SaasRules.Banner(sub, DateTime.UtcNow, !string.IsNullOrWhiteSpace((await platformRules.GetAsync(ct)).TrialFallbackPlanCode));
         return Ok(new { banner = banner is null ? null : new { level = banner.Value.Level, message = banner.Value.Message } });
     }
 

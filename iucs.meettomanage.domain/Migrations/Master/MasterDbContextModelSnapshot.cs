@@ -487,6 +487,38 @@ namespace iucs.meettomanage.domain.Migrations.Master
                     b.ToTable("platform_payment", (string)null);
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Saas.PlatformSetting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("key");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<string>("Value")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("value");
+
+                    b.HasKey("Id")
+                        .HasName("pk_platform_setting");
+
+                    b.HasIndex("Key")
+                        .IsUnique()
+                        .HasDatabaseName("ux_platform_setting_key");
+
+                    b.ToTable("platform_setting", (string)null);
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Saas.PlatformWebhookEvent", b =>
                 {
                     b.Property<Guid>("Id")

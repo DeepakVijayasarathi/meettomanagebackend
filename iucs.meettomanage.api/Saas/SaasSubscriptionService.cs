@@ -16,7 +16,7 @@ public sealed record PlanChangeResult(string Outcome, Guid? InvoiceId, string? P
 /// </summary>
 public sealed class SaasSubscriptionService(IDbContextFactory<MasterDbContext> factory, IEntitlementService entitlements,
     SaasReminderService reminders, SaasUsageService usage, IPlatformPaymentGateway gateway, IOptions<SaasOptions> options,
-    ILogger<SaasSubscriptionService> logger)
+    PlatformRulesService platformRules, ILogger<SaasSubscriptionService> logger)
 {
     private SaasOptions Options => options.Value;
 
@@ -437,9 +437,11 @@ public sealed class SaasSubscriptionService(IDbContextFactory<MasterDbContext> f
             {
                 // With a Free plan configured, an unpaid trial keeps working on Free instead of pausing.
                 var trialEnd = sub.TrialEndsAtUtc!.Value;
-                var candidates = string.IsNullOrWhiteSpace(Options.TrialFallbackPlanCode) ? []
-                    : await db.Plans.Include(x => x.Prices).Where(x => x.Code == Options.TrialFallbackPlanCode.Trim().ToLowerInvariant()).ToListAsync(ct);
-                if (SaasRules.TrialFallback(candidates, Options.TrialFallbackPlanCode) is { } fallback)
+                // Which plan (if any) is set in Platform console → Rules; empty pauses the workspace as before.
+                var fallbackCode = (await platformRules.GetAsync(ct)).TrialFallbackPlanCode;
+                var candidates = string.IsNullOrWhiteSpace(fallbackCode) ? []
+                    : await db.Plans.Include(x => x.Prices).Where(x => x.Code == fallbackCode).ToListAsync(ct);
+                if (SaasRules.TrialFallback(candidates, fallbackCode) is { } fallback)
                 {
                     ApplyNoRenewalPlan(sub, fallback.Plan, fallback.Price);
                     await SyncTenantAsync(db, sub, suspend: false, ct);

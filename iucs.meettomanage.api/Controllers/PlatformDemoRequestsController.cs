@@ -307,6 +307,11 @@ namespace iucs.meettomanage.api.Controllers
             return NoContent();
         }
 
+        [HttpPost("{id:guid}/activity")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<MarketingLeadActivityDto>> AddActivity(Guid id, CreateMarketingLeadActivityRequest request, CancellationToken cancellationToken) =>
+            Ok(await _platformDemoRequestService.AddActivityAsync(id, request, cancellationToken));
+
         [HttpGet("team")]
         [Authorize(Roles = nameof(UserRole.Marketing))]
         public async Task<ActionResult<IReadOnlyList<MarketingTeamMemberDto>>> Team(CancellationToken cancellationToken) => Ok(await _marketingOperations.TeamAsync(cancellationToken));

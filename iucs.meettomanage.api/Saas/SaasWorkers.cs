@@ -55,7 +55,7 @@ public sealed class SaasLifecycleBackgroundService(IDbContextFactory<MasterDbCon
 
 /// <summary>Collects each active tenant's daily usage snapshot and sends the 80% / 100% limit reminders.</summary>
 public sealed class SaasUsageBackgroundService(IDbContextFactory<MasterDbContext> factory, SaasUsageService usage,
-    IEntitlementService entitlements, SaasReminderService reminders, ILogger<SaasUsageBackgroundService> logger) : BackgroundService
+    IEntitlementService entitlements, SaasReminderService reminders, PlatformRulesService platformRules, ILogger<SaasUsageBackgroundService> logger) : BackgroundService
 {
     private static readonly TimeSpan Interval = TimeSpan.FromHours(1);
 
@@ -77,6 +77,7 @@ public sealed class SaasUsageBackgroundService(IDbContextFactory<MasterDbContext
     public async Task<bool> RunOnceAsync(CancellationToken ct, bool refreshToday = false) => await SaasWorkerLock.RunExclusiveAsync(factory, "saas-usage", async token =>
     {
         var month = DateTime.UtcNow.ToString("yyyyMM");
+        var warnAt = (await platformRules.GetAsync(token)).UsageWarningPercent;
         foreach (var (tenantId, figures) in await usage.SnapshotAllAsync(token, refreshToday))
         {
             var granted = await entitlements.GetAsync(tenantId, token);
@@ -87,7 +88,8 @@ public sealed class SaasUsageBackgroundService(IDbContextFactory<MasterDbContext
                 var current = figures.For(key) ?? 0;
                 if (limit <= 0) continue;
                 var percent = (int)(current * 100 / limit);
-                var rule = percent >= 100 ? "usage_limit_100" : percent >= 80 ? "usage_limit_80" : null;
+                // "usage_limit_80" is the warning template's key; the threshold itself is the Rules setting.
+                var rule = percent >= 100 ? "usage_limit_100" : percent >= warnAt ? "usage_limit_80" : null;
                 if (rule is null) continue;
                 var definition = EntitlementKeys.Find(key)!;
                 await reminders.NotifyAsync(tenantId, rule, $"{key}:{month}", extra: new Dictionary<string, string>

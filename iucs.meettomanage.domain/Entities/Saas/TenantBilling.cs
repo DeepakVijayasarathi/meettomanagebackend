@@ -64,3 +64,15 @@ public class PlatformEmailTemplate
     public bool IsActive { get; set; } = true;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }
+
+/// <summary>
+/// An operator-editable platform rule (key/value), e.g. when an unpaid trial moves to Free or when a usage
+/// warning fires. A missing row means the built-in default (or the server's configuration) applies.
+/// </summary>
+public class PlatformSetting
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    [MaxLength(100)] public string Key { get; set; } = null!;
+    [MaxLength(2000)] public string? Value { get; set; }
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+}

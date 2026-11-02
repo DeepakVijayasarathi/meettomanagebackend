@@ -64,27 +64,31 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     public async Task<IActionResult> Summary(CancellationToken ct)
     {
         var now = DateTime.UtcNow;
-        var counts = await db.OutreachProspects.AsNoTracking().GroupBy(x => x.Status).Select(g => new { status = g.Key.ToString(), count = g.Count() }).ToListAsync(ct);
+        var settings = await outreach.GetSettingsAsync(ct);
+        var counts = (await db.OutreachProspects.AsNoTracking().GroupBy(x => x.Status).Select(g => new { g.Key, count = g.Count() }).ToListAsync(ct))
+            .Select(x => new { status = x.Key.ToString(), x.count });
         return Ok(new
         {
             ready = outreach.NotReadyReason is null,
             notReadyReason = outreach.NotReadyReason,
-            from = outreach.From,
-            replyTo = outreach.ReplyTo,
-            dailyLimit = await outreach.GetDailyLimitAsync(ct),
-            sentToday = await outreach.SentTodayAsync(now, ct),
-            sendingHours = $"{OutreachService.WindowStartHour}:00–{OutreachService.WindowEndHour}:00 IST",
+            from = settings.From,
+            replyTo = settings.ReplyTo,
+            dailyLimit = settings.DailyLimit,
+            sentToday = await outreach.SentTodayAsync(now, settings, ct),
+            sendingHours = $"{settings.WindowStartHour}:00–{settings.WindowEndHour}:00 ({settings.TimeZoneId})",
             prospects = counts,
         });
     }
 
-    public sealed record LimitInput([Range(1, OutreachService.MaxDailyLimit)] int DailyLimit);
+    /// <summary>Every cold e-mail setting (saved values, else the server's configuration, else the defaults).</summary>
+    [HttpGet("settings"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> GetSettings(CancellationToken ct) => Ok(await outreach.GetSettingsAsync(ct));
 
     [HttpPut("settings"), Authorize(Roles = nameof(UserRole.Marketing))]
-    public async Task<IActionResult> Settings(LimitInput input, CancellationToken ct)
+    public async Task<IActionResult> SaveSettings(OutreachSettings input, CancellationToken ct)
     {
-        await outreach.SetDailyLimitAsync(input.DailyLimit, ct);
-        return NoContent();
+        if (await outreach.SaveSettingsAsync(input, ct) is { } problem) throw new DomainValidationException(problem);
+        return Ok(await outreach.GetSettingsAsync(ct));
     }
 
     // ---------------------------------------------------------------- prospects
@@ -211,7 +215,7 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     public async Task<IActionResult> CreateCampaign(CampaignInput input, CancellationToken ct)
     {
         var campaign = new OutreachCampaign { Name = input.Name.Trim() };
-        ApplySteps(campaign, input.Steps);
+        ApplySteps(campaign, input.Steps, (await outreach.GetSettingsAsync(ct)).MinFollowUpDays);
         db.OutreachCampaigns.Add(campaign);
         await db.SaveChangesAsync(ct);
         return Ok(new { campaign.Id });
@@ -224,12 +228,12 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         campaign.Name = input.Name.Trim();
         // Steps are replaced outright (a soft delete would keep the unique campaign/order slot taken).
         await db.OutreachCampaignSteps.IgnoreQueryFilters().Where(s => s.CampaignId == id).ExecuteDeleteAsync(ct);
-        ApplySteps(campaign, input.Steps);
+        ApplySteps(campaign, input.Steps, (await outreach.GetSettingsAsync(ct)).MinFollowUpDays);
         await db.SaveChangesAsync(ct);
         return NoContent();
     }
 
-    private static void ApplySteps(OutreachCampaign campaign, List<StepInput> steps)
+    private static void ApplySteps(OutreachCampaign campaign, List<StepInput> steps, int minFollowUpDays)
     {
         if (steps.Count is < 1 or > 3) throw new DomainValidationException("A campaign has a first e-mail and up to two follow-ups.");
         for (var i = 0; i < steps.Count; i++)
@@ -237,7 +241,7 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
             var s = steps[i];
             if (string.IsNullOrWhiteSpace(s.Subject) || string.IsNullOrWhiteSpace(s.Body)) throw new DomainValidationException($"E-mail {i + 1} needs a subject and a message.");
             // Through the navigation: a new campaign has no id until it is saved.
-            campaign.Steps.Add(new OutreachCampaignStep { Order = i + 1, DelayDays = i == 0 ? 0 : Math.Max(1, s.DelayDays), Subject = s.Subject.Trim(), Body = s.Body.Trim() });
+            campaign.Steps.Add(new OutreachCampaignStep { Order = i + 1, DelayDays = i == 0 ? 0 : Math.Max(minFollowUpDays, s.DelayDays), Subject = s.Subject.Trim(), Body = s.Body.Trim() });
         }
     }
 

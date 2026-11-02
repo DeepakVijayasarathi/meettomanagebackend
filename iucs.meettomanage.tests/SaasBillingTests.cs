@@ -311,6 +311,31 @@ public sealed class SaasSeederTests : IDisposable
     }
 
     [Fact]
+    public async Task PlatformRulesDefaultFromConfigAndRefuseAPaidFallbackPlan()
+    {
+        var options = Options.Create(new SaasOptions());
+        await SaasSeeder.SeedAsync(_factory, options, NullLogger.Instance);
+        var rules = new PlatformRulesService(_factory, options, new MemoryCache(new MemoryCacheOptions()));
+
+        var defaults = await rules.GetAsync();
+        Assert.Equal(3, defaults.NotStartedAfterDays);
+        Assert.Equal(80, defaults.UsageWarningPercent);
+        Assert.Equal("free", defaults.TrialFallbackPlanCode);
+
+        Assert.NotNull(await rules.SaveAsync(defaults with { TrialFallbackPlanCode = "starter" })); // paid
+        Assert.NotNull(await rules.SaveAsync(defaults with { TrialFallbackPlanCode = "nope" }));    // unknown
+        Assert.NotNull(await rules.SaveAsync(defaults with { UsageWarningPercent = 100 }));
+        Assert.NotNull(await rules.SaveAsync(defaults with { NotStartedAfterDays = 0 }));
+
+        Assert.Null(await rules.SaveAsync(defaults with { NotStartedAfterDays = 5, TrialEndingWindowDays = 10, UsageWarningPercent = 90, TrialFallbackPlanCode = "" }));
+        var saved = await rules.GetAsync();
+        Assert.Equal(5, saved.NotStartedAfterDays);
+        Assert.Equal(10, saved.TrialEndingWindowDays);
+        Assert.Equal(90, saved.UsageWarningPercent);
+        Assert.Null(saved.TrialFallbackPlanCode); // empty = pause, overriding the server default
+    }
+
+    [Fact]
     public async Task TrialPlanGetsEveryFeatureItPromisesButOperatorEditsAreKept()
     {
         var options = Options.Create(new SaasOptions());

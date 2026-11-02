@@ -17,21 +17,14 @@ namespace iucs.meettomanage.api.Marketing;
 /// </summary>
 public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory http, IConfiguration configuration, ILogger<OutreachService> logger)
 {
-    public const string DailyLimitKey = "outreach.dailyLimit";
-    public const int DefaultDailyLimit = 50;
+    public const string KeyPrefix = "outreach.";
     public const int MaxDailyLimit = 500;
-    /// <summary>Sending hours (IST). Sends are spread evenly across this window instead of all at once.</summary>
-    public const int WindowStartHour = 9, WindowEndHour = 19;
-    private const int MaxFailuresPerStep = 3;
-    private static readonly TimeZoneInfo Ist = TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
 
     /// <summary>Statuses that still receive e-mail; anything else stops the sequence.</summary>
     public static bool IsContactable(OutreachProspectStatus status) => status is OutreachProspectStatus.New or OutreachProspectStatus.Contacted;
 
     // ---------------------------------------------------------------- configuration
 
-    public string From => configuration["Outreach:From"] is { Length: > 0 } f ? f : "Meet to Manage <hello@meettomanage.cloud>";
-    public string? ReplyTo => configuration["Outreach:ReplyTo"] is { Length: > 0 } r ? r : configuration["Marketing:LeadAlertEmail"];
     private string? ApiKey => configuration["Resend:ApiKey"] is { Length: > 0 } k ? k : null;
 
     /// <summary>Public base for unsubscribe links; a missing or placeholder value blocks sending rather than mailing broken links.</summary>
@@ -51,29 +44,60 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
         : UnsubscribeBase is null ? "The public API address (Api:BaseUrl or Outreach:UnsubscribeBaseUrl) is missing, so unsubscribe links cannot be built."
         : null;
 
-    public async Task<int> GetDailyLimitAsync(CancellationToken ct)
+    /// <summary>
+    /// Built-in defaults, overridden by the server's configuration (Outreach:From, Outreach:ReplyTo, ...), overridden in
+    /// turn by what the marketing team saves in the console (outreach.* settings).
+    /// </summary>
+    private OutreachSettings Defaults()
     {
-        var raw = await db.AppSettings.AsNoTracking().Where(x => x.Key == DailyLimitKey).Select(x => x.Value).FirstOrDefaultAsync(ct);
-        return int.TryParse(raw, out var v) && v is > 0 and <= MaxDailyLimit ? v : DefaultDailyLimit;
+        var (name, address) = OutreachSettings.ParseFrom(configuration["Outreach:From"]);
+        return new OutreachSettings
+        {
+            FromName = name ?? "Meet to Manage",
+            FromAddress = address ?? "hello@meettomanage.cloud",
+            ReplyTo = configuration["Outreach:ReplyTo"] is { Length: > 0 } r ? r : configuration["Marketing:LeadAlertEmail"],
+            DailyLimit = configuration.GetValue("Outreach:DailyLimit", 50),
+            WindowStartHour = configuration.GetValue("Outreach:WindowStartHour", 9),
+            WindowEndHour = configuration.GetValue("Outreach:WindowEndHour", 19),
+            TimeZoneId = configuration["Outreach:TimeZone"] is { Length: > 0 } tz ? tz : "Asia/Kolkata",
+            FooterText = configuration["Outreach:FooterText"] is { Length: > 0 } f ? f
+                : "You're receiving this because your academy's contact details are publicly listed. Not interested? Unsubscribe and we won't e-mail you again.",
+            CompanyLine = configuration["Outreach:CompanyLine"] is { Length: > 0 } c ? c : "Meet to Manage · Infinity Uniquers, India",
+            MinFollowUpDays = configuration.GetValue("Outreach:MinFollowUpDays", 2),
+            MaxFailuresPerStep = configuration.GetValue("Outreach:MaxFailuresPerStep", 3),
+        };
     }
 
-    public async Task SetDailyLimitAsync(int limit, CancellationToken ct)
+    public async Task<OutreachSettings> GetSettingsAsync(CancellationToken ct)
     {
-        var row = await db.AppSettings.FirstOrDefaultAsync(x => x.Key == DailyLimitKey, ct);
-        if (row is null) db.AppSettings.Add(row = new AppSetting { Key = DailyLimitKey, Category = SettingCategory.General, IsPublic = false });
-        row.Value = Math.Clamp(limit, 1, MaxDailyLimit).ToString();
+        var saved = await db.AppSettings.AsNoTracking().Where(x => x.Key.StartsWith(KeyPrefix)).ToDictionaryAsync(x => x.Key, x => x.Value, ct);
+        return Defaults().Overlay(saved);
+    }
+
+    /// <summary>Validates and saves every outreach setting. Returns the first problem, or null when saved.</summary>
+    public async Task<string?> SaveSettingsAsync(OutreachSettings settings, CancellationToken ct)
+    {
+        if (settings.Validate() is { } problem) return problem;
+        var existing = await db.AppSettings.Where(x => x.Key.StartsWith(KeyPrefix)).ToDictionaryAsync(x => x.Key, ct);
+        foreach (var (key, value) in settings.ToSettings())
+        {
+            if (!existing.TryGetValue(key, out var row))
+                db.AppSettings.Add(row = new AppSetting { Key = key, Category = SettingCategory.General, IsPublic = false });
+            row.Value = value;
+        }
         await db.SaveChangesAsync(ct);
+        return null;
     }
 
-    public static DateTime StartOfTodayUtc(DateTime nowUtc)
+    public static DateTime StartOfTodayUtc(DateTime nowUtc, TimeZoneInfo zone)
     {
-        var local = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, Ist).Date;
-        return TimeZoneInfo.ConvertTimeToUtc(local, Ist);
+        var local = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, zone).Date;
+        return TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(local, DateTimeKind.Unspecified), zone);
     }
 
-    public Task<int> SentTodayAsync(DateTime nowUtc, CancellationToken ct)
+    public Task<int> SentTodayAsync(DateTime nowUtc, OutreachSettings settings, CancellationToken ct)
     {
-        var start = StartOfTodayUtc(nowUtc);
+        var start = StartOfTodayUtc(nowUtc, settings.Zone);
         return db.OutreachSends.CountAsync(x => x.Succeeded && x.SentAtUtc >= start && x.ProspectId != Guid.Empty, ct);
     }
 
@@ -100,32 +124,33 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
 
     public string UnsubscribeUrl(Guid token) => $"{UnsubscribeBase}/api/marketing/outreach/unsubscribe/{token:N}";
 
-    private (string Html, string Text) Compose(string body, OutreachProspect p)
+    private (string Html, string Text) Compose(string body, OutreachProspect p, OutreachSettings settings)
     {
         var rendered = Render(body, p);
         var url = UnsubscribeUrl(p.UnsubscribeToken);
-        var footer = "You're receiving this because your academy's contact details are publicly listed. Not interested? Unsubscribe and we won't e-mail you again.";
+        var footer = settings.FooterText;
+        var company = WebUtility.HtmlEncode(settings.CompanyLine);
         var html = "<div style=\"font-family:Arial,sans-serif;font-size:15px;line-height:1.55;color:#1c1917\">" + ToHtml(rendered)
-            + $"<p style=\"margin:24px 0 0;font-size:12px;color:#78716c\">{WebUtility.HtmlEncode(footer)} <a href=\"{url}\" style=\"color:#78716c\">Unsubscribe</a><br>Meet to Manage · Infinity Uniquers, India</p></div>";
-        var text = $"{rendered.Trim()}\n\n--\n{footer}\nUnsubscribe: {url}\nMeet to Manage · Infinity Uniquers, India";
+            + $"<p style=\"margin:24px 0 0;font-size:12px;color:#78716c\">{WebUtility.HtmlEncode(footer)} <a href=\"{url}\" style=\"color:#78716c\">Unsubscribe</a><br>{company}</p></div>";
+        var text = $"{rendered.Trim()}\n\n--\n{footer}\nUnsubscribe: {url}\n{settings.CompanyLine}";
         return (html, text);
     }
 
     // ---------------------------------------------------------------- sending
 
     /// <summary>Sends one e-mail through Resend. Returns null on success, or the provider's error.</summary>
-    private async Task<string?> SendAsync(OutreachProspect p, string subject, string body, CancellationToken ct)
+    private async Task<string?> SendAsync(OutreachProspect p, string subject, string body, OutreachSettings settings, CancellationToken ct)
     {
-        var (html, text) = Compose(body, p);
+        var (html, text) = Compose(body, p, settings);
         var unsubscribe = UnsubscribeUrl(p.UnsubscribeToken);
         var client = http.CreateClient(nameof(OutreachService));
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.resend.com/emails")
         {
             Content = JsonContent.Create(new
             {
-                from = From,
+                from = settings.From,
                 to = new[] { p.Email },
-                reply_to = ReplyTo is { Length: > 0 } r ? new[] { r } : null,
+                reply_to = settings.ReplyTo is { Length: > 0 } r ? new[] { r } : null,
                 subject = Render(subject, p),
                 html,
                 text,
@@ -135,7 +160,7 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
                     ["List-Unsubscribe"] = $"<{unsubscribe}>",
                     ["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click",
                 },
-            }),
+            }, options: OmitNulls),
         };
         request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", ApiKey);
         using var response = await client.SendAsync(request, ct);
@@ -151,7 +176,7 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
         var step = await db.OutreachCampaignSteps.AsNoTracking().FirstOrDefaultAsync(x => x.CampaignId == campaignId && x.Order == stepOrder, ct);
         if (step is null) return "That step does not exist.";
         var sample = new OutreachProspect { Email = to.Trim(), FirstName = "Priya", AcademyName = "Bright Minds Academy", City = "Chennai", UnsubscribeToken = Guid.Empty };
-        var error = await SendAsync(sample, "[Test] " + step.Subject, step.Body, ct);
+        var error = await SendAsync(sample, "[Test] " + step.Subject, step.Body, await GetSettingsAsync(ct), ct);
         db.OutreachSends.Add(new OutreachSend { CampaignId = campaignId, ProspectId = Guid.Empty, StepOrder = stepOrder, Email = sample.Email, Subject = "[Test] " + step.Subject, Succeeded = error is null, Error = error });
         await db.SaveChangesAsync(ct);
         return error;
@@ -173,12 +198,13 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
             .ExecuteUpdateAsync(u => u.SetProperty(c => c.Status, OutreachCampaignStatus.Completed), ct);
 
         if (NotReadyReason is not null) return false;
-        var local = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, Ist);
-        if (local.Hour < WindowStartHour || local.Hour >= WindowEndHour) return false;
+        var settings = await GetSettingsAsync(ct);
+        var local = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, settings.Zone);
+        if (local.Hour < settings.WindowStartHour || local.Hour >= settings.WindowEndHour) return false;
 
-        var limit = await GetDailyLimitAsync(ct);
-        if (await SentTodayAsync(nowUtc, ct) >= limit) return false;
-        var spacing = TimeSpan.FromMinutes((WindowEndHour - WindowStartHour) * 60.0 / limit);
+        var limit = settings.DailyLimit;
+        if (await SentTodayAsync(nowUtc, settings, ct) >= limit) return false;
+        var spacing = TimeSpan.FromMinutes((settings.WindowEndHour - settings.WindowStartHour) * 60.0 / limit);
         var last = await db.OutreachSends.Where(x => x.ProspectId != Guid.Empty).OrderByDescending(x => x.SentAtUtc).Select(x => (DateTime?)x.SentAtUtc).FirstOrDefaultAsync(ct);
         if (last is { } l && nowUtc - l < spacing) return false;
 
@@ -200,7 +226,7 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
         }
 
         string? error;
-        try { error = await SendAsync(recipient.Prospect, step.Subject, step.Body, ct); }
+        try { error = await SendAsync(recipient.Prospect, step.Subject, step.Body, settings, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { error = ex.Message; }
 
         db.OutreachSends.Add(new OutreachSend
@@ -215,13 +241,13 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
             recipient.Prospect.LastContactedAtUtc = nowUtc;
             var next = steps.FirstOrDefault(s => s.Order > step.Order);
             if (next is null) recipient.Status = OutreachRecipientStatus.Completed;
-            else { recipient.NextStep = next.Order; recipient.NextSendAtUtc = nowUtc.AddDays(Math.Max(1, next.DelayDays)); }
+            else { recipient.NextStep = next.Order; recipient.NextSendAtUtc = nowUtc.AddDays(Math.Max(settings.MinFollowUpDays, next.DelayDays)); }
         }
         else
         {
             var failures = await db.OutreachSends.CountAsync(x => x.CampaignId == recipient.CampaignId && x.ProspectId == recipient.ProspectId && x.StepOrder == step.Order && !x.Succeeded, ct) + 1;
             // An address the provider rejects outright (422) or that keeps failing is treated as bounced.
-            if (error.StartsWith("422") || failures >= MaxFailuresPerStep)
+            if (error.StartsWith("422") || failures >= settings.MaxFailuresPerStep)
             {
                 recipient.Status = OutreachRecipientStatus.Stopped;
                 recipient.Prospect.Status = OutreachProspectStatus.Bounced;
@@ -249,6 +275,9 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
         }
         return true;
     }
+
+    // No reply-to means the field is left out entirely rather than sent as null.
+    private static readonly System.Text.Json.JsonSerializerOptions OmitNulls = new() { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
 
     public static bool LooksLikeEmail(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 && Regex.IsMatch(value.Trim(), @"^[^@\s]+@[^@\s]+\.[^@\s]+$");

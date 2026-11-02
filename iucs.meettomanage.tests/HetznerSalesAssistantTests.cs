@@ -84,6 +84,7 @@ public class HetznerSalesAssistantTests
         public Task<MarketingLeadDetailDto> GetAsync(Guid id, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task BulkUpdateAsync(BulkMarketingLeadRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task RestoreAsync(Guid id, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<MarketingLeadActivityDto> AddActivityAsync(Guid id, CreateMarketingLeadActivityRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     }
 
     private sealed class FakeHttpClientFactory(HttpMessageHandler handler) : IHttpClientFactory

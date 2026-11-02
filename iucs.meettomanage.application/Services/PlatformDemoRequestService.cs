@@ -202,6 +202,21 @@ namespace iucs.meettomanage.application.Services
             await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
+        public async Task<MarketingLeadActivityDto> AddActivityAsync(Guid id, CreateMarketingLeadActivityRequest request, CancellationToken cancellationToken = default)
+        {
+            _ = await _unitOfWork.Repository<PlatformDemoRequest>().FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
+                ?? throw new NotFoundException(nameof(PlatformDemoRequest), id);
+            var activity = new MarketingLeadActivity
+            {
+                Id = Guid.NewGuid(), PlatformDemoRequestId = id,
+                Type = Clean(request.Type)[..Math.Min(Clean(request.Type).Length, 50)],
+                Detail = Clean(request.Detail)[..Math.Min(Clean(request.Detail).Length, 1000)],
+            };
+            await _unitOfWork.Repository<MarketingLeadActivity>().AddAsync(activity, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return new MarketingLeadActivityDto { Id = activity.Id, Type = activity.Type, Detail = activity.Detail, CreatedAtUtc = activity.CreatedAtUtc };
+        }
+
         private async Task Enrich(List<PlatformDemoRequest> rows, CancellationToken cancellationToken)
         {
             var visitorIds = rows.Where(x => x.VisitorId != null).Select(x => x.VisitorId!).Distinct().ToList();

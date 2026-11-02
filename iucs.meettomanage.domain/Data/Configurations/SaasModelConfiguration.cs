@@ -137,6 +137,13 @@ public static class SaasModelConfiguration
             e.HasIndex(x => new { x.TenantId, x.CreatedAtUtc });
         });
 
+        modelBuilder.Entity<PlatformSetting>(e =>
+        {
+            e.ToTable("platform_setting");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.Key).IsUnique();
+        });
+
         modelBuilder.Entity<PlatformEmailTemplate>(e =>
         {
             e.ToTable("platform_email_template");

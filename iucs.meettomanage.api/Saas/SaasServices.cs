@@ -14,6 +14,7 @@ public static class SaasServices
         services.AddMemoryCache();
         services.AddHttpClient(nameof(RazorpayPlatformGateway));
         services.AddSingleton<IEntitlementService, EntitlementService>();
+        services.AddSingleton<PlatformRulesService>();
         services.AddSingleton<PlatformEmailSender>();
         services.AddHttpClient(nameof(PlatformEmailSender), client => client.Timeout = TimeSpan.FromSeconds(15));
         services.AddSingleton<IPlatformPaymentGateway>(sp => string.Equals(sp.GetRequiredService<IOptions<SaasOptions>>().Value.Gateway, "Razorpay", StringComparison.OrdinalIgnoreCase)

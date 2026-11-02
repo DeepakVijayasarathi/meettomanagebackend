@@ -91,7 +91,7 @@ public sealed class OutreachTests : IDisposable
     {
         await SeedAsync();
         var svc = Service();
-        await svc.SetDailyLimitAsync(1, CancellationToken.None);
+        Assert.Null(await svc.SaveSettingsAsync((await svc.GetSettingsAsync(CancellationToken.None)) with { DailyLimit = 1 }, CancellationToken.None));
         Assert.True(await svc.ProcessDueAsync(Morning, CancellationToken.None));
         // a second prospect is due, but today's single send is used up
         var other = new OutreachProspect { Email = "two@academy.in" };
@@ -133,6 +133,57 @@ public sealed class OutreachTests : IDisposable
         _db.Context.ChangeTracker.Clear();
         Assert.Equal(OutreachProspectStatus.Bounced, (await _db.Context.OutreachProspects.AsNoTracking().SingleAsync()).Status);
         Assert.False((await _db.Context.OutreachSends.AsNoTracking().SingleAsync()).Succeeded);
+    }
+
+    [Fact]
+    public async Task SettingsDefaultFromServerConfigAndSavedValuesWin()
+    {
+        var svc = Service();
+        var defaults = await svc.GetSettingsAsync(CancellationToken.None);
+        Assert.Equal("Meet to Manage <hello@meettomanage.cloud>", defaults.From);
+        Assert.Equal("team@test.dev", defaults.ReplyTo);
+        Assert.Equal(50, defaults.DailyLimit);
+
+        var custom = defaults with
+        {
+            FromName = "Deepak from Meet to Manage", FromAddress = "deepak@meettomanage.cloud", ReplyTo = "",
+            WindowStartHour = 10, WindowEndHour = 17, TimeZoneId = "Asia/Dubai", FooterText = "We found you on Justdial.", CompanyLine = "Infinity Uniquers, Chennai 600001",
+        };
+        Assert.Null(await svc.SaveSettingsAsync(custom, CancellationToken.None));
+        var saved = await svc.GetSettingsAsync(CancellationToken.None);
+        Assert.Equal("Deepak from Meet to Manage <deepak@meettomanage.cloud>", saved.From);
+        Assert.Null(saved.ReplyTo); // cleared on purpose
+        Assert.Equal("Asia/Dubai", saved.TimeZoneId);
+
+        // Sending hours follow the saved time zone: 05:00 UTC is 09:00 in Dubai, before the 10:00 start...
+        await SeedAsync();
+        Assert.False(await svc.ProcessDueAsync(Morning, CancellationToken.None));
+        // ...and 06:30 UTC is 10:30 there, inside it. The saved footer, company line and sender are used.
+        Assert.True(await svc.ProcessDueAsync(Morning.AddMinutes(90), CancellationToken.None));
+        var mail = Assert.Single(_resend.Sent).RootElement;
+        Assert.Equal("Deepak from Meet to Manage <deepak@meettomanage.cloud>", mail.GetProperty("from").GetString());
+        Assert.Contains("We found you on Justdial.", mail.GetProperty("text").GetString());
+        Assert.Contains("Infinity Uniquers, Chennai 600001", mail.GetProperty("html").GetString());
+        Assert.False(mail.TryGetProperty("reply_to", out _)); // omitted, not null
+    }
+
+    [Theory]
+    [InlineData("fromAddress", "not-an-email")]
+    [InlineData("window", "end-before-start")]
+    [InlineData("timeZone", "Mars/Olympus")]
+    [InlineData("dailyLimit", "0")]
+    public async Task InvalidSettingsAreRefusedWithAReason(string field, string value)
+    {
+        var svc = Service();
+        var s = await svc.GetSettingsAsync(CancellationToken.None);
+        s = field switch
+        {
+            "fromAddress" => s with { FromAddress = value },
+            "window" => s with { WindowStartHour = 18, WindowEndHour = 9 },
+            "timeZone" => s with { TimeZoneId = value },
+            _ => s with { DailyLimit = 0 },
+        };
+        Assert.NotNull(await svc.SaveSettingsAsync(s, CancellationToken.None));
     }
 
     public void Dispose() => _db.Dispose();

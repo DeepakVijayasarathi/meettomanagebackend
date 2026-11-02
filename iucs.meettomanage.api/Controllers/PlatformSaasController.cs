@@ -455,6 +455,26 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
         });
     }
 
+    /// <summary>Operator rules: when Overview flags things, the usage warning threshold, and where ended trials go.</summary>
+    [HttpGet("rules")]
+    public async Task<IActionResult> Rules([FromServices] PlatformRulesService rules, CancellationToken ct)
+    {
+        var plans = await master.Plans.AsNoTracking().Include(x => x.Prices).Where(x => x.IsActive && x.TrialDays == 0).ToListAsync(ct);
+        return Ok(new
+        {
+            rules = await rules.GetAsync(ct),
+            // Plans an ended trial can move to: active and free.
+            fallbackPlans = plans.Where(p => SaasRules.TrialFallback([p], p.Code) is not null).Select(p => new { p.Code, p.Name }),
+        });
+    }
+
+    [HttpPut("rules")]
+    public async Task<IActionResult> SaveRules([FromServices] PlatformRulesService rules, PlatformRules input, CancellationToken ct)
+    {
+        if (await rules.SaveAsync(input, ct) is { } problem) throw new DomainValidationException(problem);
+        return Ok(await rules.GetAsync(ct));
+    }
+
     [HttpGet("billing/settings")]
     public IActionResult Settings() => Ok(new
     {
