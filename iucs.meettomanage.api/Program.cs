@@ -193,6 +193,10 @@ builder.Services.AddTenantWorker<PaymentPlanReminderBackgroundService>(tenantMod
 // Catches a completed class that never received a recording — auto-record can start
 // with no error yet still fail later in the pipeline, which nothing else catches
 builder.Services.AddTenantWorker<RecordingReconciliationBackgroundService>(tenantMode);
+// Cold outreach e-mail for the marketing console (only the marketing tenant has campaigns).
+builder.Services.AddScoped<iucs.meettomanage.api.Marketing.OutreachService>();
+builder.Services.AddHttpClient(nameof(iucs.meettomanage.api.Marketing.OutreachService), client => client.Timeout = TimeSpan.FromSeconds(20));
+builder.Services.AddTenantWorker<iucs.meettomanage.api.Marketing.OutreachBackgroundService>(tenantMode);
 // CRM integration: lead webhooks, no-op until Integrations:CrmWebhookUrl is set
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ICrmNotifier, WebhookCrmNotifier>();
