@@ -135,7 +135,7 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     public async Task<IActionResult> AddProspect(ProspectInput input, CancellationToken ct)
     {
         var result = await ImportAsync([input], null, ct);
-        if (result.Added == 0) throw new DomainValidationException(result.Skipped.FirstOrDefault()?.Reason ?? "The prospect could not be added.");
+        if (result.Added + result.Restored == 0) throw new DomainValidationException(result.Skipped.FirstOrDefault()?.Reason ?? "The prospect could not be added.");
         return Ok(result);
     }
 
@@ -143,17 +143,18 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     public async Task<IActionResult> Import(ProspectImport input, CancellationToken ct) => Ok(await ImportAsync(input.Rows, input.Source, ct));
 
     public sealed record Skip(string Email, string Reason);
-    public sealed record ImportResult(int Added, List<Skip> Skipped);
+    public sealed record ImportResult(int Added, int Restored, List<Skip> Skipped);
 
     private async Task<ImportResult> ImportAsync(IReadOnlyList<ProspectInput> rows, string? source, CancellationToken ct)
     {
         var skipped = new List<Skip>();
         var emails = rows.Select(r => r.Email?.Trim().ToLowerInvariant() ?? "").ToList();
         // Including removed rows: an address that once unsubscribed must never come back in.
-        var existing = (await db.OutreachProspects.IgnoreQueryFilters().AsNoTracking().Where(x => emails.Contains(x.Email)).Select(x => new { x.Email, x.Status, x.IsDeleted }).ToListAsync(ct))
+        var existing = (await db.OutreachProspects.IgnoreQueryFilters().Where(x => emails.Contains(x.Email)).ToListAsync(ct))
             .ToDictionary(x => x.Email);
         var seen = new HashSet<string>();
         var added = 0;
+        var restored = 0;
         foreach (var row in rows)
         {
             var email = row.Email?.Trim().ToLowerInvariant() ?? "";
@@ -161,7 +162,12 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
             if (!seen.Add(email)) { skipped.Add(new(email, "Listed twice in this import")); continue; }
             if (existing.TryGetValue(email, out var known))
             {
-                skipped.Add(new(email, known.Status == OutreachProspectStatus.Unsubscribed ? "Unsubscribed earlier: will not be e-mailed again" : known.IsDeleted ? "Removed earlier" : "Already a prospect"));
+                if (known.Status == OutreachProspectStatus.Unsubscribed) { skipped.Add(new(email, "Unsubscribed earlier: will not be e-mailed again")); continue; }
+                if (!known.IsDeleted) { skipped.Add(new(email, "Already a prospect")); continue; }
+                known.IsDeleted = false; known.DeletedAtUtc = null; known.Status = OutreachProspectStatus.New; known.PipelineStage = OutreachPipelineStage.New;
+                known.FirstName = Clean(row.FirstName, 120); known.AcademyName = Clean(row.AcademyName, 200); known.City = Clean(row.City, 120); known.Region = Clean(row.Region, 120);
+                known.Phone = Clean(row.Phone, 40); known.Source = Clean(row.Source, 120) ?? Clean(source, 120); known.Notes = Clean(row.Notes, 1000); known.LeadScore = Score(row); known.ScoreReason = ScoreReason(row);
+                restored++;
                 continue;
             }
             db.OutreachProspects.Add(new OutreachProspect
@@ -172,7 +178,7 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
             added++;
         }
         await db.SaveChangesAsync(ct);
-        return new ImportResult(added, skipped);
+        return new ImportResult(added, restored, skipped);
     }
 
     private static string? Clean(string? value, int max) => string.IsNullOrWhiteSpace(value) ? null : value.Trim()[..Math.Min(value.Trim().Length, max)];
