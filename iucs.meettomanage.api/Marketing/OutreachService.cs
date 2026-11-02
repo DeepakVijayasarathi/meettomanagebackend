@@ -238,7 +238,9 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
         if (error is null)
         {
             recipient.Prospect.Status = OutreachProspectStatus.Contacted;
+            recipient.Prospect.PipelineStage = OutreachPipelineStage.Contacted;
             recipient.Prospect.LastContactedAtUtc = nowUtc;
+            db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = recipient.ProspectId, Type = OutreachActivityType.EmailSent, Subject = Render(step.Subject, recipient.Prospect), Detail = $"Campaign step {step.Order} sent." });
             var next = steps.FirstOrDefault(s => s.Order > step.Order);
             if (next is null) recipient.Status = OutreachRecipientStatus.Completed;
             else { recipient.NextStep = next.Order; recipient.NextSendAtUtc = nowUtc.AddDays(Math.Max(settings.MinFollowUpDays, next.DelayDays)); }

@@ -358,6 +358,46 @@ namespace iucs.meettomanage.api.Services
             return fallback;
         }
 
+        public async Task<OutreachAiInsightsDto> AnalyzeOutreachAsync(object evidence, CancellationToken cancellationToken = default)
+        {
+            var fallback = new OutreachAiInsightsDto
+            {
+                Summary = "Regional outreach data is ready for review.",
+                Observations = ["Compare reply and interest rates only after each region has received enough outreach.", "Prioritize complete, verified contacts before increasing send volume."],
+                NextActions = ["Start with the region that has the most qualified new prospects.", "Use a region-specific subject line and customer example.", "Review bounced contacts before the next campaign."],
+                AiPowered = false, GeneratedAtUtc = DateTime.UtcNow
+            };
+            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            var messages = new JsonArray
+            {
+                new JsonObject { ["role"] = "system", ["content"] =
+                    "You are a B2B outreach analyst for Meet to Manage, an academy-management SaaS. Analyze only the supplied aggregate regional prospect counts. " +
+                    "Never invent revenue, intent, demographics, or conversion causes. Small samples require caution. Return strict JSON with summary, observations (2-4), and nextActions (3-5). No markdown." },
+                new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(evidence) }
+            };
+            try
+            {
+                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
+                {
+                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.2, ["max_tokens"] = 900, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
+                    var (status, body) = await SendAsync(model, payload, cancellationToken);
+                    if (status != 200) continue;
+                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
+                    var parsed = string.IsNullOrWhiteSpace(content) ? null : JsonNode.Parse(content) as JsonObject;
+                    var summary = parsed?["summary"]?.GetValue<string>()?.Trim();
+                    var observations = ReadStringArray(parsed?["observations"]);
+                    var actions = ReadStringArray(parsed?["nextActions"] ?? parsed?["next_actions"]);
+                    if (!string.IsNullOrWhiteSpace(summary) && observations.Count > 0 && actions.Count > 0)
+                        return new OutreachAiInsightsDto { Summary = summary[..Math.Min(summary.Length, 800)], Observations = observations.Take(4).ToList(), NextActions = actions.Take(5).ToList(), AiPowered = true, GeneratedAtUtc = DateTime.UtcNow };
+                }
+            }
+            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException)
+            {
+                _logger.LogWarning(ex, "Hetzner outreach analysis unavailable; using measured-data fallback.");
+            }
+            return fallback;
+        }
+
         private static bool HasImpossibleVisitorClaim(MarketingAiInsightsDto insight, int authoritativeTotal)
         {
             var text = string.Join(" ", new[] { insight.Summary }.Concat(insight.Observations).Concat(insight.NextActions));

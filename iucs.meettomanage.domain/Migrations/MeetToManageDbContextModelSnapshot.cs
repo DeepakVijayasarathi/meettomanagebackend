@@ -3849,6 +3849,11 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("academy_name");
 
+                    b.Property<string>("AssignedTo")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("assigned_to");
+
                     b.Property<string>("City")
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)")
@@ -3881,6 +3886,14 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("last_contacted_at_utc");
 
+                    b.Property<int>("LeadScore")
+                        .HasColumnType("integer")
+                        .HasColumnName("lead_score");
+
+                    b.Property<DateTime?>("NextActionAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_action_at_utc");
+
                     b.Property<string>("Notes")
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)")
@@ -3890,6 +3903,22 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)")
                         .HasColumnName("phone");
+
+                    b.Property<string>("PipelineStage")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("pipeline_stage");
+
+                    b.Property<string>("Region")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("region");
+
+                    b.Property<string>("ScoreReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("score_reason");
 
                     b.Property<string>("Source")
                         .HasMaxLength(120)
@@ -3931,6 +3960,68 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasFilter("\"is_deleted\" = FALSE");
 
                     b.ToTable("outreach_prospects");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.OutreachProspectActivity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<string>("CreatedBy")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<string>("Detail")
+                        .HasMaxLength(10000)
+                        .HasColumnType("character varying(10000)")
+                        .HasColumnName("detail");
+
+                    b.Property<string>("ExternalId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("external_id");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid>("ProspectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("prospect_id");
+
+                    b.Property<string>("Subject")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("subject");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("type");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_outreach_prospect_activities");
+
+                    b.HasIndex("ProspectId", "CreatedAtUtc")
+                        .HasDatabaseName("ix_outreach_prospect_activities_prospect_id_created_at_utc");
+
+                    b.ToTable("outreach_prospect_activities");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.OutreachSend", b =>
@@ -4003,6 +4094,61 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasDatabaseName("ix_outreach_sends_sent_at_utc");
 
                     b.ToTable("outreach_sends");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.OutreachTask", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AssignedTo")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("assigned_to");
+
+                    b.Property<DateTime?>("CompletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at_utc");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<DateTime>("DueAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("due_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid>("ProspectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("prospect_id");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("title");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_outreach_tasks");
+
+                    b.HasIndex("ProspectId", "DueAtUtc")
+                        .HasDatabaseName("ix_outreach_tasks_prospect_id_due_at_utc");
+
+                    b.ToTable("outreach_tasks");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.PlatformDemoRequest", b =>
@@ -7507,6 +7653,30 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasConstraintName("fk_outreach_campaign_steps_outreach_campaigns_campaign_id");
 
                     b.Navigation("Campaign");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.OutreachProspectActivity", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Marketing.OutreachProspect", "Prospect")
+                        .WithMany()
+                        .HasForeignKey("ProspectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_outreach_prospect_activities_outreach_prospects_prospect_id");
+
+                    b.Navigation("Prospect");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.OutreachTask", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Marketing.OutreachProspect", "Prospect")
+                        .WithMany()
+                        .HasForeignKey("ProspectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_outreach_tasks_outreach_prospects_prospect_id");
+
+                    b.Navigation("Prospect");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Notes.FloatingNote", b =>

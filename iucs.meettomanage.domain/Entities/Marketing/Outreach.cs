@@ -34,6 +34,9 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         Stopped,
     }
 
+    public enum OutreachPipelineStage { New, Qualified, Contacted, Replied, DemoBooked, Trial, Negotiation, Won, Lost }
+    public enum OutreachActivityType { Imported, Note, EmailSent, ReplyReceived, StatusChanged, TaskCreated, TaskCompleted, AiQualified }
+
     /// <summary>
     /// A person the marketing team may e-mail about the platform (an academy owner, typically). One row per e-mail
     /// address; an unsubscribe is permanent and is honoured by every campaign.
@@ -47,10 +50,16 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         [MaxLength(120)] public string? FirstName { get; set; }
         [MaxLength(200)] public string? AcademyName { get; set; }
         [MaxLength(120)] public string? City { get; set; }
+        [MaxLength(120)] public string? Region { get; set; }
         [MaxLength(40)] public string? Phone { get; set; }
         /// <summary>Where the contact came from (e.g. "Justdial", "event", "referral"), kept for consent questions.</summary>
         [MaxLength(120)] public string? Source { get; set; }
         [MaxLength(1000)] public string? Notes { get; set; }
+        public int LeadScore { get; set; }
+        [MaxLength(500)] public string? ScoreReason { get; set; }
+        public OutreachPipelineStage PipelineStage { get; set; } = OutreachPipelineStage.New;
+        [MaxLength(120)] public string? AssignedTo { get; set; }
+        public DateTime? NextActionAtUtc { get; set; }
         public OutreachProspectStatus Status { get; set; } = OutreachProspectStatus.New;
         /// <summary>Unguessable id in the unsubscribe link.</summary>
         public Guid UnsubscribeToken { get; set; } = Guid.NewGuid();
@@ -107,5 +116,28 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         public DateTime SentAtUtc { get; set; } = DateTime.UtcNow;
         public bool Succeeded { get; set; }
         [MaxLength(500)] public string? Error { get; set; }
+    }
+
+    [Index(nameof(ProspectId), nameof(CreatedAtUtc))]
+    public class OutreachProspectActivity : BaseEntity
+    {
+        public Guid ProspectId { get; set; }
+        public OutreachProspect Prospect { get; set; } = null!;
+        public OutreachActivityType Type { get; set; }
+        [MaxLength(200)] public string? Subject { get; set; }
+        [MaxLength(10000)] public string? Detail { get; set; }
+        [MaxLength(120)] public string? CreatedBy { get; set; }
+        [MaxLength(200)] public string? ExternalId { get; set; }
+    }
+
+    [Index(nameof(ProspectId), nameof(DueAtUtc))]
+    public class OutreachTask : BaseEntity
+    {
+        public Guid ProspectId { get; set; }
+        public OutreachProspect Prospect { get; set; } = null!;
+        [MaxLength(200)] public string Title { get; set; } = null!;
+        [MaxLength(120)] public string? AssignedTo { get; set; }
+        public DateTime DueAtUtc { get; set; }
+        public DateTime? CompletedAtUtc { get; set; }
     }
 }

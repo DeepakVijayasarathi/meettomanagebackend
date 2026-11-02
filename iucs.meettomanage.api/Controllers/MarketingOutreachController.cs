@@ -4,6 +4,7 @@ using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.domain.Data;
 using iucs.meettomanage.domain.Entities.Marketing;
 using iucs.meettomanage.domain.Enums;
+using iucs.meettomanage.application.Common.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -17,6 +18,7 @@ public sealed class ProspectInput
     [MaxLength(120)] public string? FirstName { get; set; }
     [MaxLength(200)] public string? AcademyName { get; set; }
     [MaxLength(120)] public string? City { get; set; }
+    [MaxLength(120)] public string? Region { get; set; }
     [MaxLength(40)] public string? Phone { get; set; }
     [MaxLength(120)] public string? Source { get; set; }
     [MaxLength(1000)] public string? Notes { get; set; }
@@ -25,14 +27,26 @@ public sealed class ProspectInput
 public sealed class ProspectUpdate
 {
     public OutreachProspectStatus? Status { get; set; }
+    public OutreachPipelineStage? PipelineStage { get; set; }
     [MaxLength(1000)] public string? Notes { get; set; }
+    [MaxLength(120)] public string? AssignedTo { get; set; }
+    public DateTime? NextActionAtUtc { get; set; }
 }
+
+public sealed class ProspectNoteInput { [Required, MaxLength(10000)] public string Detail { get; set; } = ""; }
+public sealed class ProspectTaskInput { [Required, MaxLength(200)] public string Title { get; set; } = ""; [MaxLength(120)] public string? AssignedTo { get; set; } public DateTime DueAtUtc { get; set; } }
+public sealed class InboundReplyInput { [Required, MaxLength(256)] public string From { get; set; } = ""; [MaxLength(200)] public string? Subject { get; set; } [Required, MaxLength(10000)] public string Text { get; set; } = ""; [MaxLength(200)] public string? ExternalId { get; set; } }
 
 public sealed class ProspectImport
 {
     [Required, MaxLength(5000)] public List<ProspectInput> Rows { get; set; } = [];
     /// <summary>Applied to rows without their own source.</summary>
     [MaxLength(120)] public string? Source { get; set; }
+}
+
+public sealed class BulkProspectInput
+{
+    [Required, MinLength(1), MaxLength(500)] public List<Guid> ProspectIds { get; set; } = [];
 }
 
 public sealed class StepInput
@@ -52,11 +66,14 @@ public sealed class EnrollInput
 {
     /// <summary>Specific prospects; when empty, every contactable prospect with status New who isn't in this campaign yet.</summary>
     public List<Guid> ProspectIds { get; set; } = [];
+    [MaxLength(120)] public string? Region { get; set; }
+    [Range(0, 100)] public int? MinScore { get; set; }
+    public List<OutreachPipelineStage> Stages { get; set; } = [];
 }
 
 /// <summary>Cold e-mail outreach for the marketing console: prospects, campaigns, sending status and unsubscribe.</summary>
 [ApiController, Route("api/marketing/outreach")]
-public sealed class MarketingOutreachController(MeetToManageDbContext db, OutreachService outreach) : ControllerBase
+public sealed class MarketingOutreachController(MeetToManageDbContext db, OutreachService outreach, ISalesAssistant salesAssistant, IConfiguration configuration) : ControllerBase
 {
     // ---------------------------------------------------------------- status
 
@@ -94,20 +111,22 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     // ---------------------------------------------------------------- prospects
 
     [HttpGet("prospects"), Authorize(Roles = nameof(UserRole.Marketing))]
-    public async Task<IActionResult> Prospects([FromQuery] OutreachProspectStatus? status, [FromQuery] string? search, [FromQuery] int page = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
+    public async Task<IActionResult> Prospects([FromQuery] OutreachProspectStatus? status, [FromQuery] string? search, [FromQuery] string? region, [FromQuery] int page = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
     {
         page = Math.Max(1, page); pageSize = Math.Clamp(pageSize, 10, 200);
         var query = db.OutreachProspects.AsNoTracking();
         if (status is { } s) query = query.Where(x => x.Status == s);
+        if (!string.IsNullOrWhiteSpace(region)) query = query.Where(x => x.Region == region.Trim());
         if (!string.IsNullOrWhiteSpace(search))
         {
             var term = search.Trim().ToLower();
             query = query.Where(x => x.Email.ToLower().Contains(term) || (x.FirstName != null && x.FirstName.ToLower().Contains(term))
-                || (x.AcademyName != null && x.AcademyName.ToLower().Contains(term)) || (x.City != null && x.City.ToLower().Contains(term)));
+                || (x.AcademyName != null && x.AcademyName.ToLower().Contains(term)) || (x.City != null && x.City.ToLower().Contains(term))
+                || (x.Region != null && x.Region.ToLower().Contains(term)));
         }
         var total = await query.CountAsync(ct);
         var items = await query.OrderByDescending(x => x.CreatedAtUtc).Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(x => new { x.Id, x.Email, x.FirstName, x.AcademyName, x.City, x.Phone, x.Source, x.Notes, status = x.Status.ToString(), x.LastContactedAtUtc, x.CreatedAtUtc })
+            .Select(x => new { x.Id, x.Email, x.FirstName, x.AcademyName, x.City, x.Region, x.Phone, x.Source, x.Notes, x.LeadScore, x.ScoreReason, pipelineStage = x.PipelineStage.ToString(), x.AssignedTo, x.NextActionAtUtc, status = x.Status.ToString(), x.LastContactedAtUtc, x.CreatedAtUtc })
             .ToListAsync(ct);
         return Ok(new { total, page, pageSize, items });
     }
@@ -147,8 +166,8 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
             }
             db.OutreachProspects.Add(new OutreachProspect
             {
-                Email = email, FirstName = Clean(row.FirstName, 120), AcademyName = Clean(row.AcademyName, 200), City = Clean(row.City, 120),
-                Phone = Clean(row.Phone, 40), Source = Clean(row.Source, 120) ?? Clean(source, 120), Notes = Clean(row.Notes, 1000),
+                Email = email, FirstName = Clean(row.FirstName, 120), AcademyName = Clean(row.AcademyName, 200), City = Clean(row.City, 120), Region = Clean(row.Region, 120),
+                Phone = Clean(row.Phone, 40), Source = Clean(row.Source, 120) ?? Clean(source, 120), Notes = Clean(row.Notes, 1000), LeadScore = Score(row), ScoreReason = ScoreReason(row),
             });
             added++;
         }
@@ -157,6 +176,45 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     }
 
     private static string? Clean(string? value, int max) => string.IsNullOrWhiteSpace(value) ? null : value.Trim()[..Math.Min(value.Trim().Length, max)];
+    private static int Score(ProspectInput row) => Math.Min(100, 20 + (!string.IsNullOrWhiteSpace(row.AcademyName) ? 20 : 0) + (!string.IsNullOrWhiteSpace(row.Phone) ? 10 : 0) + (!string.IsNullOrWhiteSpace(row.Region) ? 10 : 0) + (!string.IsNullOrWhiteSpace(row.Source) ? 10 : 0) + ((row.Notes?.Contains("online", StringComparison.OrdinalIgnoreCase) ?? false) ? 15 : 0) + ((row.Notes?.Contains("multiple", StringComparison.OrdinalIgnoreCase) ?? false) ? 15 : 0));
+    private static string ScoreReason(ProspectInput row) => string.Join(", ", new[] { !string.IsNullOrWhiteSpace(row.AcademyName) ? "academy identified" : null, !string.IsNullOrWhiteSpace(row.Phone) ? "phone available" : null, !string.IsNullOrWhiteSpace(row.Region) ? "region assigned" : null, row.Notes?.Contains("online", StringComparison.OrdinalIgnoreCase) == true ? "online classes" : null, row.Notes?.Contains("multiple", StringComparison.OrdinalIgnoreCase) == true ? "multi-location potential" : null }.Where(x => x != null));
+
+    [HttpGet("regions"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> Regions(CancellationToken ct) => Ok(await db.OutreachProspects.AsNoTracking()
+        .Where(x => x.Region != null && x.Region != "").GroupBy(x => x.Region!).Select(g => new { region = g.Key, count = g.Count() })
+        .OrderByDescending(x => x.count).ThenBy(x => x.region).ToListAsync(ct));
+
+    [HttpGet("analytics"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> Analytics(CancellationToken ct)
+    {
+        var rows = await db.OutreachProspects.AsNoTracking().GroupBy(x => x.Region ?? "Unassigned").Select(g => new
+        {
+            region = g.Key, total = g.Count(), newCount = g.Count(x => x.Status == OutreachProspectStatus.New),
+            contacted = g.Count(x => x.Status == OutreachProspectStatus.Contacted), replied = g.Count(x => x.Status == OutreachProspectStatus.Replied),
+            interested = g.Count(x => x.Status == OutreachProspectStatus.Interested), bounced = g.Count(x => x.Status == OutreachProspectStatus.Bounced)
+        }).OrderByDescending(x => x.total).ToListAsync(ct);
+        var totals = new { total = rows.Sum(x => x.total), contacted = rows.Sum(x => x.contacted), replied = rows.Sum(x => x.replied), interested = rows.Sum(x => x.interested), bounced = rows.Sum(x => x.bounced) };
+        var pipeline = await db.OutreachProspects.AsNoTracking().GroupBy(x => x.PipelineStage).Select(g => new { stage = g.Key.ToString(), count = g.Count() }).OrderByDescending(x => x.count).ToListAsync(ct);
+        var overdueTasks = await db.OutreachTasks.AsNoTracking().Where(x => x.CompletedAtUtc == null && x.DueAtUtc <= DateTime.UtcNow).OrderBy(x => x.DueAtUtc).Take(20).Select(x => new { x.Id, x.ProspectId, x.Title, x.AssignedTo, x.DueAtUtc, x.Prospect.Email, x.Prospect.AcademyName, x.Prospect.Region }).ToListAsync(ct);
+        var recentReplies = await db.OutreachProspects.AsNoTracking()
+            .Where(x => x.Status == OutreachProspectStatus.Replied || x.Status == OutreachProspectStatus.Interested)
+            .OrderByDescending(x => x.UpdatedAtUtc ?? x.LastContactedAtUtc ?? x.CreatedAtUtc).Take(20)
+            .Select(x => new { x.Id, x.Email, x.FirstName, x.AcademyName, x.City, x.Region, status = x.Status.ToString(), x.LastContactedAtUtc, repliedAtUtc = x.UpdatedAtUtc ?? x.LastContactedAtUtc ?? x.CreatedAtUtc })
+            .ToListAsync(ct);
+        return Ok(new { totals, regions = rows, pipeline, overdueTasks, recentReplies });
+    }
+
+    [HttpGet("analytics/insights"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> AnalyticsInsights(CancellationToken ct)
+    {
+        var evidence = await db.OutreachProspects.AsNoTracking().GroupBy(x => x.Region ?? "Unassigned").Select(g => new
+        {
+            region = g.Key, prospects = g.Count(), contacted = g.Count(x => x.Status == OutreachProspectStatus.Contacted),
+            replied = g.Count(x => x.Status == OutreachProspectStatus.Replied), interested = g.Count(x => x.Status == OutreachProspectStatus.Interested),
+            bounced = g.Count(x => x.Status == OutreachProspectStatus.Bounced)
+        }).OrderByDescending(x => x.prospects).ToListAsync(ct);
+        return Ok(await salesAssistant.AnalyzeOutreachAsync(evidence, ct));
+    }
 
     [HttpPut("prospects/{id:guid}"), Authorize(Roles = nameof(UserRole.Marketing))]
     public async Task<IActionResult> UpdateProspect(Guid id, ProspectUpdate input, CancellationToken ct)
@@ -168,11 +226,76 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
             if (p.Status == OutreachProspectStatus.Unsubscribed && status != OutreachProspectStatus.Unsubscribed)
                 throw new DomainValidationException("This person unsubscribed and can't be e-mailed again.");
             p.Status = status;
+            p.PipelineStage = status switch { OutreachProspectStatus.Replied => OutreachPipelineStage.Replied, OutreachProspectStatus.Interested => OutreachPipelineStage.Qualified, OutreachProspectStatus.NotInterested => OutreachPipelineStage.Lost, OutreachProspectStatus.Contacted => OutreachPipelineStage.Contacted, _ => p.PipelineStage };
             if (status == OutreachProspectStatus.Unsubscribed) p.UnsubscribedAtUtc ??= DateTime.UtcNow;
+            db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = p.Id, Type = OutreachActivityType.StatusChanged, Detail = $"Status changed to {status}.", CreatedBy = User.Identity?.Name });
         }
         if (input.Notes is not null) p.Notes = Clean(input.Notes, 1000);
+        if (input.PipelineStage is { } stage) p.PipelineStage = stage;
+        if (input.AssignedTo is not null) p.AssignedTo = Clean(input.AssignedTo, 120);
+        if (input.NextActionAtUtc is not null) p.NextActionAtUtc = input.NextActionAtUtc;
         await db.SaveChangesAsync(ct);
         return NoContent();
+    }
+
+    [HttpGet("prospects/{id:guid}"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> ProspectDetail(Guid id, CancellationToken ct)
+    {
+        var p = await db.OutreachProspects.AsNoTracking().Where(x => x.Id == id).Select(x => new { x.Id, x.Email, x.FirstName, x.AcademyName, x.City, x.Region, x.Phone, x.Source, x.Notes, x.LeadScore, x.ScoreReason, status = x.Status.ToString(), pipelineStage = x.PipelineStage.ToString(), x.AssignedTo, x.NextActionAtUtc, x.LastContactedAtUtc, x.CreatedAtUtc }).FirstOrDefaultAsync(ct) ?? throw new NotFoundException("Prospect", id);
+        var activities = await db.OutreachProspectActivities.AsNoTracking().Where(x => x.ProspectId == id).OrderByDescending(x => x.CreatedAtUtc).Select(x => new { x.Id, type = x.Type.ToString(), x.Subject, x.Detail, x.CreatedBy, x.CreatedAtUtc }).ToListAsync(ct);
+        var tasks = await db.OutreachTasks.AsNoTracking().Where(x => x.ProspectId == id).OrderBy(x => x.CompletedAtUtc != null).ThenBy(x => x.DueAtUtc).Select(x => new { x.Id, x.Title, x.AssignedTo, x.DueAtUtc, x.CompletedAtUtc }).ToListAsync(ct);
+        return Ok(new { prospect = p, activities, tasks });
+    }
+
+    [HttpPost("prospects/{id:guid}/notes"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> AddNote(Guid id, ProspectNoteInput input, CancellationToken ct)
+    {
+        if (!await db.OutreachProspects.AnyAsync(x => x.Id == id, ct)) throw new NotFoundException("Prospect", id);
+        db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = id, Type = OutreachActivityType.Note, Detail = Clean(input.Detail, 10000), CreatedBy = User.Identity?.Name });
+        await db.SaveChangesAsync(ct); return Ok();
+    }
+
+    [HttpPost("prospects/{id:guid}/tasks"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> AddTask(Guid id, ProspectTaskInput input, CancellationToken ct)
+    {
+        var p = await db.OutreachProspects.FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Prospect", id);
+        db.OutreachTasks.Add(new OutreachTask { ProspectId = id, Title = input.Title.Trim(), AssignedTo = Clean(input.AssignedTo, 120), DueAtUtc = input.DueAtUtc });
+        p.NextActionAtUtc = p.NextActionAtUtc is null || input.DueAtUtc < p.NextActionAtUtc ? input.DueAtUtc : p.NextActionAtUtc;
+        await db.SaveChangesAsync(ct); return Ok();
+    }
+
+    [HttpPost("tasks/{id:guid}/complete"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> CompleteTask(Guid id, CancellationToken ct)
+    {
+        var task = await db.OutreachTasks.FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Outreach task", id);
+        task.CompletedAtUtc ??= DateTime.UtcNow; await db.SaveChangesAsync(ct); return Ok();
+    }
+
+    [HttpPost("prospects/{id:guid}/rescore"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> Rescore(Guid id, CancellationToken ct)
+    {
+        var p = await db.OutreachProspects.FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Prospect", id);
+        var input = new ProspectInput { Email = p.Email, AcademyName = p.AcademyName, Phone = p.Phone, Region = p.Region, Source = p.Source, Notes = p.Notes };
+        p.LeadScore = Score(input); p.ScoreReason = ScoreReason(input);
+        var qualification = await salesAssistant.AnalyzeOutreachAsync(new { prospect = new { p.AcademyName, p.City, p.Region, p.Source, p.Notes, p.LeadScore, profileSignals = p.ScoreReason } }, ct);
+        p.ScoreReason = qualification.Summary;
+        db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = id, Type = OutreachActivityType.AiQualified, Detail = $"Lead score {p.LeadScore}. {qualification.Summary}\nNext: {string.Join(" ", qualification.NextActions)}", CreatedBy = User.Identity?.Name });
+        await db.SaveChangesAsync(ct); return Ok(new { p.LeadScore, p.ScoreReason, qualification.AiPowered });
+    }
+
+    [HttpPost("inbound/reply"), AllowAnonymous]
+    public async Task<IActionResult> InboundReply(InboundReplyInput input, CancellationToken ct)
+    {
+        var secret = configuration["Outreach:InboundWebhookSecret"];
+        if (string.IsNullOrWhiteSpace(secret) || Request.Headers["X-Outreach-Webhook-Secret"] != secret) return Unauthorized();
+        var email = input.From.Trim().ToLowerInvariant();
+        var p = await db.OutreachProspects.FirstOrDefaultAsync(x => x.Email == email, ct);
+        if (p is null) return Ok(new { matched = false });
+        if (!string.IsNullOrWhiteSpace(input.ExternalId) && await db.OutreachProspectActivities.AnyAsync(x => x.ExternalId == input.ExternalId, ct)) return Ok(new { matched = true, duplicate = true });
+        p.Status = OutreachProspectStatus.Replied; p.PipelineStage = OutreachPipelineStage.Replied; p.NextActionAtUtc = DateTime.UtcNow.AddHours(24);
+        db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = p.Id, Type = OutreachActivityType.ReplyReceived, Subject = Clean(input.Subject, 200), Detail = Clean(input.Text, 10000), ExternalId = Clean(input.ExternalId, 200), CreatedBy = "Inbound email" });
+        await db.OutreachCampaignRecipients.Where(r => r.ProspectId == p.Id && r.Status == OutreachRecipientStatus.Scheduled).ExecuteUpdateAsync(u => u.SetProperty(r => r.Status, OutreachRecipientStatus.Stopped), ct);
+        await db.SaveChangesAsync(ct); return Ok(new { matched = true, prospectId = p.Id });
     }
 
     [HttpDelete("prospects/{id:guid}"), Authorize(Roles = nameof(UserRole.Marketing))]
@@ -184,6 +307,18 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
             .ExecuteUpdateAsync(u => u.SetProperty(r => r.Status, OutreachRecipientStatus.Stopped), ct);
         await db.SaveChangesAsync(ct);
         return NoContent();
+    }
+
+    [HttpPost("prospects/bulk-delete"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> BulkDelete(BulkProspectInput input, CancellationToken ct)
+    {
+        var ids = input.ProspectIds.Distinct().ToList();
+        var prospects = await db.OutreachProspects.Where(x => ids.Contains(x.Id)).ToListAsync(ct);
+        db.OutreachProspects.RemoveRange(prospects);
+        await db.OutreachCampaignRecipients.Where(r => ids.Contains(r.ProspectId) && r.Status == OutreachRecipientStatus.Scheduled)
+            .ExecuteUpdateAsync(u => u.SetProperty(r => r.Status, OutreachRecipientStatus.Stopped), ct);
+        await db.SaveChangesAsync(ct);
+        return Ok(new { deleted = prospects.Count });
     }
 
     // ---------------------------------------------------------------- campaigns
@@ -254,12 +389,29 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         query = input.ProspectIds.Count > 0
             ? query.Where(p => input.ProspectIds.Contains(p.Id) && (p.Status == OutreachProspectStatus.New || p.Status == OutreachProspectStatus.Contacted))
             : query.Where(p => p.Status == OutreachProspectStatus.New);
+        if (!string.IsNullOrWhiteSpace(input.Region)) query = query.Where(p => p.Region == input.Region.Trim());
+        if (input.MinScore is { } minScore) query = query.Where(p => p.LeadScore >= minScore);
+        if (input.Stages.Count > 0) query = query.Where(p => input.Stages.Contains(p.PipelineStage));
         var ids = await query.Select(p => p.Id).ToListAsync(ct);
         var now = DateTime.UtcNow;
         foreach (var prospectId in ids)
             db.OutreachCampaignRecipients.Add(new OutreachCampaignRecipient { CampaignId = id, ProspectId = prospectId, NextStep = 1, NextSendAtUtc = now });
         await db.SaveChangesAsync(ct);
         return Ok(new { enrolled = ids.Count });
+    }
+
+    [HttpPost("campaigns/{id:guid}/preview"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> PreviewRecipients(Guid id, EnrollInput input, CancellationToken ct)
+    {
+        if (!await db.OutreachCampaigns.AnyAsync(c => c.Id == id, ct)) throw new NotFoundException("Campaign", id);
+        var already = db.OutreachCampaignRecipients.Where(r => r.CampaignId == id).Select(r => r.ProspectId);
+        var query = db.OutreachProspects.AsNoTracking().Where(p => !already.Contains(p.Id) && p.Status == OutreachProspectStatus.New);
+        if (!string.IsNullOrWhiteSpace(input.Region)) query = query.Where(p => p.Region == input.Region.Trim());
+        if (input.MinScore is { } minScore) query = query.Where(p => p.LeadScore >= minScore);
+        if (input.Stages.Count > 0) query = query.Where(p => input.Stages.Contains(p.PipelineStage));
+        var count = await query.CountAsync(ct);
+        var sample = await query.OrderByDescending(p => p.LeadScore).Take(10).Select(p => new { p.Id, p.Email, p.AcademyName, p.Region, p.LeadScore }).ToListAsync(ct);
+        return Ok(new { count, sample });
     }
 
     public sealed record StatusInput(OutreachCampaignStatus Status);
