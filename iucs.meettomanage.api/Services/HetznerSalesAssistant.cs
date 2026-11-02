@@ -495,7 +495,10 @@ namespace iucs.meettomanage.api.Services
         public async Task<MarketingSiteImprovementsDto> SuggestSiteImprovementsAsync(MarketingSiteBehaviourDto behaviour, CancellationToken cancellationToken = default)
         {
             var fallback = BuildImprovementsFallback(behaviour);
-            if (string.IsNullOrWhiteSpace(_options.ApiKey) || behaviour.Visitors == 0) return fallback;
+            // With a tiny sample, an LLM tends to turn random visits into confident causal stories.
+            // Keep the result factual until there is enough traffic to compare behaviour at all.
+            if (behaviour.Visitors < 20) return BuildInsufficientDataImprovements(behaviour);
+            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
             var input = JsonSerializer.Serialize(new
             {
                 site = "meettomanage.cloud — marketing site for Meet to Manage, academy-management SaaS for Indian academies and coaching/tuition centres. Goal: visitors book a free platform demo at /get-started (or via the AI chat). /pricing is the main buying page; /blog posts and /solutions pages educate; /customers has case studies.",
@@ -507,7 +510,10 @@ namespace iucs.meettomanage.api.Services
                     "You are a conversion-rate expert reviewing a B2B SaaS marketing site. From the aggregate behaviour only, explain how visitors behave and what to improve. " +
                     "Use the funnel (where most visitors drop out), page exit rates (ExitRate = % of views that ended the visit), time on page (AvgSeconds) and single-page visits. " +
                     "Each improvement must name one page, the problem seen in the numbers, and one concrete fix (copy, layout, call-to-action, link, speed, mobile, content). Rank by impact on demo bookings. " +
-                    "Never invent numbers; quote the ones given. Mention when a sample is too small to be sure. " +
+                    "Never invent numbers or causes; quote the numbers given. AvgSeconds=null means timing was unavailable, NOT that the visitor left instantly. " +
+                    "Exit on legal/policy pages is normally expected and must not be ranked as a conversion problem. Direct traffic does not prove brand awareness or testing. " +
+                    "Do not claim slow speed, unclear copy, privacy concern, technical failure or user intent unless the supplied data directly measures it. Describe these only as hypotheses to test. " +
+                    "A page needs at least 5 views before its exit rate can justify a page-specific recommendation. Samples below 50 visitors are directional, never statistically reliable. " +
                     "Return strict JSON: {\"summary\":string,\"behaviour\":[2-4 short observations],\"improvements\":[{\"page\":string,\"problem\":string,\"fix\":string,\"impact\":\"High\"|\"Medium\"|\"Low\"}] (3-6 items)}. No markdown." },
                 new JsonObject { ["role"] = "user", ["content"] = input },
             };
@@ -555,6 +561,23 @@ namespace iucs.meettomanage.api.Services
             }
             return fallback;
         }
+
+        private static MarketingSiteImprovementsDto BuildInsufficientDataImprovements(MarketingSiteBehaviourDto b) => new()
+        {
+            Summary = $"Only {b.Visitors} visitor{(b.Visitors == 1 ? "" : "s")} and {b.BookedVisitors} demo booking{(b.BookedVisitors == 1 ? "" : "s")} are recorded. This is not enough evidence to rank page changes or infer why people left.",
+            Behaviour =
+            [
+                $"{b.Visits} visit{(b.Visits == 1 ? "" : "s")} and {b.SinglePageVisits} single-page visit{(b.SinglePageVisits == 1 ? "" : "s")} were measured.",
+                "Missing time-on-page values mean timing was unavailable; they do not mean an immediate exit.",
+                "Traffic-source and page-exit observations at this volume may reflect internal testing or random variation.",
+            ],
+            Improvements =
+            [
+                new() { Page = "Analytics", Problem = "The sample is below the 20-visitor minimum for a useful behavioural comparison.", Fix = "Collect more real traffic, exclude internal/test visits where possible, and analyse again after at least 20 visitors; prefer 50+ for directional decisions.", Impact = "Low" },
+                new() { Page = "/", Problem = "There is not enough evidence to diagnose copy, speed or navigation from this dataset.", Fix = "Verify page-view, CTA-click and form-start tracking, then use those events to identify an actual drop-off before changing the page.", Impact = "Low" },
+            ],
+            AiPowered = false,
+        };
 
         /// <summary>Rule-based checks over the same numbers the AI gets.</summary>
         private static MarketingSiteImprovementsDto BuildImprovementsFallback(MarketingSiteBehaviourDto b)
