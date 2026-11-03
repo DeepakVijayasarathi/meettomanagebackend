@@ -371,8 +371,10 @@ namespace iucs.meettomanage.api.Services
             var messages = new JsonArray
             {
                 new JsonObject { ["role"] = "system", ["content"] =
-                    "You are a B2B outreach analyst for Meet to Manage, an academy-management SaaS. Analyze only the supplied aggregate regional prospect counts. " +
-                    "Never invent revenue, intent, demographics, or conversion causes. Small samples require caution. Return strict JSON with summary, observations (2-4), and nextActions (3-5). No markdown." },
+                    "You are a B2B outreach analyst for Meet to Manage, an academy-management SaaS. Analyze only the supplied aggregate evidence (regions, sources, segments, pipeline, or campaign totals). " +
+                    "Never invent revenue, intent, demographics, or conversion causes. Never recommend contacting unsubscribed or bounced people. Small samples require caution. " +
+                    "When asked for a plan, prioritize positive replies, demos, complete qualified leads, deliverability, and measured source performance. Every send must remain human-reviewed. " +
+                    "Return strict JSON with summary, observations (2-4), and nextActions (3-5). No markdown." },
                 new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(evidence) }
             };
             try

@@ -292,6 +292,22 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         return Ok(new { queued = prospects.Count });
     }
 
+    [HttpGet("growth/ai-plan"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
+    public async Task<IActionResult> GrowthAiPlan(CancellationToken ct)
+    {
+        var prospects = await db.OutreachProspects.AsNoTracking().ToListAsync(ct);
+        var sources = prospects.GroupBy(x => x.Source ?? "Unknown").Select(g => new { source = g.Key, leads = g.Count(), contacted = g.Count(x => x.Status != OutreachProspectStatus.New), replies = g.Count(x => x.Status is OutreachProspectStatus.Replied or OutreachProspectStatus.Interested), demos = g.Count(x => x.PipelineStage is OutreachPipelineStage.DemoBooked or OutreachPipelineStage.Trial or OutreachPipelineStage.Negotiation or OutreachPipelineStage.Won), won = g.Count(x => x.PipelineStage == OutreachPipelineStage.Won) }).ToList();
+        var pipeline = prospects.GroupBy(x => x.PipelineStage).Select(g => new { stage = g.Key.ToString(), count = g.Count() }).ToList();
+        var evidence = new
+        {
+            purpose = "Create a prioritized seven-day B2B sales and marketing plan. Recommend specific human-reviewed actions, not automatic sending.",
+            totals = new { leads = prospects.Count, contacted = prospects.Count(x => x.Status != OutreachProspectStatus.New), replied = prospects.Count(x => x.Status is OutreachProspectStatus.Replied or OutreachProspectStatus.Interested), demos = prospects.Count(x => x.PipelineStage is OutreachPipelineStage.DemoBooked or OutreachPipelineStage.Trial or OutreachPipelineStage.Negotiation or OutreachPipelineStage.Won), won = prospects.Count(x => x.PipelineStage == OutreachPipelineStage.Won), bounced = prospects.Count(x => x.Status == OutreachProspectStatus.Bounced), dormant30Days = prospects.Count(x => x.LastContactedAtUtc < DateTime.UtcNow.AddDays(-30)) },
+            sources, pipeline,
+            constraints = new[] { "Protect unsubscribed and bounced contacts", "Do not infer revenue or causation", "Use small-sample caution", "Prioritize demos and positive replies", "No personally identifiable information is included" }
+        };
+        return Ok(await salesAssistant.AnalyzeOutreachAsync(evidence, ct));
+    }
+
     [HttpGet("today"), Authorize(Roles = nameof(UserRole.Marketing))]
     public async Task<IActionResult> Today(CancellationToken ct)
     {
