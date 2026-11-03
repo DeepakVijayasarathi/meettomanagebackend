@@ -45,11 +45,16 @@ public sealed class CampaignAiBriefInput
     [MaxLength(500)] public string? Offer { get; set; }
     [RegularExpression("^(Warm|Professional|Direct)$")] public string Tone { get; set; } = "Warm";
 }
-public sealed class SendReplyInput
+public class SendReplyInput
 {
     [Required, MaxLength(200)] public string Subject { get; set; } = "";
     [Required, MaxLength(10000)] public string Body { get; set; } = "";
 }
+public sealed class SendProspectMessageInput : SendReplyInput
+{
+    [RegularExpression("^(first-contact|reply)$")] public string Purpose { get; set; } = "first-contact";
+}
+public sealed class ReactivateProspectsInput { [Required, MaxLength(100)] public List<Guid> ProspectIds { get; set; } = []; }
 
 public sealed class ProspectImport
 {
@@ -238,6 +243,55 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         return Ok(await salesAssistant.AnalyzeOutreachAsync(evidence, ct));
     }
 
+    [HttpGet("growth"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> Growth(CancellationToken ct)
+    {
+        var prospects = await db.OutreachProspects.AsNoTracking().Select(x => new { x.Id, x.Email, x.AcademyName, x.Region, x.Source, x.Notes, x.Status, x.PipelineStage, x.LeadScore, x.LastContactedAtUtc, x.CreatedAtUtc }).ToListAsync(ct);
+        var replies = await db.OutreachProspectActivities.AsNoTracking().Where(x => x.Type == OutreachActivityType.ReplyReceived).Select(x => new { x.ProspectId, x.Detail }).ToListAsync(ct);
+        var sourcePerformance = prospects.GroupBy(x => string.IsNullOrWhiteSpace(x.Source) ? "Unknown" : x.Source!).Select(g => new
+        {
+            source = g.Key, leads = g.Count(), contacted = g.Count(x => x.Status != OutreachProspectStatus.New),
+            replies = g.Count(x => x.Status is OutreachProspectStatus.Replied or OutreachProspectStatus.Interested),
+            demos = g.Count(x => x.PipelineStage is OutreachPipelineStage.DemoBooked or OutreachPipelineStage.Trial or OutreachPipelineStage.Negotiation or OutreachPipelineStage.Won),
+            won = g.Count(x => x.PipelineStage == OutreachPipelineStage.Won)
+        }).OrderByDescending(x => x.won).ThenByDescending(x => x.replies).ThenByDescending(x => x.leads).ToList();
+        static decimal Weight(OutreachPipelineStage stage) => stage switch { OutreachPipelineStage.Qualified => .1m, OutreachPipelineStage.Contacted => .15m, OutreachPipelineStage.Replied => .3m, OutreachPipelineStage.DemoBooked => .5m, OutreachPipelineStage.Trial => .65m, OutreachPipelineStage.Negotiation => .8m, OutreachPipelineStage.Won => 1m, _ => 0m };
+        var averageValue = Math.Max(0, configuration.GetValue("Outreach:AverageCustomerValue", 12000m));
+        var expectedWins = prospects.Sum(x => Weight(x.PipelineStage));
+        var cutoff = DateTime.UtcNow.AddDays(-30);
+        var dormant = prospects.Where(x => x.Status is OutreachProspectStatus.Contacted or OutreachProspectStatus.Replied or OutreachProspectStatus.Interested && (x.LastContactedAtUtc ?? x.CreatedAtUtc) < cutoff && x.PipelineStage != OutreachPipelineStage.Lost && x.PipelineStage != OutreachPipelineStage.Won).OrderByDescending(x => x.LeadScore).Take(50).Select(x => new { x.Id, x.Email, x.AcademyName, x.Region, x.LeadScore, inactiveSinceUtc = x.LastContactedAtUtc ?? x.CreatedAtUtc }).ToList();
+        string Segment(string? name, string? notes)
+        {
+            var text = $"{name} {notes}".ToLowerInvariant();
+            return text.Contains("phonic") || text.Contains("reading") || text.Contains("story") ? "Reading & phonics" : text.Contains("abacus") ? "Abacus" : text.Contains("art") ? "Art & creative" : text.Contains("yoga") ? "Yoga & wellness" : text.Contains("online") ? "Online tutoring" : "Other academies";
+        }
+        var segments = prospects.GroupBy(x => Segment(x.AcademyName, x.Notes)).Select(g => new { segment = g.Key, leads = g.Count(), qualified = g.Count(x => x.LeadScore >= 60), replies = g.Count(x => x.Status is OutreachProspectStatus.Replied or OutreachProspectStatus.Interested) }).OrderByDescending(x => x.leads).ToList();
+        var objectionText = replies.Select(x => x.Detail?.ToLowerInvariant() ?? "").ToList();
+        var objections = new[] { new { name = "Price", count = objectionText.Count(x => x.Contains("price") || x.Contains("cost") || x.Contains("expensive")) }, new { name = "Timing", count = objectionText.Count(x => x.Contains("later") || x.Contains("busy") || x.Contains("not now")) }, new { name = "Existing software", count = objectionText.Count(x => x.Contains("already use") || x.Contains("existing software")) }, new { name = "Not interested", count = objectionText.Count(x => x.Contains("not interested") || x.Contains("no thanks")) } }.OrderByDescending(x => x.count).ToList();
+        var deliverability = new { healthy = prospects.Count(x => x.Status is not OutreachProspectStatus.Bounced and not OutreachProspectStatus.Unsubscribed), bounced = prospects.Count(x => x.Status == OutreachProspectStatus.Bounced), unsubscribed = prospects.Count(x => x.Status == OutreachProspectStatus.Unsubscribed), incompleteProfiles = prospects.Count(x => string.IsNullOrWhiteSpace(x.AcademyName) || string.IsNullOrWhiteSpace(x.Region)) };
+        var actions = new List<string>();
+        if (dormant.Count > 0) actions.Add($"Reactivate {dormant.Count} high-potential leads inactive for 30+ days.");
+        if (deliverability.bounced > 0) actions.Add($"Remove or correct {deliverability.bounced} bounced addresses before the next campaign.");
+        if (sourcePerformance.FirstOrDefault() is { } best) actions.Add($"Prioritize {best.source}; it currently has the strongest measured source performance.");
+        if (prospects.Any(x => string.IsNullOrWhiteSpace(x.Source))) actions.Add("Add source labels to unattributed leads before comparing campaign ROI.");
+        return Ok(new { generatedAtUtc = DateTime.UtcNow, forecast = new { averageCustomerValue = averageValue, expectedWins = Math.Round(expectedWins, 1), weightedRevenue = Math.Round(expectedWins * averageValue, 0), currency = "INR" }, sourcePerformance, segments, objections, deliverability, dormant, recommendedActions = actions });
+    }
+
+    [HttpPost("growth/reactivate"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> Reactivate(ReactivateProspectsInput input, CancellationToken ct)
+    {
+        var ids = input.ProspectIds.Distinct().Take(100).ToList();
+        var prospects = await db.OutreachProspects.Where(x => ids.Contains(x.Id) && x.Status != OutreachProspectStatus.Unsubscribed && x.Status != OutreachProspectStatus.Bounced && x.Status != OutreachProspectStatus.NotInterested).ToListAsync(ct);
+        var existingTasks = await db.OutreachTasks.Where(x => ids.Contains(x.ProspectId) && x.CompletedAtUtc == null).Select(x => x.ProspectId).ToListAsync(ct);
+        foreach (var p in prospects)
+        {
+            p.NextActionAtUtc = DateTime.UtcNow;
+            if (!existingTasks.Contains(p.Id)) db.OutreachTasks.Add(new OutreachTask { ProspectId = p.Id, Title = "Reactivate dormant lead with a personalized message", AssignedTo = p.AssignedTo, DueAtUtc = DateTime.UtcNow });
+        }
+        await db.SaveChangesAsync(ct);
+        return Ok(new { queued = prospects.Count });
+    }
+
     [HttpGet("today"), Authorize(Roles = nameof(UserRole.Marketing))]
     public async Task<IActionResult> Today(CancellationToken ct)
     {
@@ -308,6 +362,17 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         var latestReply = input.Purpose == "reply" ? await db.OutreachProspectActivities.AsNoTracking().Where(x => x.ProspectId == id && x.Type == OutreachActivityType.ReplyReceived).OrderByDescending(x => x.CreatedAtUtc).Select(x => new { x.Subject, x.Detail }).FirstOrDefaultAsync(ct) : null;
         var evidence = new { p.FirstName, p.AcademyName, p.City, p.Region, p.Source, p.Notes, p.LeadScore, p.ScoreReason, latestReply };
         return Ok(new { message = await salesAssistant.DraftOutreachMessageAsync(evidence, input.Purpose, ct) });
+    }
+
+    [HttpPost("prospects/{id:guid}/send"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
+    public async Task<IActionResult> SendProspectMessage(Guid id, SendProspectMessageInput input, CancellationToken ct)
+    {
+        var prospect = await db.OutreachProspects.FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Prospect", id);
+        if (prospect.Status is OutreachProspectStatus.Unsubscribed or OutreachProspectStatus.Bounced or OutreachProspectStatus.NotInterested)
+            throw new DomainValidationException("This prospect is not contactable.");
+        var error = await outreach.SendApprovedMessageAsync(prospect, input.Subject.Trim(), input.Body.Trim(), input.Purpose == "reply", User.Identity?.Name, ct);
+        if (error is not null) throw new ExternalServiceException(error);
+        return NoContent();
     }
 
     [HttpPost("campaigns/ai-draft"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]

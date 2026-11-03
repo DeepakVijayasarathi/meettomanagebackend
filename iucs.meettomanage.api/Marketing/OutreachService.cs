@@ -185,6 +185,25 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
         return error;
     }
 
+    /// <summary>Sends a reviewed one-off sales email from the lead workspace.</summary>
+    public async Task<string?> SendApprovedMessageAsync(OutreachProspect prospect, string subject, string body, bool isReply, string? sentBy, CancellationToken ct)
+    {
+        if (NotReadyReason is { } reason) return reason;
+        var error = await SendAsync(prospect, subject, body, await GetSettingsAsync(ct), ct);
+        if (error is not null) return error;
+        prospect.LastContactedAtUtc = DateTime.UtcNow;
+        prospect.NextActionAtUtc = isReply ? null : DateTime.UtcNow.AddDays(3);
+        if (!isReply)
+        {
+            prospect.Status = OutreachProspectStatus.Contacted;
+            if (prospect.PipelineStage is OutreachPipelineStage.New or OutreachPipelineStage.Qualified) prospect.PipelineStage = OutreachPipelineStage.Contacted;
+        }
+        db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = prospect.Id, Type = isReply ? OutreachActivityType.ReplySent : OutreachActivityType.EmailSent, Subject = subject, Detail = body, CreatedBy = sentBy });
+        if (isReply) db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = prospect.Id, Type = OutreachActivityType.ReplyHandled, Detail = "Approved reply sent.", CreatedBy = sentBy });
+        await db.SaveChangesAsync(ct);
+        return null;
+    }
+
     /// <summary>A test of one step to the marketing team's own address. Not counted towards the daily limit.</summary>
     public async Task<string?> SendTestAsync(Guid campaignId, int stepOrder, string to, CancellationToken ct)
     {
