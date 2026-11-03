@@ -204,6 +204,33 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
         return null;
     }
 
+    /// <summary>Retries one failed campaign attempt without erasing the original audit record.</summary>
+    public async Task<string?> RetryFailedSendAsync(Guid sendId, string? sentBy, CancellationToken ct)
+    {
+        var original = await db.OutreachSends.AsNoTracking().FirstOrDefaultAsync(x => x.Id == sendId, ct);
+        if (original is null) return "The failed send no longer exists.";
+        if (original.Succeeded) return "Only failed sends can be retried.";
+        if (await db.OutreachSends.AnyAsync(x => x.CampaignId == original.CampaignId && x.ProspectId == original.ProspectId && x.StepOrder == original.StepOrder && x.Succeeded && x.SentAtUtc > original.SentAtUtc, ct)) return "This email was already retried successfully.";
+        var prospect = await db.OutreachProspects.FirstOrDefaultAsync(x => x.Id == original.ProspectId, ct);
+        if (prospect is null) return "The prospect no longer exists.";
+        if (prospect.Status is OutreachProspectStatus.Unsubscribed or OutreachProspectStatus.NotInterested) return "This prospect is no longer contactable.";
+        var step = await db.OutreachCampaignSteps.AsNoTracking().FirstOrDefaultAsync(x => x.CampaignId == original.CampaignId && x.Order == original.StepOrder, ct);
+        if (step is null) return "The original campaign step no longer exists.";
+        if (NotReadyReason is { } reason) return reason;
+        string? error;
+        try { error = await SendAsync(prospect, step.Subject, step.Body, await GetSettingsAsync(ct), ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { error = ex.Message; }
+        var now = DateTime.UtcNow;
+        db.OutreachSends.Add(new OutreachSend { CampaignId = original.CampaignId, ProspectId = original.ProspectId, StepOrder = original.StepOrder, Email = prospect.Email, Subject = Render(step.Subject, prospect), SentAtUtc = now, Succeeded = error is null, Error = error is null ? null : error[..Math.Min(error.Length, 500)] });
+        if (error is null)
+        {
+            prospect.Status = OutreachProspectStatus.Contacted; prospect.PipelineStage = OutreachPipelineStage.Contacted; prospect.LastContactedAtUtc = now;
+            db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = prospect.Id, Type = OutreachActivityType.EmailSent, Subject = Render(step.Subject, prospect), Detail = $"Campaign step {step.Order} sent successfully after manual retry.", CreatedBy = sentBy });
+        }
+        await db.SaveChangesAsync(ct);
+        return error;
+    }
+
     /// <summary>A test of one step to the marketing team's own address. Not counted towards the daily limit.</summary>
     public async Task<string?> SendTestAsync(Guid campaignId, int stepOrder, string to, CancellationToken ct)
     {

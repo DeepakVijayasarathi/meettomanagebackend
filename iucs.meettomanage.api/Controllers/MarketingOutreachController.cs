@@ -317,6 +317,37 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         return Ok(new { hotLeads, replies, tasks, generatedAtUtc = DateTime.UtcNow });
     }
 
+    [HttpGet("history"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> History(CancellationToken ct)
+    {
+        var sends = await (from send in db.OutreachSends.AsNoTracking()
+            join campaign in db.OutreachCampaigns.AsNoTracking() on send.CampaignId equals campaign.Id
+            join prospect in db.OutreachProspects.AsNoTracking() on send.ProspectId equals prospect.Id
+            where send.ProspectId != Guid.Empty
+            orderby send.SentAtUtc descending
+            select new { send.Id, send.CampaignId, send.ProspectId, send.StepOrder, send.Email, send.Subject, send.SentAtUtc, send.Succeeded, send.Error, campaignName = campaign.Name, prospect.AcademyName, prospect.Region }).Take(300).ToListAsync(ct);
+        var successfulKeys = sends.Where(x => x.Succeeded).Select(x => (x.CampaignId, x.ProspectId, x.StepOrder, x.SentAtUtc)).ToList();
+        var campaignItems = sends.Select(x => new { x.Id, x.ProspectId, type = "CampaignEmail", occurredAtUtc = x.SentAtUtc, x.Email, AcademyName = (string?)x.AcademyName, Region = (string?)x.Region, Subject = (string?)x.Subject, detail = (string?)(x.Succeeded ? $"{x.campaignName} · step {x.StepOrder}" : x.Error), status = x.Succeeded ? "Sent" : "Failed", canRetry = !x.Succeeded && !successfulKeys.Any(s => s.CampaignId == x.CampaignId && s.ProspectId == x.ProspectId && s.StepOrder == x.StepOrder && s.SentAtUtc > x.SentAtUtc) }).ToList();
+        var manual = await db.OutreachProspectActivities.AsNoTracking().Where(x => (x.Type == OutreachActivityType.EmailSent || x.Type == OutreachActivityType.ReplySent || x.Type == OutreachActivityType.ReplyReceived) && x.CreatedBy != null).OrderByDescending(x => x.CreatedAtUtc).Take(200).Select(x => new { x.Id, x.ProspectId, type = x.Type == OutreachActivityType.ReplyReceived ? "ReplyReceived" : x.Type == OutreachActivityType.ReplySent ? "ReplySent" : "ManualEmail", occurredAtUtc = x.CreatedAtUtc, x.Prospect.Email, x.Prospect.AcademyName, x.Prospect.Region, x.Subject, detail = x.Detail, status = x.Type == OutreachActivityType.ReplyReceived ? "Received" : "Sent", canRetry = false }).ToListAsync(ct);
+        var items = campaignItems.Concat(manual).OrderByDescending(x => x.occurredAtUtc).Take(300).ToList();
+        var unresolved = campaignItems.Count(x => x.status == "Failed" && x.canRetry);
+        var alerts = new List<object>();
+        if (unresolved > 0) alerts.Add(new { level = "Error", title = $"{unresolved} email failures need attention", detail = "Review the provider error, correct the contact if needed, then retry once." });
+        var overdue = await db.OutreachTasks.AsNoTracking().CountAsync(x => x.CompletedAtUtc == null && x.DueAtUtc < DateTime.UtcNow, ct);
+        if (overdue > 0) alerts.Add(new { level = "Warning", title = $"{overdue} sales tasks are overdue", detail = "Open Today and complete the oldest follow-ups first." });
+        var staleReplies = await db.OutreachProspectActivities.AsNoTracking().CountAsync(x => x.Type == OutreachActivityType.ReplyReceived && x.CreatedAtUtc < DateTime.UtcNow.AddHours(-24) && !db.OutreachProspectActivities.Any(h => h.ProspectId == x.ProspectId && h.Type == OutreachActivityType.ReplyHandled && h.CreatedAtUtc > x.CreatedAtUtc), ct);
+        if (staleReplies > 0) alerts.Add(new { level = "Warning", title = $"{staleReplies} replies have waited over 24 hours", detail = "Respond to positive and demo-request replies before starting new outreach." });
+        return Ok(new { totals = new { attempts = sends.Count, sent = sends.Count(x => x.Succeeded), failed = unresolved, replies = items.Count(x => x.type == "ReplyReceived") }, alerts, items });
+    }
+
+    [HttpPost("history/{id:guid}/retry"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
+    public async Task<IActionResult> RetrySend(Guid id, CancellationToken ct)
+    {
+        var error = await outreach.RetryFailedSendAsync(id, User.Identity?.Name, ct);
+        if (error is not null) throw new DomainValidationException(error);
+        return NoContent();
+    }
+
     [HttpGet("replies"), Authorize(Roles = nameof(UserRole.Marketing))]
     public async Task<IActionResult> Replies(CancellationToken ct)
     {
