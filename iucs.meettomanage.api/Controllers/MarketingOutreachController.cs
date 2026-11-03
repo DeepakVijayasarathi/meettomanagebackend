@@ -101,6 +101,8 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         return Ok(new
         {
             ready = outreach.NotReadyReason is null,
+            replySyncReady = !string.IsNullOrWhiteSpace(configuration["Outreach:InboundWebhookSecret"]),
+            imapSyncReady = !string.IsNullOrWhiteSpace(configuration["Outreach:Imap:Username"]) && !string.IsNullOrWhiteSpace(configuration["Outreach:Imap:Password"]),
             notReadyReason = outreach.NotReadyReason,
             from = settings.From,
             replyTo = settings.ReplyTo,

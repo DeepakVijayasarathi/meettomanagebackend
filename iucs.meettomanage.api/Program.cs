@@ -197,6 +197,8 @@ builder.Services.AddTenantWorker<RecordingReconciliationBackgroundService>(tenan
 builder.Services.AddScoped<iucs.meettomanage.api.Marketing.OutreachService>();
 builder.Services.AddHttpClient(nameof(iucs.meettomanage.api.Marketing.OutreachService), client => client.Timeout = TimeSpan.FromSeconds(20));
 builder.Services.AddTenantWorker<iucs.meettomanage.api.Marketing.OutreachBackgroundService>(tenantMode);
+builder.Services.AddHttpClient(nameof(iucs.meettomanage.api.Marketing.OutreachImapBackgroundService), client => client.Timeout = TimeSpan.FromSeconds(30));
+builder.Services.AddHostedService<iucs.meettomanage.api.Marketing.OutreachImapBackgroundService>();
 // CRM integration: lead webhooks, no-op until Integrations:CrmWebhookUrl is set
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<ICrmNotifier, WebhookCrmNotifier>();

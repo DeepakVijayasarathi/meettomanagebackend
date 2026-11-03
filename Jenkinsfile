@@ -107,6 +107,21 @@ pipeline {
               } catch (err) {
                   echo "WARNING: credential 'meettomanage-resend-api-key' not found -- deploying without Resend email."
               }
+              // Shared secret used by the mailbox/automation provider when forwarding inbound
+              // replies to /api/marketing/outreach/inbound/reply. The endpoint fails closed when
+              // this credential is absent, so deployments remain safe but reply sync is disabled.
+              try {
+                  withCredentials([string(credentialsId: 'meettomanage-outreach-webhook-secret', variable: 'OUTREACH_WEBHOOK_PROBE')]) {}
+                  optionalCredentials << string(credentialsId: 'meettomanage-outreach-webhook-secret', variable: 'OUTREACH_WEBHOOK_SECRET')
+              } catch (err) {
+                  echo "WARNING: credential 'meettomanage-outreach-webhook-secret' not found -- inbound reply synchronization is disabled."
+              }
+              try {
+                  withCredentials([usernamePassword(credentialsId: 'meettomanage-zoho-imap', usernameVariable: 'ZOHO_IMAP_USER_PROBE', passwordVariable: 'ZOHO_IMAP_PASS_PROBE')]) {}
+                  optionalCredentials << usernamePassword(credentialsId: 'meettomanage-zoho-imap', usernameVariable: 'ZOHO_IMAP_USER', passwordVariable: 'ZOHO_IMAP_PASSWORD')
+              } catch (err) {
+                  echo "WARNING: credential 'meettomanage-zoho-imap' not found -- Zoho mailbox polling is disabled."
+              }
               withCredentials([
                   string(credentialsId: 'meettomanage-db-password',          variable: 'DB_PASS'),
                   string(credentialsId: 'meettomanage-jwt-signing-key',      variable: 'JWT_SIGNING_KEY'),
@@ -134,6 +149,12 @@ pipeline {
                       -e Monitoring__Servers__1__SshPassword="\${SSH_PASS_1}" \
                       -e HetznerAi__ApiKey="\${HETZNER_AI_API_KEY:-}" \
                       -e Resend__ApiKey="\${RESEND_API_KEY:-}" \
+                      -e Outreach__InboundWebhookSecret="\${OUTREACH_WEBHOOK_SECRET:-}" \
+                      -e Outreach__Imap__Host="imap.zoho.in" \
+                      -e Outreach__Imap__Port="993" \
+                      -e Outreach__Imap__Username="\${ZOHO_IMAP_USER:-}" \
+                      -e Outreach__Imap__Password="\${ZOHO_IMAP_PASSWORD:-}" \
+                      -e Outreach__Imap__PollSeconds="60" \
                       -e Resend__From="Meet to Manage <notifications@meettomanage.cloud>" \
                       -e Marketing__LeadAlertEmail="deepanvijayasarathi32@gmail.com" \
                       -e Seed__MarketingEmail="marketing@meettomanage.cloud" \
