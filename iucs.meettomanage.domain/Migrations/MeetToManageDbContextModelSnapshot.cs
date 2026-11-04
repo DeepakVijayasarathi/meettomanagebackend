@@ -2877,6 +2877,15 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("subject");
 
+                    b.Property<Guid?>("TargetId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("target_id");
+
+                    b.Property<string>("TargetType")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("target_type");
+
                     b.Property<string>("TemplateKey")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)")
@@ -3197,6 +3206,194 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasFilter("\"is_deleted\" = FALSE");
 
                     b.ToTable("integrations");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Learning.Assignment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AttachmentFileName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("attachment_file_name");
+
+                    b.Property<string>("AttachmentPath")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("attachment_path");
+
+                    b.Property<Guid>("BatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("batch_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<DateTime?>("DueAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("due_at_utc");
+
+                    b.Property<string>("Instructions")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("instructions");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("kind");
+
+                    b.Property<decimal?>("MaxMarks")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("max_marks");
+
+                    b.Property<DateTime?>("ResultsReleasedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("results_released_at_utc");
+
+                    b.Property<Guid>("TeacherProfileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("teacher_profile_id");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("title");
+
+                    b.Property<string>("Topic")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("topic");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_assignments");
+
+                    b.HasIndex("BatchId", "DueAtUtc")
+                        .HasDatabaseName("ix_assignments_batch_id_due_at_utc");
+
+                    b.HasIndex("TeacherProfileId", "CreatedAtUtc")
+                        .HasDatabaseName("ix_assignments_teacher_profile_id_created_at_utc");
+
+                    b.ToTable("assignments");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Learning.AssignmentSubmission", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AnswerText")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("answer_text");
+
+                    b.Property<Guid>("AssignmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("assignment_id");
+
+                    b.Property<string>("AttachmentFileName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("attachment_file_name");
+
+                    b.Property<string>("AttachmentPath")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("attachment_path");
+
+                    b.Property<Guid>("ChildId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("child_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<string>("Feedback")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("feedback");
+
+                    b.Property<DateTime?>("GradedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("graded_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<decimal?>("Marks")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("marks");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime?>("SubmittedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("submitted_at_utc");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_assignment_submissions");
+
+                    b.HasIndex("AssignmentId", "ChildId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_assignment_submissions_assignment_id_child_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("ChildId", "Status")
+                        .HasDatabaseName("ix_assignment_submissions_child_id_status");
+
+                    b.ToTable("assignment_submissions");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.BlogPost", b =>
@@ -7598,6 +7795,48 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("SupportTicket");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Learning.Assignment", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Academics.Batch", "Batch")
+                        .WithMany()
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_assignments_batches_batch_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.TeacherProfile", "TeacherProfile")
+                        .WithMany()
+                        .HasForeignKey("TeacherProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_assignments_teacher_profiles_teacher_profile_id");
+
+                    b.Navigation("Batch");
+
+                    b.Navigation("TeacherProfile");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Learning.AssignmentSubmission", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Learning.Assignment", "Assignment")
+                        .WithMany("Submissions")
+                        .HasForeignKey("AssignmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_assignment_submissions_assignments_assignment_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.Child", "Child")
+                        .WithMany()
+                        .HasForeignKey("ChildId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_assignment_submissions_children_child_id");
+
+                    b.Navigation("Assignment");
+
+                    b.Navigation("Child");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingChatMessage", b =>
                 {
                     b.HasOne("iucs.meettomanage.domain.Entities.Marketing.MarketingChatConversation", "Conversation")
@@ -8279,6 +8518,11 @@ namespace iucs.meettomanage.domain.Migrations
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.SupportTicket", b =>
                 {
                     b.Navigation("Messages");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Learning.Assignment", b =>
+                {
+                    b.Navigation("Submissions");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.MarketingChatConversation", b =>

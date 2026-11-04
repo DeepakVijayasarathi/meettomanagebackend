@@ -48,6 +48,18 @@ public class MitoTodayResponse
     public string StudentName { get; set; } = string.Empty;
     public DateTime GeneratedAtUtc { get; set; }
     public IReadOnlyList<MitoTodayItem> Items { get; set; } = [];
+    /// <summary>Homework and tests due soon (next 7 days or overdue) that still need the student's attention.</summary>
+    public List<MitoHomeworkItem> Homework { get; set; } = [];
+}
+
+public class MitoHomeworkItem
+{
+    public Guid SubmissionId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string Kind { get; set; } = string.Empty;
+    public string BatchName { get; set; } = string.Empty;
+    public DateTime? DueAtUtc { get; set; }
+    public bool IsOverdue { get; set; }
 }
 
 public class MitoTodayItem
@@ -118,4 +130,6 @@ public record MitoStudentContext(
     int ClassesRemaining,
     double? AttendancePercent,
     IReadOnlyList<string> UpcomingClasses,
-    IReadOnlyList<string> RecentClassSummaries);
+    IReadOnlyList<string> RecentClassSummaries,
+    IReadOnlyList<string>? PendingHomework = null,
+    IReadOnlyList<string>? RecentResults = null);

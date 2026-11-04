@@ -18,7 +18,9 @@ namespace iucs.meettomanage.application.Services
             string subject,
             string body,
             Guid? bulkEmailRecipientId = null,
-            CancellationToken cancellationToken = default);
+            CancellationToken cancellationToken = default,
+            string? targetType = null,
+            Guid? targetId = null);
 
         /// <summary>
         /// Renders the named Email Template Master entry against <paramref name="tokens"/> and
@@ -32,6 +34,21 @@ namespace iucs.meettomanage.application.Services
             NotificationType type,
             string templateKey,
             IReadOnlyDictionary<string, string> tokens,
+            CancellationToken cancellationToken = default,
+            string? targetType = null,
+            Guid? targetId = null);
+
+        /// <summary>
+        /// In-app (bell + family-app push) notification with no email, for frequent, low-stakes updates such
+        /// as new homework, where an email per item would be noise.
+        /// </summary>
+        Task NotifyInAppAsync(
+            Guid recipientUserId,
+            NotificationType type,
+            string subject,
+            string body,
+            string? targetType = null,
+            Guid? targetId = null,
             CancellationToken cancellationToken = default);
 
         /// <summary>The signed-in user's most recent notifications and unread count, for the notification bell.</summary>

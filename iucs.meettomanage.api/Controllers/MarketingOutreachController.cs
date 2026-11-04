@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.RegularExpressions;
 using iucs.meettomanage.api.Marketing;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.domain.Data;
@@ -88,11 +89,13 @@ public sealed class EnrollInput
     [MaxLength(120)] public string? Region { get; set; }
     [Range(0, 100)] public int? MinScore { get; set; }
     public List<OutreachPipelineStage> Stages { get; set; } = [];
+    /// <summary>Never re-contact a prospect inside this global cooling-off period.</summary>
+    [Range(1, 90)] public int ExcludeContactedDays { get; set; } = 7;
 }
 
 /// <summary>Cold e-mail outreach for the marketing console: prospects, campaigns, sending status and unsubscribe.</summary>
 [ApiController, Route("api/marketing/outreach")]
-public sealed class MarketingOutreachController(MeetToManageDbContext db, OutreachService outreach, ISalesAssistant salesAssistant, IConfiguration configuration) : ControllerBase
+public sealed class MarketingOutreachController(MeetToManageDbContext db, OutreachService outreach, ISalesAssistant salesAssistant, IConfiguration configuration, OutreachImapBackgroundService imapSync) : ControllerBase
 {
     // ---------------------------------------------------------------- status
 
@@ -367,6 +370,12 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         return Ok(new { total = items.Count, needsResponse = items.Count(x => !x.handled), overdue = items.Count(x => !x.handled && x.ageHours >= 24), interested = items.Count(x => x.intent is "Interested" or "DemoRequest" or "Pricing"), averageResponseHours = responseTimes.Count == 0 ? (double?)null : Math.Round(responseTimes.Average(), 1), items });
     }
 
+    [HttpGet("replies/sync-status"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public IActionResult ReplySyncStatus() => Ok(imapSync.Status);
+
+    [HttpPost("replies/sync-now"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
+    public async Task<IActionResult> SyncRepliesNow(CancellationToken ct) => Ok(await imapSync.SyncNowAsync(ct));
+
     [HttpPost("replies/{id:guid}/analyze"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
     public async Task<IActionResult> AnalyzeReply(Guid id, CancellationToken ct)
     {
@@ -600,23 +609,41 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         {
             var s = steps[i];
             if (string.IsNullOrWhiteSpace(s.Subject) || string.IsNullOrWhiteSpace(s.Body)) throw new DomainValidationException($"E-mail {i + 1} needs a subject and a message.");
+            var content = s.Subject + "\n" + s.Body;
+            if (Regex.IsMatch(content, @"\[[^\]\r\n]{1,40}\]"))
+                throw new DomainValidationException($"E-mail {i + 1} contains an unresolved placeholder such as [Your Name]. Replace it before saving.");
+            var unsupported = Regex.Matches(content, @"\{\{\s*([^{}]+?)\s*\}\}")
+                .Select(m => m.Groups[1].Value.Trim()).Where(x => x is not ("FirstName" or "AcademyName" or "City")).Distinct().ToList();
+            if (unsupported.Count > 0)
+                throw new DomainValidationException($"E-mail {i + 1} contains unsupported personalization: {string.Join(", ", unsupported)}.");
             // Through the navigation: a new campaign has no id until it is saved.
             campaign.Steps.Add(new OutreachCampaignStep { Order = i + 1, DelayDays = i == 0 ? 0 : Math.Max(minFollowUpDays, s.DelayDays), Subject = s.Subject.Trim(), Body = s.Body.Trim() });
         }
+    }
+
+    private IQueryable<OutreachProspect> CampaignCandidates(Guid campaignId, EnrollInput input, bool allowContacted)
+    {
+        var alreadyHere = db.OutreachCampaignRecipients.Where(r => r.CampaignId == campaignId).Select(r => r.ProspectId);
+        var scheduledElsewhere = db.OutreachCampaignRecipients
+            .Where(r => r.CampaignId != campaignId && r.Status == OutreachRecipientStatus.Scheduled)
+            .Select(r => r.ProspectId);
+        var cutoff = DateTime.UtcNow.AddDays(-Math.Clamp(input.ExcludeContactedDays, 1, 90));
+        var query = db.OutreachProspects.Where(p => !alreadyHere.Contains(p.Id) && !scheduledElsewhere.Contains(p.Id)
+            && (p.LastContactedAtUtc == null || p.LastContactedAtUtc < cutoff));
+        query = input.ProspectIds.Count > 0
+            ? query.Where(p => input.ProspectIds.Contains(p.Id) && (p.Status == OutreachProspectStatus.New || (allowContacted && p.Status == OutreachProspectStatus.Contacted)))
+            : query.Where(p => p.Status == OutreachProspectStatus.New);
+        if (!string.IsNullOrWhiteSpace(input.Region)) query = query.Where(p => p.Region == input.Region.Trim());
+        if (input.MinScore is { } minScore) query = query.Where(p => p.LeadScore >= minScore);
+        if (input.Stages.Count > 0) query = query.Where(p => input.Stages.Contains(p.PipelineStage));
+        return query;
     }
 
     [HttpPost("campaigns/{id:guid}/enroll"), Authorize(Roles = nameof(UserRole.Marketing))]
     public async Task<IActionResult> Enroll(Guid id, EnrollInput input, CancellationToken ct)
     {
         if (!await db.OutreachCampaigns.AnyAsync(c => c.Id == id, ct)) throw new NotFoundException("Campaign", id);
-        var already = db.OutreachCampaignRecipients.Where(r => r.CampaignId == id).Select(r => r.ProspectId);
-        var query = db.OutreachProspects.Where(p => !already.Contains(p.Id));
-        query = input.ProspectIds.Count > 0
-            ? query.Where(p => input.ProspectIds.Contains(p.Id) && (p.Status == OutreachProspectStatus.New || p.Status == OutreachProspectStatus.Contacted))
-            : query.Where(p => p.Status == OutreachProspectStatus.New);
-        if (!string.IsNullOrWhiteSpace(input.Region)) query = query.Where(p => p.Region == input.Region.Trim());
-        if (input.MinScore is { } minScore) query = query.Where(p => p.LeadScore >= minScore);
-        if (input.Stages.Count > 0) query = query.Where(p => input.Stages.Contains(p.PipelineStage));
+        var query = CampaignCandidates(id, input, allowContacted: true);
         var ids = await query.Select(p => p.Id).ToListAsync(ct);
         var now = DateTime.UtcNow;
         foreach (var prospectId in ids)
@@ -629,14 +656,18 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     public async Task<IActionResult> PreviewRecipients(Guid id, EnrollInput input, CancellationToken ct)
     {
         if (!await db.OutreachCampaigns.AnyAsync(c => c.Id == id, ct)) throw new NotFoundException("Campaign", id);
-        var already = db.OutreachCampaignRecipients.Where(r => r.CampaignId == id).Select(r => r.ProspectId);
-        var query = db.OutreachProspects.AsNoTracking().Where(p => !already.Contains(p.Id) && p.Status == OutreachProspectStatus.New);
-        if (!string.IsNullOrWhiteSpace(input.Region)) query = query.Where(p => p.Region == input.Region.Trim());
-        if (input.MinScore is { } minScore) query = query.Where(p => p.LeadScore >= minScore);
-        if (input.Stages.Count > 0) query = query.Where(p => input.Stages.Contains(p.PipelineStage));
+        var baseQuery = db.OutreachProspects.AsNoTracking().Where(p => p.Status == OutreachProspectStatus.New);
+        if (!string.IsNullOrWhiteSpace(input.Region)) baseQuery = baseQuery.Where(p => p.Region == input.Region.Trim());
+        if (input.MinScore is { } minScore) baseQuery = baseQuery.Where(p => p.LeadScore >= minScore);
+        if (input.Stages.Count > 0) baseQuery = baseQuery.Where(p => input.Stages.Contains(p.PipelineStage));
+        var scheduledElsewhere = db.OutreachCampaignRecipients.Where(r => r.CampaignId != id && r.Status == OutreachRecipientStatus.Scheduled).Select(r => r.ProspectId);
+        var cutoff = DateTime.UtcNow.AddDays(-Math.Clamp(input.ExcludeContactedDays, 1, 90));
+        var excludedOverlap = await baseQuery.CountAsync(p => scheduledElsewhere.Contains(p.Id), ct);
+        var excludedRecent = await baseQuery.CountAsync(p => p.LastContactedAtUtc != null && p.LastContactedAtUtc >= cutoff, ct);
+        var query = CampaignCandidates(id, input, allowContacted: false).AsNoTracking();
         var count = await query.CountAsync(ct);
         var sample = await query.OrderByDescending(p => p.LeadScore).Take(10).Select(p => new { p.Id, p.Email, p.AcademyName, p.Region, p.LeadScore }).ToListAsync(ct);
-        return Ok(new { count, sample });
+        return Ok(new { count, sample, excludedOverlap, excludedRecent, cooldownDays = Math.Clamp(input.ExcludeContactedDays, 1, 90) });
     }
 
     public sealed record StatusInput(OutreachCampaignStatus Status);
@@ -650,6 +681,11 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
             if (outreach.NotReadyReason is { } reason) throw new DomainValidationException("Sending isn't set up: " + reason);
             if (!await db.OutreachCampaignRecipients.AnyAsync(r => r.CampaignId == id && r.Status == OutreachRecipientStatus.Scheduled, ct))
                 throw new DomainValidationException("Add prospects to this campaign before starting it.");
+            var thisAudience = db.OutreachCampaignRecipients.Where(r => r.CampaignId == id && r.Status == OutreachRecipientStatus.Scheduled).Select(r => r.ProspectId);
+            var overlap = await db.OutreachCampaignRecipients.CountAsync(r => r.CampaignId != id && r.Status == OutreachRecipientStatus.Scheduled
+                && r.Campaign.Status == OutreachCampaignStatus.Active && thisAudience.Contains(r.ProspectId), ct);
+            if (overlap > 0)
+                throw new DomainValidationException($"This campaign overlaps another active campaign for {overlap} prospect(s). Pause the other campaign or choose a different audience.");
         }
         if (input.Status is not (OutreachCampaignStatus.Active or OutreachCampaignStatus.Paused))
             throw new DomainValidationException("A campaign can only be started or paused.");

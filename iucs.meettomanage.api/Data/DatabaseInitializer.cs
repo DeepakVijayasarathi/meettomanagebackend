@@ -84,6 +84,7 @@ namespace iucs.meettomanage.api.Data
             await EnsurePinResetEmailTemplateAsync(context);
             await EnsureParentFeedbackEmailTemplateAsync(context);
             await EnsureParentFeedbackMenusAsync(context);
+            await EnsureHomeworkMenusAsync(context);
             await EnsureSupportTicketEmailTemplatesAsync(context);
             await EnsureSupportTicketMenusAsync(context);
             await EnsureLearningPluginsMenusAsync(context);
@@ -844,6 +845,7 @@ namespace iucs.meettomanage.api.Data
             ("admin", "Academics", "Sessions", "/admin/sessions", "CalendarClock", PermissionModule.SessionCalendarManagement.ToString()),
             ("admin", "Academics", "Recordings", "/admin/recordings", "Video", PermissionModule.SessionCalendarManagement.ToString()),
             ("admin", "Academics", "Quiz Bank", "/admin/quiz-bank", "Sparkles", PermissionModule.CourseBatchManagement.ToString()),
+            ("admin", "Academics", "Homework & Tests", "/admin/homework", "BookOpenCheck", PermissionModule.CourseBatchManagement.ToString()),
             ("admin", "People", "Users", "/admin/users", "Users", PermissionModule.UserManagement.ToString()),
             ("admin", "People", "Roles & Permissions", "/admin/permissions", "ShieldCheck", PermissionModule.UserManagement.ToString()),
             ("admin", "People", "Enrollment Review", "/admin/enrollments", "ClipboardCheck", PermissionModule.Admission.ToString()),
@@ -872,6 +874,7 @@ namespace iucs.meettomanage.api.Data
             ("teacher", null, "Dashboard", "/teacher", "LayoutDashboard", null),
             ("teacher", "Teaching", "My Classes", "/teacher/classes", "CalendarClock", PermissionModule.SessionCalendarManagement.ToString()),
             ("teacher", "Teaching", "Attendance & Records", "/teacher/attendance", "ClipboardList", PermissionModule.SessionCalendarManagement.ToString()),
+            ("teacher", "Teaching", "Homework & Tests", "/teacher/homework", "BookOpenCheck", PermissionModule.SessionCalendarManagement.ToString()),
             ("teacher", "Teaching", "Recordings", "/teacher/recordings", "Video", PermissionModule.SessionCalendarManagement.ToString()),
             ("teacher", "Teaching", "Demo Feedback", "/teacher/demo-feedback", "ClipboardCheck", PermissionModule.SessionCalendarManagement.ToString()),
             ("teacher", "Teaching", "Student Doubts", "/teacher/doubts", "MessageCircleQuestion", PermissionModule.Communication.ToString()),
@@ -880,6 +883,7 @@ namespace iucs.meettomanage.api.Data
             ("teacher", "My Account", "Resources", "/teacher/resources", "FolderOpen", PermissionModule.ContentAccessManagement.ToString()),
             ("parent", null, "Dashboard", "/parent", "LayoutDashboard", null),
             ("parent", "Learning", "Schedule & Live Class", "/parent/schedule", "CalendarClock", PermissionModule.SessionCalendarManagement.ToString()),
+            ("parent", "Learning", "Homework & Tests", "/parent/homework", "BookOpenCheck", PermissionModule.SessionCalendarManagement.ToString()),
             ("parent", "Learning", "Resources", "/parent/resources", "FolderOpen", PermissionModule.ContentAccessManagement.ToString()),
             ("parent", "Learning", "Recordings", "/parent/recordings", "Video", PermissionModule.ContentAccessManagement.ToString()),
             ("parent", "Learning", "Student View", "/student", "Sparkles", null),
@@ -2831,6 +2835,44 @@ namespace iucs.meettomanage.api.Data
         /// DB seeded before it existed. Gated on the Admission module, same as the demo-feedback
         /// screens next to it, so who sees it stays admin-configurable through Roles and Permissions.
         /// </summary>
+        /// <summary>Adds "Homework &amp; Tests" to the Teacher, Parent and Admin menus in a DB seeded before it existed.</summary>
+        private static async Task EnsureHomeworkMenusAsync(MeetToManageDbContext context)
+        {
+            foreach (var (portal, anchorPath, module) in new[]
+            {
+                ("teacher", "/teacher/attendance", PermissionModule.SessionCalendarManagement),
+                ("parent", "/parent/schedule", PermissionModule.SessionCalendarManagement),
+                ("admin", "/admin/quiz-bank", PermissionModule.CourseBatchManagement),
+            })
+            {
+                var path = $"/{portal}/homework";
+                if (context.MenuItems.Local.Any(m => m.Portal == portal && m.Path == path) ||
+                    await context.MenuItems.AnyAsync(m => m.Portal == portal && m.Path == path))
+                {
+                    continue;
+                }
+
+                var anchor = await context.MenuItems.FirstOrDefaultAsync(m => m.Portal == portal && m.Path == anchorPath);
+                if (anchor is null)
+                {
+                    continue;
+                }
+
+                context.MenuItems.Add(new MenuItem
+                {
+                    Portal = portal,
+                    Section = anchor.Section,
+                    SectionOrder = anchor.SectionOrder,
+                    Label = "Homework & Tests",
+                    Path = path,
+                    Icon = "BookOpenCheck",
+                    SortOrder = anchor.SortOrder + 1,
+                    IsActive = true,
+                    RequiredModule = module.ToString(),
+                });
+            }
+        }
+
         private static async Task EnsureParentFeedbackMenusAsync(MeetToManageDbContext context)
         {
             foreach (var (portal, anchorPath, section) in new[]

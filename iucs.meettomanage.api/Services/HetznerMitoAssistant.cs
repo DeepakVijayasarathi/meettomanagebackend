@@ -25,11 +25,13 @@ public class HetznerMitoAssistant : IMitoAssistant
 
         var schedule = student.UpcomingClasses.Count == 0 ? "None listed." : string.Join(" | ", student.UpcomingClasses);
         var summaries = student.RecentClassSummaries.Count == 0 ? "None available." : string.Join(" | ", student.RecentClassSummaries);
+        var homework = student.PendingHomework is not { Count: > 0 } ? "None set." : string.Join(" | ", student.PendingHomework);
+        var results = student.RecentResults is not { Count: > 0 } ? "None released." : string.Join(" | ", student.RecentResults);
         var modeInstruction = mode switch
         {
             "doubt" => "Teach the concept with one simple example, then ask one short check-for-understanding question.",
-            "plan" => "Turn the authorized schedule into a short, realistic study plan. Never invent homework or tests.",
-            "review" => "Help diagnose a mistake after a completed activity. Explain the concept without simply giving an answer.",
+            "plan" => "Turn the authorized schedule and pending homework into a short, realistic study plan, soonest deadline first. Never invent homework or tests.",
+            "review" => "Help diagnose a mistake after a completed activity, using the released results and teacher feedback above. Explain the concept without simply giving an answer.",
             _ => "Answer the student's learning request directly and offer one useful next step.",
         };
         var system = $"""
@@ -38,6 +40,8 @@ public class HetznerMitoAssistant : IMitoAssistant
             Classes remaining: {student.ClassesRemaining}. Attendance: {(student.AttendancePercent is null ? "not recorded" : $"{student.AttendancePercent:0.#}%")}.
             Upcoming authorized classes: {schedule}
             Recent teacher-approved class summaries: {summaries}
+            Pending homework and upcoming tests: {homework}
+            Recently released results and teacher feedback: {results}
 
             Give clear, age-appropriate explanations and help the student reason step by step. Use only the learning
             context above as student-specific fact. If a question needs course material that is not provided, say so

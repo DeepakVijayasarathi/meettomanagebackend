@@ -1,3 +1,4 @@
+using iucs.meettomanage.domain.Entities.Learning;
 using System.Linq.Expressions;
 using iucs.meettomanage.domain.Entities.Academics;
 using iucs.meettomanage.domain.Entities.Admission;
@@ -75,6 +76,10 @@ namespace iucs.meettomanage.domain.Data
         // Whiteboard Activities
         public DbSet<WhiteboardActivityTemplate> WhiteboardActivityTemplates => Set<WhiteboardActivityTemplate>();
         public DbSet<WhiteboardActivityItem> WhiteboardActivityItems => Set<WhiteboardActivityItem>();
+
+        // Learning — homework and tests
+        public DbSet<Assignment> Assignments => Set<Assignment>();
+        public DbSet<AssignmentSubmission> AssignmentSubmissions => Set<AssignmentSubmission>();
 
         // Admission
         public DbSet<DemoBooking> DemoBookings => Set<DemoBooking>();

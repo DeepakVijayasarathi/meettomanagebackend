@@ -278,6 +278,19 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
             .FirstOrDefaultAsync(ct);
         if (recipient is null) return false;
 
+        // Final race-safe guard: enrolment and campaign activation already reject overlap, but two
+        // concurrent requests (or legacy data created before that rule) must never send competing
+        // campaigns to the same person inside one week. Follow-ups in this campaign remain allowed.
+        var crossCampaignCutoff = nowUtc.AddDays(-7);
+        if (await db.OutreachSends.AnyAsync(s => s.ProspectId == recipient.ProspectId && s.CampaignId != recipient.CampaignId
+            && s.Succeeded && s.SentAtUtc >= crossCampaignCutoff, ct))
+        {
+            recipient.Status = OutreachRecipientStatus.Stopped;
+            await db.SaveChangesAsync(ct);
+            logger.LogWarning("Stopped overlapping campaign {CampaignId} for prospect {ProspectId} inside the seven-day cooldown.", recipient.CampaignId, recipient.ProspectId);
+            return false;
+        }
+
         var steps = await db.OutreachCampaignSteps.AsNoTracking().Where(s => s.CampaignId == recipient.CampaignId).OrderBy(s => s.Order).ToListAsync(ct);
         var step = steps.FirstOrDefault(s => s.Order == recipient.NextStep);
         if (step is null)

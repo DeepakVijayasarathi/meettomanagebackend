@@ -31,6 +31,12 @@ namespace iucs.meettomanage.application.Dto.Communication
 
         /// <summary>True once the parent has already replied to this Bulk Email.</summary>
         public bool HasReplied { get; set; }
+
+        /// <summary>What a tap should open ("invoice", "class", "report", "ticket", "homework", ...), or null.</summary>
+        public string? TargetType { get; set; }
+
+        /// <summary>The specific record to open, when known.</summary>
+        public Guid? TargetId { get; set; }
     }
 
     /// <summary>The signed-in user's recent notifications plus the unread tally for the bell badge.</summary>

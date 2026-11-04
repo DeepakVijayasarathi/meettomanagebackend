@@ -23,9 +23,11 @@ public class MitoController : ControllerBase
     private readonly IMitoAssistant _mito;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ISettingsService _settings;
+    private readonly IAssignmentService _assignments;
 
-    public MitoController(IParentPortalService portal, IMitoAssistant mito, IUnitOfWork unitOfWork, ISettingsService settings)
+    public MitoController(IParentPortalService portal, IMitoAssistant mito, IUnitOfWork unitOfWork, ISettingsService settings, IAssignmentService assignments)
     {
+        _assignments = assignments;
         _portal = portal;
         _mito = mito;
         _unitOfWork = unitOfWork;
@@ -55,8 +57,16 @@ public class MitoController : ControllerBase
         var recent = relevant.Where(s => s.Status == SessionStatus.Completed && !string.IsNullOrWhiteSpace(s.Summary))
             .OrderByDescending(s => s.ScheduledStartAtUtc).Take(5)
             .Select(s => $"{s.BatchName ?? "Class"}: {s.Summary}").ToList();
+        var work = await _assignments.ListForParentAsync(userId, request.ChildId, cancellationToken);
+        var pendingWork = work.Where(w => w.Status == AssignmentSubmissionStatus.Pending && (w.DueAtUtc is null || w.DueAtUtc >= now.AddDays(-7)))
+            .OrderBy(w => w.DueAtUtc ?? DateTime.MaxValue).Take(8)
+            .Select(w => $"{w.Kind} \"{w.Title}\"{(w.Topic is null ? "" : $" on {w.Topic}")} for {w.BatchName}{(w.DueAtUtc is null ? "" : $", due {w.DueAtUtc:u}")}{(w.IsOverdue ? " (overdue)" : "")}")
+            .ToList();
+        var results = work.Where(w => w.Marks is not null || w.Feedback is not null).Take(5)
+            .Select(w => $"\"{w.Title}\"{(w.Topic is null ? "" : $" ({w.Topic})")}: {(w.Marks is null ? "checked" : $"{w.Marks:0.##}/{w.MaxMarks:0.##}")}{(w.ClassAverage is null ? "" : $", class average {w.ClassAverage:0.#}")}{(w.Feedback is null ? "" : $", teacher said: {w.Feedback}")}")
+            .ToList();
         var context = new MitoStudentContext(child.Name, child.AcademicLevel, child.ClassesCompleted,
-            child.ClassesRemaining, child.AttendancePercent, upcoming, recent);
+            child.ClassesRemaining, child.AttendancePercent, upcoming, recent, pendingWork, results);
         return Ok(await _mito.ReplyAsync(context, request.Messages, request.Mode, cancellationToken));
     }
 
@@ -81,6 +91,14 @@ public class MitoController : ControllerBase
                 {
                     SessionId = x.Id, Title = x.BatchName ?? "Class", TeacherName = x.TeacherName,
                     StartsAtUtc = x.ScheduledStartAtUtc, EndsAtUtc = x.ScheduledEndAtUtc, Status = x.Status.ToString(),
+                }).ToList(),
+            Homework = (await _assignments.ListForParentAsync(userId, childId, cancellationToken))
+                .Where(w => w.Status == AssignmentSubmissionStatus.Pending && (w.DueAtUtc is null || w.DueAtUtc <= now.AddDays(7)))
+                .OrderBy(w => w.DueAtUtc ?? DateTime.MaxValue).Take(10)
+                .Select(w => new MitoHomeworkItem
+                {
+                    SubmissionId = w.SubmissionId, Title = w.Title, Kind = w.Kind.ToString(), BatchName = w.BatchName,
+                    DueAtUtc = w.DueAtUtc, IsOverdue = w.IsOverdue,
                 }).ToList(),
         });
     }

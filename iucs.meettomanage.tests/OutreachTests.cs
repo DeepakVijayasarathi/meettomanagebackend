@@ -105,6 +105,30 @@ public sealed class OutreachTests : IDisposable
     }
 
     [Fact]
+    public async Task StopsACompetingCampaignInsideTheGlobalCooldown()
+    {
+        var (firstCampaign, prospect) = await SeedAsync();
+        var svc = Service();
+        Assert.True(await svc.ProcessDueAsync(Morning, CancellationToken.None));
+
+        var competing = new OutreachCampaign { Name = "Competing campaign", Status = OutreachCampaignStatus.Active };
+        competing.Steps.Add(new OutreachCampaignStep { Order = 1, DelayDays = 0, Subject = "Another email", Body = "This must not send." });
+        _db.Context.OutreachCampaigns.Add(competing);
+        await _db.Context.SaveChangesAsync();
+        _db.Context.OutreachCampaignRecipients.Add(new OutreachCampaignRecipient
+        {
+            CampaignId = competing.Id, ProspectId = prospect.Id, NextSendAtUtc = Morning.AddHours(2)
+        });
+        await _db.Context.SaveChangesAsync();
+
+        Assert.False(await svc.ProcessDueAsync(Morning.AddHours(2), CancellationToken.None));
+        Assert.Single(_resend.Sent);
+        var stopped = await _db.Context.OutreachCampaignRecipients.AsNoTracking().SingleAsync(x => x.CampaignId == competing.Id);
+        Assert.Equal(OutreachRecipientStatus.Stopped, stopped.Status);
+        Assert.NotEqual(firstCampaign.Id, competing.Id);
+    }
+
+    [Fact]
     public async Task NeverSendsOutsideSendingHours()
     {
         await SeedAsync();

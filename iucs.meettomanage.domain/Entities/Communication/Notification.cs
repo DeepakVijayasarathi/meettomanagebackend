@@ -48,6 +48,14 @@ namespace iucs.meettomanage.domain.Entities.Communication
         /// <summary>Optional structured payload (e.g. sessionId, invoiceId) as JSON.</summary>
         public string? MetadataJson { get; set; }
 
+        /// <summary>What a tap on this notification should open (see NotificationTargets), e.g. "invoice", "class",
+        /// "report", "ticket", "homework". Null for messages with nowhere specific to go.</summary>
+        [MaxLength(32)]
+        public string? TargetType { get; set; }
+
+        /// <summary>The specific record to open, when known; otherwise the app opens the list for <see cref="TargetType"/>.</summary>
+        public Guid? TargetId { get; set; }
+
         /// <summary>Set when this notification is one recipient's copy of a Bulk Email
         /// (TemplateKey "bulk-email") — lets the parent-facing feed offer a reply box
         /// and route it to the right <see cref="BulkEmailRecipient"/>.</summary>

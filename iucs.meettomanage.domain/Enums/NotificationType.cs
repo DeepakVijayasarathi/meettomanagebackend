@@ -13,6 +13,8 @@ namespace iucs.meettomanage.domain.Enums
         AttendanceUpdate,
         PerformanceSummary,
         PayoutStatement,
-        General
+        General,
+        Homework,
+        TestResult
     }
 }

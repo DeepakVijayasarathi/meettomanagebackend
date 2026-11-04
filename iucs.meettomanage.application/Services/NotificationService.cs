@@ -38,10 +38,12 @@ namespace iucs.meettomanage.application.Services
             string subject,
             string body,
             Guid? bulkEmailRecipientId = null,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            string? targetType = null,
+            Guid? targetId = null)
         {
             return await SendRenderedEmailAsync(
-                recipientUserId, recipientEmail, type, subject, body, null, bulkEmailRecipientId, cancellationToken);
+                recipientUserId, recipientEmail, type, subject, body, null, bulkEmailRecipientId, targetType, targetId, cancellationToken);
         }
 
         public async Task SendTemplatedEmailAsync(
@@ -50,10 +52,47 @@ namespace iucs.meettomanage.application.Services
             NotificationType type,
             string templateKey,
             IReadOnlyDictionary<string, string> tokens,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            string? targetType = null,
+            Guid? targetId = null)
         {
             var (subject, body) = await _emailTemplateService.RenderAsync(templateKey, tokens, cancellationToken);
-            await SendRenderedEmailAsync(recipientUserId, recipientEmail, type, subject, body, templateKey, null, cancellationToken);
+            await SendRenderedEmailAsync(recipientUserId, recipientEmail, type, subject, body, templateKey, null, targetType, targetId, cancellationToken);
+        }
+
+        public async Task NotifyInAppAsync(
+            Guid recipientUserId,
+            NotificationType type,
+            string subject,
+            string body,
+            string? targetType = null,
+            Guid? targetId = null,
+            CancellationToken cancellationToken = default)
+        {
+            var notification = new Notification
+            {
+                RecipientUserId = recipientUserId,
+                Type = type,
+                Channel = NotificationChannel.InApp,
+                Subject = subject,
+                Body = body,
+                Status = NotificationStatus.Sent,
+                SentAtUtc = DateTime.UtcNow,
+                TargetType = targetType ?? NotificationTargets.Infer(type, null),
+                TargetId = targetId,
+            };
+            await _unitOfWork.Repository<Notification>().AddAsync(notification, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            await PushAsync(notification, cancellationToken);
+        }
+
+        private Task PushAsync(Notification notification, CancellationToken cancellationToken)
+        {
+            var preview = notification.Body.Length > 180 ? notification.Body[..177] + "..." : notification.Body;
+            var data = new Dictionary<string, string> { ["notificationId"] = notification.Id.ToString(), ["kind"] = "notification" };
+            if (notification.TargetType is not null) data["targetType"] = notification.TargetType;
+            if (notification.TargetId is not null) data["targetId"] = notification.TargetId.Value.ToString();
+            return _pushSender.SendToUserAsync(notification.RecipientUserId, notification.Subject ?? "Update", preview, data, cancellationToken);
         }
 
         private async Task<NotificationStatus> SendRenderedEmailAsync(
@@ -64,6 +103,8 @@ namespace iucs.meettomanage.application.Services
             string body,
             string? templateKey,
             Guid? bulkEmailRecipientId,
+            string? targetType,
+            Guid? targetId,
             CancellationToken cancellationToken)
         {
             var notification = new Notification
@@ -81,6 +122,8 @@ namespace iucs.meettomanage.application.Services
                 // out over email via _emailSender.SendAsync(body) below, unchanged.
                 Body = HtmlText.PlainTextFromHtml(body),
                 BulkEmailRecipientId = bulkEmailRecipientId,
+                TargetType = targetType ?? NotificationTargets.Infer(type, templateKey),
+                TargetId = targetId,
             };
 
             try
@@ -105,9 +148,7 @@ namespace iucs.meettomanage.application.Services
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
             // Companion push for the family app; the sender no-ops unless the tenant enabled its FCM integration.
-            var preview = notification.Body.Length > 180 ? notification.Body[..177] + "..." : notification.Body;
-            await _pushSender.SendToUserAsync(recipientUserId, subject, preview,
-                new Dictionary<string, string> { ["notificationId"] = notification.Id.ToString(), ["kind"] = "notification" }, cancellationToken);
+            await PushAsync(notification, cancellationToken);
 
             return notification.Status;
         }
@@ -137,8 +178,16 @@ namespace iucs.meettomanage.application.Services
                     ReadAtUtc = n.ReadAtUtc,
                     BulkEmailRecipientId = n.BulkEmailRecipientId,
                     HasReplied = n.BulkEmailRecipientId != null && n.BulkEmailRecipient!.Reply != null,
+                    TargetType = n.TargetType,
+                    TargetId = n.TargetId,
                 })
                 .ToListAsync(cancellationToken);
+
+            // Rows written before targets were stored still get a sensible destination.
+            foreach (var item in items.Where(i => i.TargetType is null))
+            {
+                item.TargetType = NotificationTargets.Infer(item.Type, item.TemplateKey);
+            }
 
             var unreadCount = await repository.Query()
                 .CountAsync(n => n.RecipientUserId == userId && n.ReadAtUtc == null, cancellationToken);
