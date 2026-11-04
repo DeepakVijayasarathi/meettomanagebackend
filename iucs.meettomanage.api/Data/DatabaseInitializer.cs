@@ -85,6 +85,7 @@ namespace iucs.meettomanage.api.Data
             await EnsureParentFeedbackEmailTemplateAsync(context);
             await EnsureParentFeedbackMenusAsync(context);
             await EnsureHomeworkMenusAsync(context);
+            await EnsureMitoReviewMenusAsync(context);
             await EnsureSupportTicketEmailTemplatesAsync(context);
             await EnsureSupportTicketMenusAsync(context);
             await EnsureLearningPluginsMenusAsync(context);
@@ -865,6 +866,7 @@ namespace iucs.meettomanage.api.Data
             ("admin", "Finance", "My Subscription", "/admin/subscription", "Gauge", null),
             ("admin", "Insights", "Reports & Analytics", "/admin/reports", "BarChart3", PermissionModule.ReportsAnalytics.ToString()),
             ("admin", "Insights", "AI Insights", "/admin/ai-insights", "Sparkles", PermissionModule.ReportsAnalytics.ToString()),
+            ("admin", "Insights", "Mito Insights", "/admin/mito-insights", "Sparkles", PermissionModule.ReportsAnalytics.ToString()),
             ("admin", "Insights", "Bulk Email", "/admin/bulk-email", "Mail", PermissionModule.Communication.ToString()),
             ("admin", "Insights", "Bulk Email History", "/admin/bulk-email/history", "History", PermissionModule.Communication.ToString()),
             ("admin", "Insights", "Email Templates", "/admin/email-templates", "FileText", PermissionModule.Communication.ToString()),
@@ -875,6 +877,7 @@ namespace iucs.meettomanage.api.Data
             ("teacher", "Teaching", "My Classes", "/teacher/classes", "CalendarClock", PermissionModule.SessionCalendarManagement.ToString()),
             ("teacher", "Teaching", "Attendance & Records", "/teacher/attendance", "ClipboardList", PermissionModule.SessionCalendarManagement.ToString()),
             ("teacher", "Teaching", "Homework & Tests", "/teacher/homework", "BookOpenCheck", PermissionModule.SessionCalendarManagement.ToString()),
+            ("teacher", "Teaching", "Mito Review", "/teacher/mito-review", "Sparkles", PermissionModule.SessionCalendarManagement.ToString()),
             ("teacher", "Teaching", "Recordings", "/teacher/recordings", "Video", PermissionModule.SessionCalendarManagement.ToString()),
             ("teacher", "Teaching", "Demo Feedback", "/teacher/demo-feedback", "ClipboardCheck", PermissionModule.SessionCalendarManagement.ToString()),
             ("teacher", "Teaching", "Student Doubts", "/teacher/doubts", "MessageCircleQuestion", PermissionModule.Communication.ToString()),
@@ -2866,6 +2869,42 @@ namespace iucs.meettomanage.api.Data
                     Label = "Homework & Tests",
                     Path = path,
                     Icon = "BookOpenCheck",
+                    SortOrder = anchor.SortOrder + 1,
+                    IsActive = true,
+                    RequiredModule = module.ToString(),
+                });
+            }
+        }
+
+        /// <summary>Adds Mito usage and flagged-answer review to the Admin and Teacher menus in a DB seeded before it existed.</summary>
+        private static async Task EnsureMitoReviewMenusAsync(MeetToManageDbContext context)
+        {
+            foreach (var (portal, anchorPath, path, label, module) in new[]
+            {
+                ("admin", "/admin/ai-insights", "/admin/mito-insights", "Mito Insights", PermissionModule.ReportsAnalytics),
+                ("teacher", "/teacher/doubts", "/teacher/mito-review", "Mito Review", PermissionModule.SessionCalendarManagement),
+            })
+            {
+                if (context.MenuItems.Local.Any(m => m.Portal == portal && m.Path == path) ||
+                    await context.MenuItems.AnyAsync(m => m.Portal == portal && m.Path == path))
+                {
+                    continue;
+                }
+
+                var anchor = await context.MenuItems.FirstOrDefaultAsync(m => m.Portal == portal && m.Path == anchorPath);
+                if (anchor is null)
+                {
+                    continue;
+                }
+
+                context.MenuItems.Add(new MenuItem
+                {
+                    Portal = portal,
+                    Section = anchor.Section,
+                    SectionOrder = anchor.SectionOrder,
+                    Label = label,
+                    Path = path,
+                    Icon = "Sparkles",
                     SortOrder = anchor.SortOrder + 1,
                     IsActive = true,
                     RequiredModule = module.ToString(),
