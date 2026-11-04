@@ -2653,6 +2653,99 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("email_templates");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.MobileAppCrash", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AppVersion")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("app_version");
+
+                    b.Property<string>("Context")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("context");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("Fatal")
+                        .HasColumnType("boolean")
+                        .HasColumnName("fatal");
+
+                    b.Property<string>("Fingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("fingerprint");
+
+                    b.Property<DateTime>("FirstSeenAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("first_seen_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<DateTime>("LastSeenAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_seen_at_utc");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("message");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("name");
+
+                    b.Property<int>("Occurrences")
+                        .HasColumnType("integer")
+                        .HasColumnName("occurrences");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("platform");
+
+                    b.Property<string>("StackTop")
+                        .HasMaxLength(1500)
+                        .HasColumnType("character varying(1500)")
+                        .HasColumnName("stack_top");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mobile_app_crashes");
+
+                    b.HasIndex("LastSeenAtUtc")
+                        .HasDatabaseName("ix_mobile_app_crashes_last_seen_at_utc");
+
+                    b.HasIndex("Fingerprint", "AppVersion", "Platform")
+                        .IsUnique()
+                        .HasDatabaseName("ix_mobile_app_crashes_fingerprint_app_version_platform")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("mobile_app_crashes");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Communication.MobileAppDailyActivity", b =>
                 {
                     b.Property<Guid>("Id")

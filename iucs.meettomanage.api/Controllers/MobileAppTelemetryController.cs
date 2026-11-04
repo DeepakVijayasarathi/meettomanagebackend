@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
+using iucs.meettomanage.api.Monitoring;
 using iucs.meettomanage.api.Tenancy;
 using iucs.meettomanage.domain.Data;
 using iucs.meettomanage.domain.Entities.Communication;
@@ -105,6 +106,63 @@ public sealed class MobileAppTelemetryController(MeetToManageDbContext db) : Con
             await db.SaveChangesAsync(ct);
         }
         return Ok(new { installation.Id, installation.LastSeenAtUtc });
+    }
+
+    public sealed class CrashRequest
+    {
+        [Required, StringLength(16)] public string Platform { get; set; } = null!;
+        [Required, StringLength(32)] public string AppVersion { get; set; } = null!;
+        [Required, StringLength(200)] public string Name { get; set; } = null!;
+        [StringLength(2000)] public string? Message { get; set; }
+        [StringLength(64)] public string? Context { get; set; }
+        [StringLength(8000)] public string? Stack { get; set; }
+        public bool Fatal { get; set; }
+    }
+
+    /// <summary>
+    /// Records a family-app error. Reports are scrubbed and grouped by fingerprint; nothing ties a row to a user or
+    /// device. Rate-limited per account so a crash loop can't flood the table.
+    /// </summary>
+    [HttpPost("crash"), EnableRateLimiting("mobile-crash")]
+    public async Task<IActionResult> Crash(CrashRequest request, CancellationToken ct)
+    {
+        if (!AppAccessPolicy.IsParentApp(Request.Headers)) return BadRequest(new { detail = "This endpoint is only for the mobile family app." });
+        if (!Platforms.Contains(request.Platform)) return BadRequest(new { detail = "Unsupported platform." });
+
+        var name = CrashReportSanitizer.Scrub(request.Name, 120);
+        var context = CrashReportSanitizer.Scrub(request.Context, 64) is { Length: > 0 } c ? c : null;
+        var stackTop = CrashReportSanitizer.StackTop(request.Stack);
+        var fingerprint = CrashReportSanitizer.Fingerprint(name, stackTop, context);
+        var platform = request.Platform.ToLowerInvariant();
+        var version = request.AppVersion.Trim();
+        var now = DateTime.UtcNow;
+
+        var crash = await db.MobileAppCrashes.SingleOrDefaultAsync(x => x.Fingerprint == fingerprint && x.AppVersion == version && x.Platform == platform, ct);
+        if (crash is null)
+        {
+            crash = new MobileAppCrash
+            {
+                Fingerprint = fingerprint, Platform = platform, AppVersion = version, Name = name, Context = context,
+                Message = CrashReportSanitizer.Scrub(request.Message, 300), StackTop = stackTop, FirstSeenAtUtc = now,
+            };
+            db.MobileAppCrashes.Add(crash);
+        }
+        crash.Fatal |= request.Fatal;
+        crash.Occurrences++;
+        crash.LastSeenAtUtc = now;
+        await db.MobileAppCrashes.Where(x => x.LastSeenAtUtc < now.AddDays(-90)).ExecuteDeleteAsync(ct);
+        try
+        {
+            await db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            // Two devices reported the same new crash at once; the other insert won, so count this one on it.
+            db.Entry(crash).State = EntityState.Detached;
+            await db.MobileAppCrashes.Where(x => x.Fingerprint == fingerprint && x.AppVersion == version && x.Platform == platform)
+                .ExecuteUpdateAsync(set => set.SetProperty(x => x.Occurrences, x => x.Occurrences + 1).SetProperty(x => x.LastSeenAtUtc, now), ct);
+        }
+        return Accepted();
     }
 
     [HttpDelete("{installationId}")]

@@ -103,6 +103,10 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
             var daily = await db.MobileAppDailyActivities.AsNoTracking()
                 .Where(x => x.ActivityDate >= sinceDate && x.Role == "Parent")
                 .Select(x => new { x.UserId, x.ActivityDate }).ToListAsync(ct);
+            var crashes = await db.MobileAppCrashes.AsNoTracking().Where(x => x.LastSeenAtUtc >= since)
+                .OrderByDescending(x => x.Fatal).ThenByDescending(x => x.Occurrences).Take(10)
+                .Select(x => new { x.Name, x.Message, x.Context, x.StackTop, x.Fatal, x.Occurrences, x.AppVersion, x.Platform, x.FirstSeenAtUtc, x.LastSeenAtUtc })
+                .ToListAsync(ct);
             var settings = await db.AppSettings.AsNoTracking().ToDictionaryAsync(x => x.Key, x => x.Value, ct);
             bool Has(string key) => settings.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value);
             var eligible = await db.Users.CountAsync(x => x.Status == domain.Enums.UserStatus.Active && x.Role == domain.Enums.UserRole.Parent, ct);
@@ -138,6 +142,7 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
                 versions = recent30.GroupBy(x => new { x.AppVersion, x.Platform }).Select(g => new { version = g.Key.AppVersion, platform = g.Key.Platform, installations = g.Count(), lastSeenAtUtc = g.Max(x => x.LastSeenAtUtc) }).OrderByDescending(x => x.installations),
                 errors = recent30.Where(x => x.LastErrorCategory != null).GroupBy(x => x.LastErrorCategory!).Select(g => new { category = g.Key, installations = g.Count(), lastSeenAtUtc = g.Max(x => x.LastSeenAtUtc) }).OrderByDescending(x => x.installations),
                 trend,
+                crashes,
                 readiness = new
                 {
                     access = tenant.AppAccessGranted,

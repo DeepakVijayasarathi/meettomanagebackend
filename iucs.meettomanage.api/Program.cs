@@ -477,6 +477,16 @@ builder.Services.AddRateLimiter(options =>
                 Window = TimeSpan.FromMinutes(15),
                 QueueLimit = 0,
             }));
+    // Family-app error reports: enough for a real burst of distinct errors, not a crash loop.
+    options.AddPolicy("mobile-crash", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromHours(1),
+                QueueLimit = 0,
+            }));
     options.AddPolicy("marketing-chat", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
