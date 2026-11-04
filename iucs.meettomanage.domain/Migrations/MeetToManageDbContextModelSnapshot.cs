@@ -7193,6 +7193,33 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(64)")
                         .HasColumnName("time_zone_id");
 
+                    b.Property<DateTime?>("TwoFactorChallengeExpiresAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("two_factor_challenge_expires_at_utc");
+
+                    b.Property<string>("TwoFactorChallengeHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("two_factor_challenge_hash");
+
+                    b.Property<DateTime?>("TwoFactorEnabledAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("two_factor_enabled_at_utc");
+
+                    b.Property<long?>("TwoFactorLastUsedStep")
+                        .HasColumnType("bigint")
+                        .HasColumnName("two_factor_last_used_step");
+
+                    b.Property<string>("TwoFactorRecoveryCodeHashes")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("two_factor_recovery_code_hashes");
+
+                    b.Property<string>("TwoFactorSecretProtected")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("two_factor_secret_protected");
+
                     b.Property<DateTime?>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at_utc");
@@ -7211,6 +7238,9 @@ namespace iucs.meettomanage.domain.Migrations
 
                     b.HasIndex("RoleDefinitionId")
                         .HasDatabaseName("ix_users_role_definition_id");
+
+                    b.HasIndex("TwoFactorChallengeHash")
+                        .HasDatabaseName("ix_users_two_factor_challenge_hash");
 
                     b.HasIndex("Role", "Status")
                         .HasDatabaseName("ix_users_role_status");

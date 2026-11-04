@@ -33,6 +33,9 @@ namespace iucs.meettomanage.application.Dto.Users
 
         public DateTime? LastLoginAtUtc { get; set; }
 
+        /// <summary>Whether the account signs in with an authenticator code as well as its PIN.</summary>
+        public bool TwoFactorEnabled { get; set; }
+
         /// <summary>True when a system-issued PIN is stored (encrypted) and an admin can view it.</summary>
         public bool PinViewable { get; set; }
     }

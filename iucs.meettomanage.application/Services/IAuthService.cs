@@ -7,6 +7,22 @@ namespace iucs.meettomanage.application.Services
     {
         Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default);
 
+        /// <summary>Second step for accounts with two-step sign-in: exchanges the login challenge and a code for a session.</summary>
+        Task<LoginResponse> CompleteTwoFactorLoginAsync(CompleteTwoFactorLoginRequest request, CancellationToken cancellationToken = default);
+
+        Task<TwoFactorStatusDto> GetTwoFactorStatusAsync(Guid userId, CancellationToken cancellationToken = default);
+
+        /// <summary>Creates a new authenticator secret (not yet active) and returns it for the QR code.</summary>
+        Task<TwoFactorSetupDto> BeginTwoFactorSetupAsync(Guid userId, CancellationToken cancellationToken = default);
+
+        /// <summary>Turns two-step sign-in on once a code from the new secret checks out; returns one-time recovery codes.</summary>
+        Task<TwoFactorRecoveryCodesDto> EnableTwoFactorAsync(Guid userId, string code, CancellationToken cancellationToken = default);
+
+        Task DisableTwoFactorAsync(Guid userId, string code, CancellationToken cancellationToken = default);
+
+        /// <summary>Lets an admin clear another user's two-step sign-in after they lose their device and codes.</summary>
+        Task ResetTwoFactorAsync(Guid actorUserId, Guid userId, CancellationToken cancellationToken = default);
+
         Task<LoginResponse> GetCurrentUserAsync(Guid userId, CancellationToken cancellationToken = default);
 
         /// <summary>

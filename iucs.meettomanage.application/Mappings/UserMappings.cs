@@ -23,6 +23,7 @@ namespace iucs.meettomanage.application.Mappings
                 CreatedAtUtc = user.CreatedAtUtc,
                 LastLoginAtUtc = user.LastLoginAtUtc,
                 PinViewable = user.PinEncrypted != null,
+                TwoFactorEnabled = user.TwoFactorEnabledAtUtc != null,
             };
         }
 

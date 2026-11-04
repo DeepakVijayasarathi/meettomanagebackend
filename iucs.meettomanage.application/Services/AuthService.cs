@@ -30,6 +30,10 @@ namespace iucs.meettomanage.application.Services
         private readonly IAuditLogService _auditLog;
         private readonly INotificationService _notificationService;
         private readonly IConfiguration _configuration;
+        private readonly IPinVault? _vault;
+
+        private const int TwoFactorChallengeMinutes = 5;
+        private const int RecoveryCodeCount = 8;
 
         public AuthService(
             IUnitOfWork unitOfWork,
@@ -37,8 +41,10 @@ namespace iucs.meettomanage.application.Services
             ITokenService tokenService,
             IAuditLogService auditLog,
             INotificationService notificationService,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IPinVault? vault = null)
         {
+            _vault = vault;
             _unitOfWork = unitOfWork;
             _passwordHasher = passwordHasher;
             _tokenService = tokenService;
@@ -77,6 +83,126 @@ namespace iucs.meettomanage.application.Services
                 throw new UnauthorizedException("This account has been deactivated. Contact the administrator.");
             }
 
+            if (user.TwoFactorEnabledAtUtc is not null && user.TwoFactorSecretProtected is not null)
+            {
+                // PIN was right; hold the session back until an authenticator code arrives. Failed codes keep
+                // counting toward the same lockout as failed PINs.
+                var challenge = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32))
+                    .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+                user.TwoFactorChallengeHash = Sha256(challenge);
+                user.TwoFactorChallengeExpiresAtUtc = DateTime.UtcNow.AddMinutes(TwoFactorChallengeMinutes);
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+                return new LoginResponse
+                {
+                    TenantId = TenantExecution.Current?.Id,
+                    TenantCode = TenantExecution.Current?.Code,
+                    AccessToken = string.Empty,
+                    DefaultRoute = string.Empty,
+                    RequiresTwoFactor = true,
+                    TwoFactorChallenge = challenge,
+                };
+            }
+
+            return await IssueLoginAsync(user, cancellationToken);
+        }
+
+        public async Task<LoginResponse> CompleteTwoFactorLoginAsync(CompleteTwoFactorLoginRequest request, CancellationToken cancellationToken = default)
+        {
+            var hash = Sha256(request.Challenge.Trim());
+            var user = await _unitOfWork.Repository<User>().TrackedQuery()
+                .Include(u => u.TeacherProfile)
+                .FirstOrDefaultAsync(u => u.TwoFactorChallengeHash == hash, cancellationToken);
+            if (user is null || user.TwoFactorChallengeExpiresAtUtc is null || user.TwoFactorChallengeExpiresAtUtc < DateTime.UtcNow)
+                throw new UnauthorizedException("This sign-in has expired. Enter your PIN again.");
+            if (user.LockoutEndUtc is { } lockoutEnd && lockoutEnd > DateTime.UtcNow)
+                throw new UnauthorizedException("Too many failed attempts. Try again later.");
+            if (user.Status == UserStatus.Inactive)
+                throw new UnauthorizedException("This account has been deactivated. Contact the administrator.");
+
+            if (!AcceptSecondFactor(user, request.Code))
+            {
+                user.FailedLoginAttempts++;
+                if (user.FailedLoginAttempts >= MaxFailedLoginAttempts)
+                {
+                    user.LockoutEndUtc = DateTime.UtcNow.AddMinutes(LockoutMinutes);
+                    user.TwoFactorChallengeHash = null;
+                    user.TwoFactorChallengeExpiresAtUtc = null;
+                }
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+                throw new UnauthorizedException("That code didn't match. Check your authenticator app and try again.");
+            }
+
+            user.TwoFactorChallengeHash = null;
+            user.TwoFactorChallengeExpiresAtUtc = null;
+            return await IssueLoginAsync(user, cancellationToken);
+        }
+
+        public async Task<TwoFactorStatusDto> GetTwoFactorStatusAsync(Guid userId, CancellationToken cancellationToken = default)
+        {
+            var user = await _unitOfWork.Repository<User>().GetByIdAsync(userId, cancellationToken)
+                ?? throw new NotFoundException(nameof(User), userId);
+            return new TwoFactorStatusDto
+            {
+                Available = user.Role != UserRole.Parent,
+                Enabled = user.TwoFactorEnabledAtUtc is not null,
+                EnabledAtUtc = user.TwoFactorEnabledAtUtc,
+                RecoveryCodesLeft = RecoveryHashes(user).Count,
+            };
+        }
+
+        public async Task<TwoFactorSetupDto> BeginTwoFactorSetupAsync(Guid userId, CancellationToken cancellationToken = default)
+        {
+            var user = await TwoFactorUserAsync(userId, cancellationToken);
+            if (user.TwoFactorEnabledAtUtc is not null)
+                throw new ConflictException("Two-step sign-in is already on. Turn it off first to move it to a new device.");
+
+            var secret = Totp.ToBase32(Totp.NewSecret());
+            user.TwoFactorSecretProtected = Vault.Protect(secret);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            var issuer = _configuration["TwoFactor:Issuer"] is { Length: > 0 } configured ? configured : "Meet to Manage";
+            return new TwoFactorSetupDto { Secret = secret, OtpAuthUri = Totp.OtpAuthUri(issuer, user.Email, secret) };
+        }
+
+        public async Task<TwoFactorRecoveryCodesDto> EnableTwoFactorAsync(Guid userId, string code, CancellationToken cancellationToken = default)
+        {
+            var user = await TwoFactorUserAsync(userId, cancellationToken);
+            if (user.TwoFactorEnabledAtUtc is not null) throw new ConflictException("Two-step sign-in is already on.");
+            if (user.TwoFactorSecretProtected is null) throw new DomainValidationException("Start setup first.");
+            if (!AcceptAuthenticatorCode(user, code))
+                throw new DomainValidationException("That code didn't match. Make sure the time on your phone is correct and try again.");
+
+            var codes = Enumerable.Range(0, RecoveryCodeCount).Select(_ => NewRecoveryCode()).ToList();
+            user.TwoFactorRecoveryCodeHashes = System.Text.Json.JsonSerializer.Serialize(codes.Select(c => Sha256(NormalizeRecovery(c))).ToList());
+            user.TwoFactorEnabledAtUtc = DateTime.UtcNow;
+            await _auditLog.StageAsync(AuditAction.Update, nameof(User), user.Id.ToString(), "{\"twoFactor\":\"enabled\"}", cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return new TwoFactorRecoveryCodesDto { RecoveryCodes = codes };
+        }
+
+        public async Task DisableTwoFactorAsync(Guid userId, string code, CancellationToken cancellationToken = default)
+        {
+            var user = await TwoFactorUserAsync(userId, cancellationToken);
+            if (user.TwoFactorEnabledAtUtc is null) return;
+            if (!AcceptSecondFactor(user, code))
+                throw new DomainValidationException("That code didn't match. Enter a current code or one of your recovery codes.");
+            ClearTwoFactor(user);
+            await _auditLog.StageAsync(AuditAction.Update, nameof(User), user.Id.ToString(), "{\"twoFactor\":\"disabled\"}", cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        /// <summary>Admin recovery for a locked-out staff member (lost phone and recovery codes).</summary>
+        public async Task ResetTwoFactorAsync(Guid actorUserId, Guid userId, CancellationToken cancellationToken = default)
+        {
+            var user = await _unitOfWork.Repository<User>().TrackedQuery().FirstOrDefaultAsync(u => u.Id == userId, cancellationToken)
+                ?? throw new NotFoundException(nameof(User), userId);
+            if (user.Id == actorUserId) throw new DomainValidationException("Use your own security settings to change two-step sign-in.");
+            ClearTwoFactor(user);
+            await _auditLog.StageAsync(AuditAction.Update, nameof(User), user.Id.ToString(), "{\"twoFactor\":\"reset-by-admin\"}", cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        private async Task<LoginResponse> IssueLoginAsync(User user, CancellationToken cancellationToken)
+        {
             // Suspended users (fee default) may still log in: the portal shows the
             // pending-fee "Pay Now" popup and restricts content, per the requirement.
             var permissions = await LoadPermissionClaimsAsync(user, cancellationToken);
@@ -418,6 +544,65 @@ namespace iucs.meettomanage.application.Services
 
             return claims;
         }
+
+        private IPinVault Vault => _vault ?? throw new InvalidOperationException("Two-step sign-in needs the PIN vault to be configured.");
+
+        private async Task<User> TwoFactorUserAsync(Guid userId, CancellationToken cancellationToken)
+        {
+            var user = await _unitOfWork.Repository<User>().TrackedQuery().FirstOrDefaultAsync(u => u.Id == userId, cancellationToken)
+                ?? throw new NotFoundException(nameof(User), userId);
+            if (user.Role == UserRole.Parent)
+                throw new ForbiddenException("Two-step sign-in is for staff accounts. Family accounts can use the app's fingerprint or face lock.");
+            return user;
+        }
+
+        private bool AcceptSecondFactor(User user, string? code) => AcceptAuthenticatorCode(user, code) || AcceptRecoveryCode(user, code);
+
+        private bool AcceptAuthenticatorCode(User user, string? code)
+        {
+            if (user.TwoFactorSecretProtected is null || Vault.TryReveal(user.TwoFactorSecretProtected) is not { } secret) return false;
+            var step = Totp.Verify(Totp.FromBase32(secret), code, DateTime.UtcNow, user.TwoFactorLastUsedStep);
+            if (step is null) return false;
+            user.TwoFactorLastUsedStep = step;
+            return true;
+        }
+
+        private static bool AcceptRecoveryCode(User user, string? code)
+        {
+            if (string.IsNullOrWhiteSpace(code)) return false;
+            var hashes = RecoveryHashes(user);
+            if (!hashes.Remove(Sha256(NormalizeRecovery(code)))) return false;
+            user.TwoFactorRecoveryCodeHashes = System.Text.Json.JsonSerializer.Serialize(hashes);
+            return true;
+        }
+
+        private static List<string> RecoveryHashes(User user) =>
+            string.IsNullOrEmpty(user.TwoFactorRecoveryCodeHashes) ? []
+                : System.Text.Json.JsonSerializer.Deserialize<List<string>>(user.TwoFactorRecoveryCodeHashes) ?? [];
+
+        private static void ClearTwoFactor(User user)
+        {
+            user.TwoFactorEnabledAtUtc = null;
+            user.TwoFactorSecretProtected = null;
+            user.TwoFactorRecoveryCodeHashes = null;
+            user.TwoFactorLastUsedStep = null;
+            user.TwoFactorChallengeHash = null;
+            user.TwoFactorChallengeExpiresAtUtc = null;
+        }
+
+        /// <summary>"7KQ2-M9XD" style: 8 characters from an alphabet without look-alikes.</summary>
+        private static string NewRecoveryCode()
+        {
+            const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+            var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(8);
+            var chars = bytes.Select(b => alphabet[b % alphabet.Length]).ToArray();
+            return $"{new string(chars, 0, 4)}-{new string(chars, 4, 4)}";
+        }
+
+        private static string NormalizeRecovery(string code) => new string(code.Where(char.IsLetterOrDigit).ToArray()).ToUpperInvariant();
+
+        private static string Sha256(string value) =>
+            Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
         private static LoginResponse BuildResponse(User user, IReadOnlyList<string> permissions, TokenResult? token, string defaultRoute)
         {

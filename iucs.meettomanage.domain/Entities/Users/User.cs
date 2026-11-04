@@ -16,6 +16,7 @@ namespace iucs.meettomanage.domain.Entities.Users
     // background services all query one or both. Leading column Role also serves any
     // Role-only filter without needing a second single-column index.
     [Index(nameof(Role), nameof(Status))]
+    [Index(nameof(TwoFactorChallengeHash))]
     public class User : AuditEntity
     {
         [MaxLength(256)]
@@ -83,6 +84,26 @@ namespace iucs.meettomanage.domain.Entities.Users
 
         /// <summary>Set once FailedLoginAttempts crosses AuthService's threshold; null once cleared by a successful login.</summary>
         public DateTime? LockoutEndUtc { get; set; }
+
+        /// <summary>Authenticator-app secret, encrypted with the PIN vault. Set during setup, before 2FA is switched on.</summary>
+        [MaxLength(512)]
+        public string? TwoFactorSecretProtected { get; set; }
+
+        /// <summary>When two-step sign-in was switched on; null while it is off.</summary>
+        public DateTime? TwoFactorEnabledAtUtc { get; set; }
+
+        /// <summary>The last 30-second step whose code was accepted, so a code can't be replayed.</summary>
+        public long? TwoFactorLastUsedStep { get; set; }
+
+        /// <summary>JSON array of SHA-256 hashes of unused one-time recovery codes.</summary>
+        [MaxLength(2000)]
+        public string? TwoFactorRecoveryCodeHashes { get; set; }
+
+        /// <summary>SHA-256 hash of the short-lived token issued after the PIN check, exchanged for a session with a code.</summary>
+        [MaxLength(64)]
+        public string? TwoFactorChallengeHash { get; set; }
+
+        public DateTime? TwoFactorChallengeExpiresAtUtc { get; set; }
 
         /// <summary>
         /// Named role (preset) currently assigned; drives the post-login default

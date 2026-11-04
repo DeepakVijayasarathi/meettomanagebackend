@@ -59,7 +59,8 @@ namespace iucs.meettomanage.tests
         }
 
         private AuthService CreateAuthService() =>
-            new(_db.UnitOfWork, _hasher, new FakeTokenService(), _auditLog, _notifications, new ConfigurationBuilder().Build());
+            new(_db.UnitOfWork, _hasher, new FakeTokenService(), _auditLog, _notifications, new ConfigurationBuilder().Build(),
+                new AesGcmPinVault(Microsoft.Extensions.Options.Options.Create(new PinVaultOptions { Key = "test-key-test-key-test-key-test-key" })));
 
         private readonly FakeWhatsAppSender _whatsAppSender = new();
 

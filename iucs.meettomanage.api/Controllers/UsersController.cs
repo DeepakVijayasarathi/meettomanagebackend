@@ -476,6 +476,16 @@ namespace iucs.meettomanage.api.Controllers
         /// welcome message over Email or WhatsApp — used to get parents/teachers their
         /// first-login credentials. Returns 400 with a reason if delivery fails.
         /// </summary>
+        /// <summary>Clears a staff member's two-step sign-in after they lose their phone and recovery codes.</summary>
+        [HttpPost("{id:guid}/reset-two-factor")]
+        [HasPermission(PermissionModule.UserManagement, PermissionAction.Edit)]
+        public async Task<IActionResult> ResetTwoFactor(Guid id, [FromServices] IAuthService authService, CancellationToken cancellationToken)
+        {
+            var actorId = Guid.Parse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)!.Value);
+            await authService.ResetTwoFactorAsync(actorId, id, cancellationToken);
+            return NoContent();
+        }
+
         [HttpPost("{id:guid}/resend-credentials")]
         [HasPermission(PermissionModule.UserManagement, PermissionAction.Edit)]
         public async Task<IActionResult> ResendCredentials(

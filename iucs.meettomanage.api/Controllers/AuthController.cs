@@ -27,6 +27,41 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _authService.LoginAsync(request, cancellationToken));
         }
 
+        [HttpPost("login/two-factor")]
+        [AllowAnonymous]
+        [EnableRateLimiting("login")]
+        public async Task<ActionResult<LoginResponse>> CompleteTwoFactorLogin(CompleteTwoFactorLoginRequest request, CancellationToken cancellationToken)
+        {
+            return Ok(await _authService.CompleteTwoFactorLoginAsync(request, cancellationToken));
+        }
+
+        [HttpGet("two-factor")]
+        [Authorize]
+        public async Task<ActionResult<TwoFactorStatusDto>> TwoFactorStatus(CancellationToken cancellationToken) =>
+            Ok(await _authService.GetTwoFactorStatusAsync(CurrentUserId(), cancellationToken));
+
+        [HttpPost("two-factor/setup")]
+        [Authorize]
+        public async Task<ActionResult<TwoFactorSetupDto>> BeginTwoFactorSetup(CancellationToken cancellationToken) =>
+            Ok(await _authService.BeginTwoFactorSetupAsync(CurrentUserId(), cancellationToken));
+
+        [HttpPost("two-factor/enable")]
+        [Authorize]
+        [EnableRateLimiting("login")]
+        public async Task<ActionResult<TwoFactorRecoveryCodesDto>> EnableTwoFactor(TwoFactorCodeRequest request, CancellationToken cancellationToken) =>
+            Ok(await _authService.EnableTwoFactorAsync(CurrentUserId(), request.Code, cancellationToken));
+
+        [HttpPost("two-factor/disable")]
+        [Authorize]
+        [EnableRateLimiting("login")]
+        public async Task<IActionResult> DisableTwoFactor(TwoFactorCodeRequest request, CancellationToken cancellationToken)
+        {
+            await _authService.DisableTwoFactorAsync(CurrentUserId(), request.Code, cancellationToken);
+            return NoContent();
+        }
+
+        private Guid CurrentUserId() => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
         [HttpGet("me")]
         [Authorize]
         public async Task<ActionResult<LoginResponse>> Me(CancellationToken cancellationToken)
