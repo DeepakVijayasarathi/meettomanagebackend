@@ -12344,7 +12344,7 @@ namespace iucs.meettomanage.tests
             Assert.Equal(3, b.Visitors);
             Assert.Equal(3, b.Visits);
             Assert.Equal(1, b.SinglePageVisits);
-            Assert.Equal([3, 0, 2, 1, 0], b.Funnel.Select(f => f.Visitors).ToArray());
+            Assert.Equal([3, 0, 2, 1, 0, 0, 0], b.Funnel.Select(f => f.Visitors).ToArray());
             var home = Assert.Single(b.Pages, p => p.Path == "/");
             Assert.Equal(45, home.AvgSeconds);          // (60 + 30) / 2; B's lone view is not timed
             Assert.Equal(33.3, home.ExitRate);          // 1 of 3 home views ended a visit
@@ -12358,7 +12358,9 @@ namespace iucs.meettomanage.tests
                 Microsoft.Extensions.Logging.Abstractions.NullLogger<iucs.meettomanage.api.Services.HetznerSalesAssistant>.Instance);
             var tips = await assistant.SuggestSiteImprovementsAsync(b);
             Assert.False(tips.AiPowered);
-            Assert.Contains(tips.Improvements, t => t.Page == "/pricing" && t.Impact == "High"); // 2 saw pricing, 1 went on
+            // Under 20 visitors the assistant refuses to rank page changes and asks for more traffic first.
+            Assert.Contains(tips.Improvements, t => t.Page == "Analytics" && t.Impact == "Low");
+            Assert.DoesNotContain(tips.Improvements, t => t.Impact == "High");
         }
 
         [Fact]
