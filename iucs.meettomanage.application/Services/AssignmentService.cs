@@ -15,6 +15,7 @@ namespace iucs.meettomanage.application.Services
     public interface IAssignmentService
     {
         Task<IReadOnlyList<AssignmentDto>> ListAsync(AssignmentActor actor, Guid? batchId, CancellationToken cancellationToken = default);
+        Task<IReadOnlyList<AssignableBatchDto>> ListBatchesAsync(AssignmentActor actor, CancellationToken cancellationToken = default);
         Task<AssignmentDetailDto> GetAsync(AssignmentActor actor, Guid id, CancellationToken cancellationToken = default);
         Task<AssignmentDetailDto> CreateAsync(AssignmentActor actor, SaveAssignmentRequest request, UploadedFile? file, CancellationToken cancellationToken = default);
         Task<AssignmentDetailDto> UpdateAsync(AssignmentActor actor, Guid id, SaveAssignmentRequest request, UploadedFile? file, CancellationToken cancellationToken = default);
@@ -64,6 +65,23 @@ namespace iucs.meettomanage.application.Services
             if (batchId is not null) query = query.Where(a => a.BatchId == batchId);
             var items = await query.OrderByDescending(a => a.DueAtUtc ?? a.CreatedAtUtc).Take(300).ToListAsync(cancellationToken);
             return items.Select(a => ToDto<AssignmentDto>(a)).ToList();
+        }
+
+        public async Task<IReadOnlyList<AssignableBatchDto>> ListBatchesAsync(AssignmentActor actor, CancellationToken cancellationToken = default)
+        {
+            var query = _unitOfWork.Repository<Batch>().Query().Where(b => b.Status == BatchStatus.Active);
+            if (!actor.IsStaff)
+            {
+                var teacherId = await TeacherProfileIdAsync(actor.UserId, cancellationToken);
+                query = query.Where(b => b.TeacherProfileId == teacherId);
+            }
+            return await query.OrderBy(b => b.Name).Select(b => new AssignableBatchDto
+            {
+                Id = b.Id,
+                Name = b.Name,
+                CourseName = b.Course.Name,
+                StudentCount = b.Enrollments.Count(e => e.Status == EnrollmentStatus.Active),
+            }).ToListAsync(cancellationToken);
         }
 
         public async Task<AssignmentDetailDto> GetAsync(AssignmentActor actor, Guid id, CancellationToken cancellationToken = default)

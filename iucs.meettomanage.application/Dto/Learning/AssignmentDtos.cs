@@ -123,4 +123,12 @@ namespace iucs.meettomanage.application.Dto.Learning
     public record AssignmentActor(Guid UserId, bool IsStaff);
 
     public record AttachmentDownload(string Path, string FileName);
+
+    public class AssignableBatchDto
+    {
+        public Guid Id { get; set; }
+        public string Name { get; set; } = null!;
+        public string? CourseName { get; set; }
+        public int StudentCount { get; set; }
+    }
 }

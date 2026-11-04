@@ -37,6 +37,12 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<ActionResult<IReadOnlyList<AssignmentDto>>> List([FromQuery] Guid? batchId, CancellationToken cancellationToken) =>
             Ok(await _assignments.ListAsync(Actor(), batchId, cancellationToken));
 
+        /// <summary>Active batches the caller can set work for: their own as a teacher, all of them as staff.</summary>
+        [HttpGet("batches")]
+        [Authorize(Roles = StaffRoles)]
+        public async Task<ActionResult<IReadOnlyList<AssignableBatchDto>>> Batches(CancellationToken cancellationToken) =>
+            Ok(await _assignments.ListBatchesAsync(Actor(), cancellationToken));
+
         [HttpGet("{id:guid}")]
         [Authorize(Roles = StaffRoles)]
         public async Task<ActionResult<AssignmentDetailDto>> Get(Guid id, CancellationToken cancellationToken) =>

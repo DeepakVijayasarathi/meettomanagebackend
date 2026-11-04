@@ -124,6 +124,9 @@ namespace iucs.meettomanage.tests
             var created = await _service.CreateAsync(new AssignmentActor(teacher.Id, false), request, null);
 
             await Assert.ThrowsAsync<NotFoundException>(() => _service.GetAsync(new AssignmentActor(otherTeacher.Id, false), created.Id));
+            var own = Assert.Single(await _service.ListBatchesAsync(new AssignmentActor(teacher.Id, false)));
+            Assert.Equal(1, own.StudentCount);
+            Assert.Equal(2, (await _service.ListBatchesAsync(new AssignmentActor(Guid.NewGuid(), IsStaff: true))).Count);
             Assert.Single(await _service.ListAsync(new AssignmentActor(Guid.NewGuid(), IsStaff: true), null));
 
             var submissionId = (await _service.ListForParentAsync(parent.Id, null)).Single().SubmissionId;
