@@ -210,5 +210,19 @@ public sealed class OutreachTests : IDisposable
         Assert.NotNull(await svc.SaveSettingsAsync(s, CancellationToken.None));
     }
 
+    [Fact]
+    public void ImapReplyCleanupRemovesQuotedConversationAndSignature()
+    {
+        var input = "Yes, Tuesday works for me.\r\n\r\n--\r\nPriya\r\nOn Monday, Meet to Manage wrote:\r\nWould you like a demo?";
+        Assert.Equal("Yes, Tuesday works for me.", OutreachImapBackgroundService.CleanReply(input));
+    }
+
+    [Fact]
+    public void ImapReplyCleanupKeepsACompletePlainReply()
+    {
+        const string input = "Please send pricing and the available demo times.";
+        Assert.Equal(input, OutreachImapBackgroundService.CleanReply(input));
+    }
+
     public void Dispose() => _db.Dispose();
 }

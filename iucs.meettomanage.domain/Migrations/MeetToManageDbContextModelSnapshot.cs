@@ -4267,6 +4267,83 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("outreach_campaign_steps");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.OutreachMailboxSyncRun", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime?>("CompletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at_utc");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<int>("DuplicatesSkipped")
+                        .HasColumnType("integer")
+                        .HasColumnName("duplicates_skipped");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("error");
+
+                    b.Property<int>("FailedMessages")
+                        .HasColumnType("integer")
+                        .HasColumnName("failed_messages");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<int>("MessagesChecked")
+                        .HasColumnType("integer")
+                        .HasColumnName("messages_checked");
+
+                    b.Property<int>("RepliesImported")
+                        .HasColumnType("integer")
+                        .HasColumnName("replies_imported");
+
+                    b.Property<DateTime>("StartedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at_utc");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Trigger")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("trigger");
+
+                    b.Property<int>("UnmatchedSkipped")
+                        .HasColumnType("integer")
+                        .HasColumnName("unmatched_skipped");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_outreach_mailbox_sync_runs");
+
+                    b.HasIndex("StartedAtUtc")
+                        .HasDatabaseName("ix_outreach_mailbox_sync_runs_started_at_utc");
+
+                    b.ToTable("outreach_mailbox_sync_runs");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.OutreachProspect", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4448,6 +4525,11 @@ namespace iucs.meettomanage.domain.Migrations
                     b.HasKey("Id")
                         .HasName("pk_outreach_prospect_activities");
 
+                    b.HasIndex("ExternalId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_outreach_prospect_activities_external_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
                     b.HasIndex("ProspectId", "CreatedAtUtc")
                         .HasDatabaseName("ix_outreach_prospect_activities_prospect_id_created_at_utc");
 
@@ -4579,6 +4661,83 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasDatabaseName("ix_outreach_tasks_prospect_id_due_at_utc");
 
                     b.ToTable("outreach_tasks");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.OutreachUnmatchedEmail", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasMaxLength(10000)
+                        .HasColumnType("character varying(10000)")
+                        .HasColumnName("body");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<string>("ExternalId")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("external_id");
+
+                    b.Property<string>("From")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("from");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid?>("ProspectId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("prospect_id");
+
+                    b.Property<DateTime>("ReceivedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at_utc");
+
+                    b.Property<DateTime?>("ResolvedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("resolved_at_utc");
+
+                    b.Property<string>("Subject")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("subject");
+
+                    b.Property<string>("ThreadReferences")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("thread_references");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_outreach_unmatched_emails");
+
+                    b.HasIndex("ExternalId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_outreach_unmatched_emails_external_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("ResolvedAtUtc")
+                        .HasDatabaseName("ix_outreach_unmatched_emails_resolved_at_utc");
+
+                    b.ToTable("outreach_unmatched_emails");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.PlatformDemoRequest", b =>

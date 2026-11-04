@@ -106,6 +106,8 @@ namespace iucs.meettomanage.domain.Data
         public DbSet<OutreachCampaignStep> OutreachCampaignSteps => Set<OutreachCampaignStep>();
         public DbSet<OutreachCampaignRecipient> OutreachCampaignRecipients => Set<OutreachCampaignRecipient>();
         public DbSet<OutreachSend> OutreachSends => Set<OutreachSend>();
+        public DbSet<OutreachMailboxSyncRun> OutreachMailboxSyncRuns => Set<OutreachMailboxSyncRun>();
+        public DbSet<OutreachUnmatchedEmail> OutreachUnmatchedEmails => Set<OutreachUnmatchedEmail>();
         public DbSet<MarketingChatMessage> MarketingChatMessages => Set<MarketingChatMessage>();
 
         // Billing

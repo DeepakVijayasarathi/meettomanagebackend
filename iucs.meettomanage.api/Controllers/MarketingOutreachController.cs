@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace iucs.meettomanage.api.Controllers;
 
@@ -36,7 +37,8 @@ public sealed class ProspectUpdate
 
 public sealed class ProspectNoteInput { [Required, MaxLength(10000)] public string Detail { get; set; } = ""; }
 public sealed class ProspectTaskInput { [Required, MaxLength(200)] public string Title { get; set; } = ""; [MaxLength(120)] public string? AssignedTo { get; set; } public DateTime DueAtUtc { get; set; } }
-public sealed class InboundReplyInput { [Required, MaxLength(256)] public string From { get; set; } = ""; [MaxLength(200)] public string? Subject { get; set; } [Required, MaxLength(10000)] public string Text { get; set; } = ""; [MaxLength(200)] public string? ExternalId { get; set; } }
+public sealed class InboundReplyInput { [Required, MaxLength(256)] public string From { get; set; } = ""; [MaxLength(200)] public string? Subject { get; set; } [Required, MaxLength(10000)] public string Text { get; set; } = ""; [MaxLength(200)] public string? ExternalId { get; set; } public Guid? ProspectId { get; set; } }
+public sealed class LinkUnmatchedEmailInput { public Guid ProspectId { get; set; } }
 public sealed class DraftMessageInput { [RegularExpression("^(first-contact|reply)$")] public string Purpose { get; set; } = "first-contact"; }
 public sealed class CampaignAiBriefInput
 {
@@ -374,7 +376,50 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     public IActionResult ReplySyncStatus() => Ok(imapSync.Status);
 
     [HttpPost("replies/sync-now"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
-    public async Task<IActionResult> SyncRepliesNow(CancellationToken ct) => Ok(await imapSync.SyncNowAsync(ct));
+    public async Task<IActionResult> SyncRepliesNow(CancellationToken ct) => Ok(await imapSync.SyncNowAsync(ct, "Manual"));
+
+    [HttpPost("replies/test-connection"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
+    public async Task<IActionResult> TestReplyConnection(CancellationToken ct)
+    {
+        var result = await imapSync.TestConnectionAsync(ct);
+        return Ok(new { result.Success, result.Message });
+    }
+
+    [HttpGet("replies/sync-history"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> ReplySyncHistory(CancellationToken ct) => Ok(await db.OutreachMailboxSyncRuns.AsNoTracking()
+        .OrderByDescending(x => x.StartedAtUtc).Take(50)
+        .Select(x => new { x.Id, x.Trigger, x.Status, x.StartedAtUtc, x.CompletedAtUtc, x.MessagesChecked, x.RepliesImported, x.DuplicatesSkipped, x.UnmatchedSkipped, x.FailedMessages, x.Error })
+        .ToListAsync(ct));
+
+    [HttpGet("replies/unmatched"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> UnmatchedReplies(CancellationToken ct) => Ok(await db.OutreachUnmatchedEmails.AsNoTracking()
+        .Where(x => x.ResolvedAtUtc == null).OrderByDescending(x => x.ReceivedAtUtc).Take(100)
+        .Select(x => new { x.Id, x.From, x.Subject, x.Body, x.ThreadReferences, x.ReceivedAtUtc }).ToListAsync(ct));
+
+    [HttpPost("replies/unmatched/{id:guid}/link"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> LinkUnmatchedReply(Guid id, LinkUnmatchedEmailInput input, CancellationToken ct)
+    {
+        var message = await db.OutreachUnmatchedEmails.FirstOrDefaultAsync(x => x.Id == id && x.ResolvedAtUtc == null, ct) ?? throw new NotFoundException("Unmatched reply", id);
+        var prospect = await db.OutreachProspects.FirstOrDefaultAsync(x => x.Id == input.ProspectId, ct) ?? throw new NotFoundException("Prospect", input.ProspectId);
+        if (!await db.OutreachProspectActivities.AnyAsync(x => x.ExternalId == message.ExternalId, ct))
+            db.OutreachProspectActivities.Add(new OutreachProspectActivity { ProspectId = prospect.Id, Type = OutreachActivityType.ReplyReceived, Subject = message.Subject, Detail = message.Body, ExternalId = message.ExternalId, CreatedBy = "Mailbox review" });
+        prospect.Status = OutreachProspectStatus.Replied; prospect.PipelineStage = OutreachPipelineStage.Replied; prospect.NextActionAtUtc = DateTime.UtcNow.AddHours(24);
+        message.ProspectId = prospect.Id; message.ResolvedAtUtc = DateTime.UtcNow;
+        await db.OutreachCampaignRecipients.Where(x => x.ProspectId == prospect.Id && x.Status == OutreachRecipientStatus.Scheduled).ExecuteUpdateAsync(x => x.SetProperty(r => r.Status, OutreachRecipientStatus.Stopped), ct);
+        if (!await db.OutreachTasks.AnyAsync(x => x.ProspectId == prospect.Id && x.CompletedAtUtc == null, ct))
+            db.OutreachTasks.Add(new OutreachTask { ProspectId = prospect.Id, Title = "Review linked inbound reply", DueAtUtc = DateTime.UtcNow.AddHours(4), AssignedTo = prospect.AssignedTo });
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    [HttpDelete("replies/unmatched/{id:guid}"), Authorize(Roles = nameof(UserRole.Marketing))]
+    public async Task<IActionResult> DismissUnmatchedReply(Guid id, CancellationToken ct)
+    {
+        var message = await db.OutreachUnmatchedEmails.FirstOrDefaultAsync(x => x.Id == id && x.ResolvedAtUtc == null, ct) ?? throw new NotFoundException("Unmatched reply", id);
+        message.ResolvedAtUtc = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
 
     [HttpPost("replies/{id:guid}/analyze"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
     public async Task<IActionResult> AnalyzeReply(Guid id, CancellationToken ct)
@@ -514,7 +559,9 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         var secret = configuration["Outreach:InboundWebhookSecret"];
         if (string.IsNullOrWhiteSpace(secret) || Request.Headers["X-Outreach-Webhook-Secret"] != secret) return Unauthorized();
         var email = input.From.Trim().ToLowerInvariant();
-        var p = await db.OutreachProspects.FirstOrDefaultAsync(x => x.Email == email, ct);
+        var p = input.ProspectId is { } prospectId
+            ? await db.OutreachProspects.FirstOrDefaultAsync(x => x.Id == prospectId, ct)
+            : await db.OutreachProspects.FirstOrDefaultAsync(x => x.Email == email, ct);
         if (p is null) return Ok(new { matched = false });
         if (!string.IsNullOrWhiteSpace(input.ExternalId) && await db.OutreachProspectActivities.AnyAsync(x => x.ExternalId == input.ExternalId, ct)) return Ok(new { matched = true, duplicate = true });
         var normalized = input.Text.ToLowerInvariant();
@@ -529,7 +576,12 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
         if (!negative && !unsubscribe && !await db.OutreachTasks.AnyAsync(x => x.ProspectId == p.Id && x.CompletedAtUtc == null, ct))
             db.OutreachTasks.Add(new OutreachTask { ProspectId = p.Id, Title = positive ? "Respond to interested lead" : "Review inbound reply", DueAtUtc = DateTime.UtcNow.AddHours(4), AssignedTo = p.AssignedTo });
         await db.OutreachCampaignRecipients.Where(r => r.ProspectId == p.Id && r.Status == OutreachRecipientStatus.Scheduled).ExecuteUpdateAsync(u => u.SetProperty(r => r.Status, OutreachRecipientStatus.Stopped), ct);
-        await db.SaveChangesAsync(ct); return Ok(new { matched = true, prospectId = p.Id });
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } && !string.IsNullOrWhiteSpace(input.ExternalId))
+        {
+            return Ok(new { matched = true, duplicate = true });
+        }
+        return Ok(new { matched = true, prospectId = p.Id });
     }
 
     [HttpDelete("prospects/{id:guid}"), Authorize(Roles = nameof(UserRole.Marketing))]

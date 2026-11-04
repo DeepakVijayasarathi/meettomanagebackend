@@ -59,6 +59,16 @@ only after the API accepts it. Failed messages remain unread and retry later.
 The mailbox should be dedicated to outreach replies. Otherwise unrelated unread
 mail will also be inspected (unknown senders safely return `matched: false`).
 
+The marketing Reply Inbox also provides **Test connection** and **Sync now** actions,
+a durable history of automatic/manual runs, stale-sync and partial-failure alerts, and
+an unmatched-message review queue. Unknown senders can be linked to an existing
+prospect or dismissed. Linking a reply stops that prospect's scheduled follow-ups.
+
+Inbound message IDs are protected by a database unique index, so concurrent provider
+retries cannot create duplicate reply activities. HTML-only mail is converted to plain
+text and quoted conversation/signature content is removed before reply classification
+and AI analysis.
+
 ## Safe verification
 
 After deployment, send one test event for an existing test prospect. Confirm it

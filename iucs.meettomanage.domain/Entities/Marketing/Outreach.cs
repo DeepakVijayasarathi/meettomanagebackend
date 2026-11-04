@@ -119,6 +119,7 @@ namespace iucs.meettomanage.domain.Entities.Marketing
     }
 
     [Index(nameof(ProspectId), nameof(CreatedAtUtc))]
+    [Index(nameof(ExternalId), IsUnique = true)]
     public class OutreachProspectActivity : BaseEntity
     {
         public Guid ProspectId { get; set; }
@@ -128,6 +129,35 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         [MaxLength(10000)] public string? Detail { get; set; }
         [MaxLength(120)] public string? CreatedBy { get; set; }
         [MaxLength(200)] public string? ExternalId { get; set; }
+    }
+
+    [Index(nameof(StartedAtUtc))]
+    public class OutreachMailboxSyncRun : BaseEntity
+    {
+        [MaxLength(20)] public string Trigger { get; set; } = "Automatic";
+        [MaxLength(20)] public string Status { get; set; } = "Running";
+        public DateTime StartedAtUtc { get; set; } = DateTime.UtcNow;
+        public DateTime? CompletedAtUtc { get; set; }
+        public int MessagesChecked { get; set; }
+        public int RepliesImported { get; set; }
+        public int DuplicatesSkipped { get; set; }
+        public int UnmatchedSkipped { get; set; }
+        public int FailedMessages { get; set; }
+        [MaxLength(500)] public string? Error { get; set; }
+    }
+
+    [Index(nameof(ExternalId), IsUnique = true)]
+    [Index(nameof(ResolvedAtUtc))]
+    public class OutreachUnmatchedEmail : BaseEntity
+    {
+        [MaxLength(200)] public string ExternalId { get; set; } = null!;
+        [MaxLength(256)] public string From { get; set; } = null!;
+        [MaxLength(200)] public string? Subject { get; set; }
+        [MaxLength(10000)] public string Body { get; set; } = null!;
+        [MaxLength(500)] public string? ThreadReferences { get; set; }
+        public DateTime ReceivedAtUtc { get; set; } = DateTime.UtcNow;
+        public DateTime? ResolvedAtUtc { get; set; }
+        public Guid? ProspectId { get; set; }
     }
 
     [Index(nameof(ProspectId), nameof(DueAtUtc))]
