@@ -13,6 +13,8 @@ public class MitoConfigurationResponse
     public bool ReviewModeEnabled { get; set; } = true;
     public string DisplayName { get; set; } = "Mito";
     public string? WelcomeMessage { get; set; }
+    /// <summary>Mito questions each student may ask per day; 0 = unlimited.</summary>
+    public int DailyLimit { get; set; } = 40;
 }
 
 public class MitoChatTurn
@@ -41,6 +43,8 @@ public class MitoChatResponse
     public string Reply { get; set; } = string.Empty;
     public string Expression { get; set; } = "happy";
     public IReadOnlyList<string> SuggestedPrompts { get; set; } = [];
+    /// <summary>Questions left today under the academy's daily limit; null when unlimited.</summary>
+    public int? RemainingToday { get; set; }
 }
 
 public class MitoTodayResponse

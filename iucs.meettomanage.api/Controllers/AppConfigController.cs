@@ -27,7 +27,7 @@ namespace iucs.meettomanage.api.Controllers
             "app.features.classes", "app.features.fees", "app.features.updates", "app.features.reports",
             "app.features.resources", "app.features.recordings", "app.features.enrollment", "app.features.support", "app.features.feedback", "app.features.mito",
             "app.mito.chatEnabled", "app.mito.quizEnabled", "app.mito.voiceEnabled", "app.mito.modes.doubt", "app.mito.modes.plan",
-            "app.mito.modes.review", "app.mito.displayName", "app.mito.welcomeMessage",
+            "app.mito.modes.review", "app.mito.displayName", "app.mito.welcomeMessage", "app.mito.dailyLimit",
         ];
 
         [HttpGet]

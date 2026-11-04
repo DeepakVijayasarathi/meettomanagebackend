@@ -24,9 +24,11 @@ public class MitoController : ControllerBase
     private readonly IUnitOfWork _unitOfWork;
     private readonly ISettingsService _settings;
     private readonly IAssignmentService _assignments;
+    private readonly IMitoUsageService _usage;
 
-    public MitoController(IParentPortalService portal, IMitoAssistant mito, IUnitOfWork unitOfWork, ISettingsService settings, IAssignmentService assignments)
+    public MitoController(IParentPortalService portal, IMitoAssistant mito, IUnitOfWork unitOfWork, ISettingsService settings, IAssignmentService assignments, IMitoUsageService usage)
     {
+        _usage = usage;
         _assignments = assignments;
         _portal = portal;
         _mito = mito;
@@ -67,7 +69,21 @@ public class MitoController : ControllerBase
             .ToList();
         var context = new MitoStudentContext(child.Name, child.AcademicLevel, child.ClassesCompleted,
             child.ClassesRemaining, child.AttendancePercent, upcoming, recent, pendingWork, results);
-        return Ok(await _mito.ReplyAsync(context, request.Messages, request.Mode, cancellationToken));
+        var remaining = await _usage.RecordAsync(request.ChildId, request.Mode, configuration.DailyLimit, cancellationToken);
+        var reply = await _mito.ReplyAsync(context, request.Messages, request.Mode, cancellationToken);
+        reply.RemainingToday = remaining;
+        return Ok(reply);
+    }
+
+    /// <summary>A family reports a Mito answer as wrong or unhelpful, for their teacher to review.</summary>
+    [HttpPost("flag")]
+    [EnableRateLimiting("mito-chat")]
+    public async Task<IActionResult> Flag(FlagMitoAnswerRequest request, CancellationToken cancellationToken)
+    {
+        var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        await RequireChildAsync(userId, request.ChildId, cancellationToken);
+        await _usage.FlagAsync(request, cancellationToken);
+        return NoContent();
     }
 
     [HttpGet("today")]
@@ -127,9 +143,11 @@ public class MitoController : ControllerBase
     [EnableRateLimiting("mito-chat")]
     public async Task<ActionResult<IReadOnlyList<MitoQuizQuestionDto>>> Quiz(MitoQuizRequest request, CancellationToken cancellationToken)
     {
-        RequireEnabled(await GetConfigurationAsync(cancellationToken), quiz: true);
+        var quizConfiguration = await GetConfigurationAsync(cancellationToken);
+        RequireEnabled(quizConfiguration, quiz: true);
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
         await RequireChildAsync(userId, request.ChildId, cancellationToken);
+        await _usage.RecordAsync(request.ChildId, "quiz", quizConfiguration.DailyLimit, cancellationToken);
         var scopes = await _unitOfWork.Repository<BatchEnrollment>().Query()
             .Where(x => x.ChildId == request.ChildId && x.Status == EnrollmentStatus.Active)
             .Select(x => new { x.Batch.CourseId, x.Batch.Course.DepartmentId }).ToListAsync(cancellationToken);
@@ -199,8 +217,13 @@ public class MitoController : ControllerBase
             ReviewModeEnabled = Enabled("app.mito.modes.review"),
             DisplayName = Value("app.mito.displayName") is { Length: <= 40 } name ? name : "Mito",
             WelcomeMessage = Value("app.mito.welcomeMessage") is { Length: <= 240 } message ? message : null,
+            DailyLimit = DailyLimit(Value("app.mito.dailyLimit")),
         };
     }
+
+    /// <summary>Questions per student per day; 0 means unlimited. Unset or invalid falls back to the default.</summary>
+    public static int DailyLimit(string? value) =>
+        int.TryParse(value, out var limit) && limit is >= 0 and <= 1000 ? limit : MitoUsageService.DefaultDailyLimit;
 
     private static void RequireEnabled(MitoConfigurationResponse configuration, bool chat = false, bool quiz = false, string? mode = null)
     {

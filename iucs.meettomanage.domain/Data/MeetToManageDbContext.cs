@@ -80,6 +80,8 @@ namespace iucs.meettomanage.domain.Data
         // Learning — homework and tests
         public DbSet<Assignment> Assignments => Set<Assignment>();
         public DbSet<AssignmentSubmission> AssignmentSubmissions => Set<AssignmentSubmission>();
+        public DbSet<MitoUsageDay> MitoUsageDays => Set<MitoUsageDay>();
+        public DbSet<MitoAnswerFlag> MitoAnswerFlags => Set<MitoAnswerFlag>();
 
         // Admission
         public DbSet<DemoBooking> DemoBookings => Set<DemoBooking>();

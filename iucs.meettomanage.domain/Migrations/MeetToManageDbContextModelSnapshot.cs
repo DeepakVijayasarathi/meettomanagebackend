@@ -3489,6 +3489,146 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("assignment_submissions");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Learning.MitoAnswerFlag", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Answer")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("answer");
+
+                    b.Property<Guid>("ChildId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("child_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("mode");
+
+                    b.Property<string>("Question")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("question");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("reason");
+
+                    b.Property<string>("Resolution")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("resolution");
+
+                    b.Property<DateTime?>("ResolvedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("resolved_at_utc");
+
+                    b.Property<Guid?>("ResolvedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("resolved_by_user_id");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mito_answer_flags");
+
+                    b.HasIndex("ChildId")
+                        .HasDatabaseName("ix_mito_answer_flags_child_id");
+
+                    b.HasIndex("ResolvedAtUtc", "CreatedAtUtc")
+                        .HasDatabaseName("ix_mito_answer_flags_resolved_at_utc_created_at_utc");
+
+                    b.ToTable("mito_answer_flags");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Learning.MitoUsageDay", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ChildId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("child_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date")
+                        .HasColumnName("date");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<int>("DoubtRequests")
+                        .HasColumnType("integer")
+                        .HasColumnName("doubt_requests");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<int>("PlanRequests")
+                        .HasColumnType("integer")
+                        .HasColumnName("plan_requests");
+
+                    b.Property<int>("QuizRequests")
+                        .HasColumnType("integer")
+                        .HasColumnName("quiz_requests");
+
+                    b.Property<int>("Requests")
+                        .HasColumnType("integer")
+                        .HasColumnName("requests");
+
+                    b.Property<int>("ReviewRequests")
+                        .HasColumnType("integer")
+                        .HasColumnName("review_requests");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_mito_usage_days");
+
+                    b.HasIndex("Date")
+                        .HasDatabaseName("ix_mito_usage_days_date");
+
+                    b.HasIndex("ChildId", "Date")
+                        .IsUnique()
+                        .HasDatabaseName("ix_mito_usage_days_child_id_date")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("mito_usage_days");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Marketing.BlogPost", b =>
                 {
                     b.Property<Guid>("Id")
@@ -7956,6 +8096,30 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasConstraintName("fk_assignment_submissions_children_child_id");
 
                     b.Navigation("Assignment");
+
+                    b.Navigation("Child");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Learning.MitoAnswerFlag", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.Child", "Child")
+                        .WithMany()
+                        .HasForeignKey("ChildId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_mito_answer_flags_children_child_id");
+
+                    b.Navigation("Child");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Learning.MitoUsageDay", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.Child", "Child")
+                        .WithMany()
+                        .HasForeignKey("ChildId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_mito_usage_days_children_child_id");
 
                     b.Navigation("Child");
                 });
