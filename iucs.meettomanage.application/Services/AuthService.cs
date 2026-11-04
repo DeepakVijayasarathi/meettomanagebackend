@@ -143,7 +143,7 @@ namespace iucs.meettomanage.application.Services
                 ?? throw new NotFoundException(nameof(User), userId);
             return new TwoFactorStatusDto
             {
-                Available = user.Role != UserRole.Parent,
+                Available = user.Role is not (UserRole.Parent or UserRole.Marketing),
                 Enabled = user.TwoFactorEnabledAtUtc is not null,
                 EnabledAtUtc = user.TwoFactorEnabledAtUtc,
                 RecoveryCodesLeft = RecoveryHashes(user).Count,
@@ -553,6 +553,8 @@ namespace iucs.meettomanage.application.Services
                 ?? throw new NotFoundException(nameof(User), userId);
             if (user.Role == UserRole.Parent)
                 throw new ForbiddenException("Two-step sign-in is for staff accounts. Family accounts can use the app's fingerprint or face lock.");
+            if (user.Role == UserRole.Marketing)
+                throw new ForbiddenException("Two-step sign-in isn't available for the marketing console yet.");
             return user;
         }
 
