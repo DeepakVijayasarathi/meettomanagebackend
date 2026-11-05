@@ -325,10 +325,36 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     [HttpGet("today"), Authorize(Roles = nameof(UserRole.Marketing))]
     public async Task<IActionResult> Today(CancellationToken ct)
     {
+        var now = DateTime.UtcNow;
+        var staleCutoff = now.AddDays(-14);
+        var active = db.OutreachProspects.AsNoTracking().Where(x =>
+            x.PipelineStage != OutreachPipelineStage.Won && x.PipelineStage != OutreachPipelineStage.Lost &&
+            x.Status != OutreachProspectStatus.Unsubscribed && x.Status != OutreachProspectStatus.Bounced &&
+            x.Status != OutreachProspectStatus.NotInterested);
+        var overdue = await active.CountAsync(x => x.NextActionAtUtc != null && x.NextActionAtUtc < now, ct);
+        var dueToday = await active.CountAsync(x => x.NextActionAtUtc != null && x.NextActionAtUtc >= now && x.NextActionAtUtc < now.AddDays(1), ct);
+        var unassigned = await active.CountAsync(x => x.AssignedTo == null || x.AssignedTo == "", ct);
+        var noNextStep = await active.CountAsync(x => x.NextActionAtUtc == null, ct);
+        var stale = await active.CountAsync(x => (x.LastContactedAtUtc ?? x.CreatedAtUtc) < staleCutoff, ct);
+        var attentionRows = await active
+            .Where(x => (x.NextActionAtUtc != null && x.NextActionAtUtc < now) || x.NextActionAtUtc == null ||
+                        x.AssignedTo == null || x.AssignedTo == "" || (x.LastContactedAtUtc ?? x.CreatedAtUtc) < staleCutoff)
+            .OrderByDescending(x => x.NextActionAtUtc != null && x.NextActionAtUtc < now)
+            .ThenByDescending(x => x.LeadScore).Take(20).ToListAsync(ct);
+        var attention = attentionRows.Select(x => new
+        {
+            x.Id, x.Email, x.FirstName, x.AcademyName, x.City, x.Region, x.Phone, x.Source, x.Notes,
+            status = x.Status.ToString(), x.LastContactedAtUtc, x.CreatedAtUtc, x.LeadScore, x.ScoreReason,
+            pipelineStage = x.PipelineStage.ToString(), x.AssignedTo, x.NextActionAtUtc,
+            priority = x.NextActionAtUtc != null && x.NextActionAtUtc < now ? "Critical" : x.LeadScore >= 70 ? "High" : "Normal",
+            reason = x.NextActionAtUtc != null && x.NextActionAtUtc < now ? "Next action overdue" :
+                string.IsNullOrWhiteSpace(x.AssignedTo) ? "No owner assigned" :
+                x.NextActionAtUtc == null ? "No next action scheduled" : "No activity for 14+ days"
+        }).ToList();
         var hotLeads = await db.OutreachProspects.AsNoTracking().Where(x => x.LeadScore >= 60 && (x.PipelineStage == OutreachPipelineStage.New || x.PipelineStage == OutreachPipelineStage.Qualified)).OrderByDescending(x => x.LeadScore).Take(10).Select(x => new { x.Id, x.Email, x.FirstName, x.AcademyName, x.Region, x.LeadScore, pipelineStage = x.PipelineStage.ToString(), x.ScoreReason }).ToListAsync(ct);
         var replies = await db.OutreachProspects.AsNoTracking().Where(x => x.PipelineStage == OutreachPipelineStage.Replied || x.Status == OutreachProspectStatus.Interested).OrderByDescending(x => x.UpdatedAtUtc).Take(10).Select(x => new { x.Id, x.Email, x.FirstName, x.AcademyName, x.Region, x.LeadScore, pipelineStage = x.PipelineStage.ToString(), x.NextActionAtUtc }).ToListAsync(ct);
         var tasks = await db.OutreachTasks.AsNoTracking().Where(x => x.CompletedAtUtc == null).OrderBy(x => x.DueAtUtc).Take(20).Select(x => new { x.Id, x.ProspectId, x.Title, x.AssignedTo, x.DueAtUtc, x.Prospect.Email, x.Prospect.AcademyName, x.Prospect.Region }).ToListAsync(ct);
-        return Ok(new { hotLeads, replies, tasks, generatedAtUtc = DateTime.UtcNow });
+        return Ok(new { crmHealth = new { overdue, dueToday, unassigned, noNextStep, stale }, attention, hotLeads, replies, tasks, generatedAtUtc = now });
     }
 
     [HttpGet("history"), Authorize(Roles = nameof(UserRole.Marketing))]
