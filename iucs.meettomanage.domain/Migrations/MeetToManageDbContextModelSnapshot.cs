@@ -3489,6 +3489,100 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("assignment_submissions");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Learning.Certificate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("batch_id");
+
+                    b.Property<Guid>("ChildId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("child_id");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("code");
+
+                    b.Property<string>("CourseName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("course_name");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<DateTime>("IssuedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("issued_at_utc");
+
+                    b.Property<DateTime?>("RevokedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at_utc");
+
+                    b.Property<string>("RevokedReason")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("revoked_reason");
+
+                    b.Property<string>("StudentName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("student_name");
+
+                    b.Property<string>("TeacherName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("teacher_name");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_certificates");
+
+                    b.HasIndex("BatchId")
+                        .HasDatabaseName("ix_certificates_batch_id");
+
+                    b.HasIndex("Code")
+                        .IsUnique()
+                        .HasDatabaseName("ix_certificates_code")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("ChildId", "BatchId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_certificates_child_id_batch_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.ToTable("certificates");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Learning.MitoAnswerFlag", b =>
                 {
                     b.Property<Guid>("Id")
@@ -8255,6 +8349,26 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasConstraintName("fk_assignment_submissions_children_child_id");
 
                     b.Navigation("Assignment");
+
+                    b.Navigation("Child");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Learning.Certificate", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Academics.Batch", "Batch")
+                        .WithMany()
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_certificates_batches_batch_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.Child", "Child")
+                        .WithMany()
+                        .HasForeignKey("ChildId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_certificates_children_child_id");
+
+                    b.Navigation("Batch");
 
                     b.Navigation("Child");
                 });

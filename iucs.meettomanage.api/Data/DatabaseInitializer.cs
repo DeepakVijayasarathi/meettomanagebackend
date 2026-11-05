@@ -86,6 +86,7 @@ namespace iucs.meettomanage.api.Data
             await EnsureParentFeedbackMenusAsync(context);
             await EnsureHomeworkMenusAsync(context);
             await EnsureMitoReviewMenusAsync(context);
+            await EnsureCertificateMenusAsync(context);
             await EnsureSupportTicketEmailTemplatesAsync(context);
             await EnsureSupportTicketMenusAsync(context);
             await EnsureLearningPluginsMenusAsync(context);
@@ -847,6 +848,7 @@ namespace iucs.meettomanage.api.Data
             ("admin", "Academics", "Recordings", "/admin/recordings", "Video", PermissionModule.SessionCalendarManagement.ToString()),
             ("admin", "Academics", "Quiz Bank", "/admin/quiz-bank", "Sparkles", PermissionModule.CourseBatchManagement.ToString()),
             ("admin", "Academics", "Homework & Tests", "/admin/homework", "BookOpenCheck", PermissionModule.CourseBatchManagement.ToString()),
+            ("admin", "Academics", "Certificates", "/admin/certificates", "Award", PermissionModule.CourseBatchManagement.ToString()),
             ("admin", "People", "Users", "/admin/users", "Users", PermissionModule.UserManagement.ToString()),
             ("admin", "People", "Roles & Permissions", "/admin/permissions", "ShieldCheck", PermissionModule.UserManagement.ToString()),
             ("admin", "People", "Enrollment Review", "/admin/enrollments", "ClipboardCheck", PermissionModule.Admission.ToString()),
@@ -887,6 +889,7 @@ namespace iucs.meettomanage.api.Data
             ("parent", null, "Dashboard", "/parent", "LayoutDashboard", null),
             ("parent", "Learning", "Schedule & Live Class", "/parent/schedule", "CalendarClock", PermissionModule.SessionCalendarManagement.ToString()),
             ("parent", "Learning", "Homework & Tests", "/parent/homework", "BookOpenCheck", PermissionModule.SessionCalendarManagement.ToString()),
+            ("parent", "Learning", "Certificates", "/parent/certificates", "Award", null),
             ("parent", "Learning", "Resources", "/parent/resources", "FolderOpen", PermissionModule.ContentAccessManagement.ToString()),
             ("parent", "Learning", "Recordings", "/parent/recordings", "Video", PermissionModule.ContentAccessManagement.ToString()),
             ("parent", "Learning", "Student View", "/student", "Sparkles", null),
@@ -2908,6 +2911,44 @@ namespace iucs.meettomanage.api.Data
                     SortOrder = anchor.SortOrder + 1,
                     IsActive = true,
                     RequiredModule = module.ToString(),
+                });
+            }
+        }
+
+        /// <summary>Adds completion certificates to the Admin and Parent menus in a DB seeded before they existed.</summary>
+        private static async Task EnsureCertificateMenusAsync(MeetToManageDbContext context)
+        {
+            foreach (var (portal, anchorPath, module) in new[]
+            {
+                ("admin", "/admin/homework", (PermissionModule?)PermissionModule.CourseBatchManagement),
+                ("parent", "/parent/homework", null),
+            })
+            {
+                var path = $"/{portal}/certificates";
+                if (context.MenuItems.Local.Any(m => m.Portal == portal && m.Path == path) ||
+                    await context.MenuItems.AnyAsync(m => m.Portal == portal && m.Path == path))
+                {
+                    continue;
+                }
+
+                var anchor = context.MenuItems.Local.FirstOrDefault(m => m.Portal == portal && m.Path == anchorPath)
+                    ?? await context.MenuItems.FirstOrDefaultAsync(m => m.Portal == portal && m.Path == anchorPath);
+                if (anchor is null)
+                {
+                    continue;
+                }
+
+                context.MenuItems.Add(new MenuItem
+                {
+                    Portal = portal,
+                    Section = anchor.Section,
+                    SectionOrder = anchor.SectionOrder,
+                    Label = "Certificates",
+                    Path = path,
+                    Icon = "Award",
+                    SortOrder = anchor.SortOrder + 1,
+                    IsActive = true,
+                    RequiredModule = module?.ToString(),
                 });
             }
         }

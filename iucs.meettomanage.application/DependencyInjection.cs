@@ -43,6 +43,7 @@ namespace iucs.meettomanage.application
             services.AddScoped<IParentFeedbackService, ParentFeedbackService>();
             services.AddScoped<IAssignmentService, AssignmentService>();
             services.AddScoped<IMitoUsageService, MitoUsageService>();
+            services.AddScoped<ICertificateService, CertificateService>();
             services.AddScoped<IResourceFolderService, ResourceFolderService>();
             services.AddScoped<IStoreService, StoreService>();
             services.AddScoped<IPlatformDemoRequestService, PlatformDemoRequestService>();

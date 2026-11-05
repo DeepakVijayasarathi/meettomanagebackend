@@ -16,6 +16,7 @@ namespace iucs.meettomanage.application.Common
         public const string Resource = "resource";
         public const string Recording = "recording";
         public const string Home = "home";
+        public const string Certificate = "certificate";
 
         /// <summary>
         /// Default target for notifications whose sender did not name one, inferred from the
