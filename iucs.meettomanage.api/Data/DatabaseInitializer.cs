@@ -87,6 +87,7 @@ namespace iucs.meettomanage.api.Data
             await EnsureHomeworkMenusAsync(context);
             await EnsureMitoReviewMenusAsync(context);
             await EnsureCertificateMenusAsync(context);
+            await EnsureWaitlistMenusAsync(context);
             await EnsureSupportTicketEmailTemplatesAsync(context);
             await EnsureSupportTicketMenusAsync(context);
             await EnsureLearningPluginsMenusAsync(context);
@@ -849,6 +850,7 @@ namespace iucs.meettomanage.api.Data
             ("admin", "Academics", "Quiz Bank", "/admin/quiz-bank", "Sparkles", PermissionModule.CourseBatchManagement.ToString()),
             ("admin", "Academics", "Homework & Tests", "/admin/homework", "BookOpenCheck", PermissionModule.CourseBatchManagement.ToString()),
             ("admin", "Academics", "Certificates", "/admin/certificates", "Award", PermissionModule.CourseBatchManagement.ToString()),
+            ("admin", "Academics", "Batch Waitlist", "/admin/waitlist", "ListOrdered", PermissionModule.Admission.ToString()),
             ("admin", "People", "Users", "/admin/users", "Users", PermissionModule.UserManagement.ToString()),
             ("admin", "People", "Roles & Permissions", "/admin/permissions", "ShieldCheck", PermissionModule.UserManagement.ToString()),
             ("admin", "People", "Enrollment Review", "/admin/enrollments", "ClipboardCheck", PermissionModule.Admission.ToString()),
@@ -913,6 +915,7 @@ namespace iucs.meettomanage.api.Data
             ("admission", "Pipeline", "Teacher Assignment", "/admission/demo-teacher-assignment", "UserCog", PermissionModule.Admission.ToString()),
             ("admission", "Pipeline", "Demo Feedback", "/admission/demo-feedback", "ClipboardCheck", PermissionModule.Admission.ToString()),
             ("admission", "Pipeline", "Conversion Board", "/admission/conversion", "KanbanSquare", PermissionModule.Admission.ToString()),
+            ("admission", "Pipeline", "Batch Waitlist", "/admission/waitlist", "ListOrdered", PermissionModule.Admission.ToString()),
             ("admission", "Pipeline", "Academic Calendar", "/admission/calendar", "CalendarDays", PermissionModule.SessionCalendarManagement.ToString()),
             ("admission", "Pipeline", "Sessions", "/admission/sessions", "CalendarClock", PermissionModule.SessionCalendarManagement.ToString()),
             ("admission", "CRM", "Leads & Parents", "/admission/leads", "UserSearch", PermissionModule.Admission.ToString()),
@@ -2949,6 +2952,40 @@ namespace iucs.meettomanage.api.Data
                     SortOrder = anchor.SortOrder + 1,
                     IsActive = true,
                     RequiredModule = module?.ToString(),
+                });
+            }
+        }
+
+        /// <summary>Adds the batch waitlist to the Admission and Admin menus in a DB seeded before it existed.</summary>
+        private static async Task EnsureWaitlistMenusAsync(MeetToManageDbContext context)
+        {
+            foreach (var (portal, anchorPath) in new[] { ("admission", "/admission/conversion"), ("admin", "/admin/certificates") })
+            {
+                var path = $"/{portal}/waitlist";
+                if (context.MenuItems.Local.Any(m => m.Portal == portal && m.Path == path) ||
+                    await context.MenuItems.AnyAsync(m => m.Portal == portal && m.Path == path))
+                {
+                    continue;
+                }
+
+                var anchor = context.MenuItems.Local.FirstOrDefault(m => m.Portal == portal && m.Path == anchorPath)
+                    ?? await context.MenuItems.FirstOrDefaultAsync(m => m.Portal == portal && m.Path == anchorPath);
+                if (anchor is null)
+                {
+                    continue;
+                }
+
+                context.MenuItems.Add(new MenuItem
+                {
+                    Portal = portal,
+                    Section = anchor.Section,
+                    SectionOrder = anchor.SectionOrder,
+                    Label = "Batch Waitlist",
+                    Path = path,
+                    Icon = "ListOrdered",
+                    SortOrder = anchor.SortOrder + 1,
+                    IsActive = true,
+                    RequiredModule = PermissionModule.Admission.ToString(),
                 });
             }
         }

@@ -191,6 +191,7 @@ builder.Services.AddTenantWorker<NoShowDetectionBackgroundService>(tenantMode);
 // Batch payment plan reminders: "payment after N sessions" / "payment due on a specific date"
 builder.Services.AddTenantWorker<PaymentPlanReminderBackgroundService>(tenantMode);
 builder.Services.AddTenantWorker<CertificateBackgroundService>(tenantMode);
+builder.Services.AddTenantWorker<WaitlistBackgroundService>(tenantMode);
 // Catches a completed class that never received a recording — auto-record can start
 // with no error yet still fail later in the pipeline, which nothing else catches
 builder.Services.AddTenantWorker<RecordingReconciliationBackgroundService>(tenantMode);

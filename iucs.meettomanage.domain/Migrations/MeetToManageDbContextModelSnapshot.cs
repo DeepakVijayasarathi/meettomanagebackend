@@ -190,6 +190,81 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("batch_enrollments");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Academics.BatchWaitlistEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("BatchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("batch_id");
+
+                    b.Property<Guid>("ChildId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("child_id");
+
+                    b.Property<DateTime?>("ClosedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("closed_at_utc");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("note");
+
+                    b.Property<DateTime?>("OfferedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("offered_at_utc");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.HasKey("Id")
+                        .HasName("pk_batch_waitlist_entries");
+
+                    b.HasIndex("ChildId")
+                        .HasDatabaseName("ix_batch_waitlist_entries_child_id");
+
+                    b.HasIndex("BatchId", "ChildId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_batch_waitlist_entries_batch_id_child_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("Status", "CreatedAtUtc")
+                        .HasDatabaseName("ix_batch_waitlist_entries_status_created_at_utc");
+
+                    b.ToTable("batch_waitlist_entries");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Academics.Course", b =>
                 {
                     b.Property<Guid>("Id")
@@ -7677,6 +7752,27 @@ namespace iucs.meettomanage.domain.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_batch_enrollments_children_child_id");
+
+                    b.Navigation("Batch");
+
+                    b.Navigation("Child");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Academics.BatchWaitlistEntry", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Academics.Batch", "Batch")
+                        .WithMany()
+                        .HasForeignKey("BatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_batch_waitlist_entries_batches_batch_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.Child", "Child")
+                        .WithMany()
+                        .HasForeignKey("ChildId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_batch_waitlist_entries_children_child_id");
 
                     b.Navigation("Batch");
 
