@@ -84,6 +84,11 @@ namespace iucs.meettomanage.application.Dto.Billing
 
         public decimal AmountPaid { get; set; }
 
+        /// <summary>Discount already taken off <see cref="Amount"/>; 0 when none.</summary>
+        public decimal DiscountAmount { get; set; }
+
+        public string? DiscountLabel { get; set; }
+
         public string Currency { get; set; } = null!;
 
         public InvoiceStatus Status { get; set; }

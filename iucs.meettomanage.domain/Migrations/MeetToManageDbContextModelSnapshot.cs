@@ -1558,6 +1558,157 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("data_deletion_logs");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Billing.DiscountCode", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<decimal?>("AmountOff")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("amount_off");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("code");
+
+                    b.Property<Guid?>("CourseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("course_id");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("created_by");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("description");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<int?>("MaxRedemptions")
+                        .HasColumnType("integer")
+                        .HasColumnName("max_redemptions");
+
+                    b.Property<bool>("OncePerFamily")
+                        .HasColumnType("boolean")
+                        .HasColumnName("once_per_family");
+
+                    b.Property<decimal?>("PercentOff")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("percent_off");
+
+                    b.Property<int>("RedemptionCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("redemption_count");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<Guid?>("UpdatedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("updated_by");
+
+                    b.Property<DateTime?>("ValidFromUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("valid_from_utc");
+
+                    b.Property<DateTime?>("ValidUntilUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("valid_until_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_discount_codes");
+
+                    b.HasIndex("Code")
+                        .IsUnique()
+                        .HasDatabaseName("ix_discount_codes_code")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("CourseId")
+                        .HasDatabaseName("ix_discount_codes_course_id");
+
+                    b.ToTable("discount_codes");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Billing.DiscountRedemption", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("amount");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<Guid>("DiscountCodeId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("discount_code_id");
+
+                    b.Property<Guid>("InvoiceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("invoice_id");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<Guid>("ParentProfileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_profile_id");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_discount_redemptions");
+
+                    b.HasIndex("InvoiceId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_discount_redemptions_invoice_id")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("ParentProfileId")
+                        .HasDatabaseName("ix_discount_redemptions_parent_profile_id");
+
+                    b.HasIndex("DiscountCodeId", "ParentProfileId")
+                        .HasDatabaseName("ix_discount_redemptions_discount_code_id_parent_profile_id");
+
+                    b.ToTable("discount_redemptions");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Billing.FeeSuspension", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1685,6 +1836,16 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Property<Guid>("DepartmentId")
                         .HasColumnType("uuid")
                         .HasColumnName("department_id");
+
+                    b.Property<decimal>("DiscountAmount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("discount_amount");
+
+                    b.Property<string>("DiscountLabel")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)")
+                        .HasColumnName("discount_label");
 
                     b.Property<DateOnly>("DueDate")
                         .HasColumnType("date")
@@ -8038,6 +8199,47 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasConstraintName("fk_store_inquiries_package_plans_package_plan_id");
 
                     b.Navigation("PackagePlan");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Billing.DiscountCode", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Academics.Course", "Course")
+                        .WithMany()
+                        .HasForeignKey("CourseId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_discount_codes_courses_course_id");
+
+                    b.Navigation("Course");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Billing.DiscountRedemption", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Billing.DiscountCode", "DiscountCode")
+                        .WithMany()
+                        .HasForeignKey("DiscountCodeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_discount_redemptions_discount_codes_discount_code_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Billing.Invoice", "Invoice")
+                        .WithMany()
+                        .HasForeignKey("InvoiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_discount_redemptions_invoices_invoice_id");
+
+                    b.HasOne("iucs.meettomanage.domain.Entities.Users.ParentProfile", "ParentProfile")
+                        .WithMany()
+                        .HasForeignKey("ParentProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_discount_redemptions_parent_profiles_parent_profile_id");
+
+                    b.Navigation("DiscountCode");
+
+                    b.Navigation("Invoice");
+
+                    b.Navigation("ParentProfile");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Billing.FeeSuspension", b =>

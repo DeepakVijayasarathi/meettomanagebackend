@@ -45,6 +45,8 @@ namespace iucs.meettomanage.application.Mappings
                 DepartmentName = invoice.Department?.Name ?? string.Empty,
                 Amount = invoice.Amount,
                 AmountPaid = invoice.AmountPaid,
+                DiscountAmount = invoice.DiscountAmount,
+                DiscountLabel = invoice.DiscountLabel,
                 Currency = invoice.Currency,
                 Status = invoice.Status,
                 DueDate = invoice.DueDate,

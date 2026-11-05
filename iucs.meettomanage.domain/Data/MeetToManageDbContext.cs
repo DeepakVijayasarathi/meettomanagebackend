@@ -84,6 +84,8 @@ namespace iucs.meettomanage.domain.Data
         public DbSet<MitoAnswerFlag> MitoAnswerFlags => Set<MitoAnswerFlag>();
         public DbSet<Certificate> Certificates => Set<Certificate>();
         public DbSet<BatchWaitlistEntry> BatchWaitlistEntries => Set<BatchWaitlistEntry>();
+        public DbSet<DiscountCode> DiscountCodes => Set<DiscountCode>();
+        public DbSet<DiscountRedemption> DiscountRedemptions => Set<DiscountRedemption>();
 
         // Admission
         public DbSet<DemoBooking> DemoBookings => Set<DemoBooking>();

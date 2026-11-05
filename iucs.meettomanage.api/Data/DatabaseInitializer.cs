@@ -88,6 +88,7 @@ namespace iucs.meettomanage.api.Data
             await EnsureMitoReviewMenusAsync(context);
             await EnsureCertificateMenusAsync(context);
             await EnsureWaitlistMenusAsync(context);
+            await EnsureDiscountMenusAsync(context);
             await EnsureSupportTicketEmailTemplatesAsync(context);
             await EnsureSupportTicketMenusAsync(context);
             await EnsureLearningPluginsMenusAsync(context);
@@ -867,6 +868,7 @@ namespace iucs.meettomanage.api.Data
             ("admin", "Finance", "Teacher Payouts", "/admin/payouts", "Wallet", PermissionModule.Payouts.ToString()),
             ("admin", "Finance", "Payout Approvals", "/admin/payout-approvals", "ClipboardCheck", PermissionModule.Payouts.ToString()),
             ("admin", "Finance", "Fee Suspension", "/admin/fee-suspension", "Ban", PermissionModule.BillingFinance.ToString()),
+            ("admin", "Finance", "Discounts", "/admin/discounts", "Percent", PermissionModule.BillingFinance.ToString()),
             ("admin", "Finance", "My Subscription", "/admin/subscription", "Gauge", null),
             ("admin", "Insights", "Reports & Analytics", "/admin/reports", "BarChart3", PermissionModule.ReportsAnalytics.ToString()),
             ("admin", "Insights", "AI Insights", "/admin/ai-insights", "Sparkles", PermissionModule.ReportsAnalytics.ToString()),
@@ -2988,6 +2990,37 @@ namespace iucs.meettomanage.api.Data
                     RequiredModule = PermissionModule.Admission.ToString(),
                 });
             }
+        }
+
+        /// <summary>Adds "Discounts" to the Admin Finance menu in a DB seeded before it existed.</summary>
+        private static async Task EnsureDiscountMenusAsync(MeetToManageDbContext context)
+        {
+            const string path = "/admin/discounts";
+            if (context.MenuItems.Local.Any(m => m.Portal == "admin" && m.Path == path) ||
+                await context.MenuItems.AnyAsync(m => m.Portal == "admin" && m.Path == path))
+            {
+                return;
+            }
+
+            var anchor = context.MenuItems.Local.FirstOrDefault(m => m.Portal == "admin" && m.Path == "/admin/fee-suspension")
+                ?? await context.MenuItems.FirstOrDefaultAsync(m => m.Portal == "admin" && m.Path == "/admin/fee-suspension");
+            if (anchor is null)
+            {
+                return;
+            }
+
+            context.MenuItems.Add(new MenuItem
+            {
+                Portal = "admin",
+                Section = anchor.Section,
+                SectionOrder = anchor.SectionOrder,
+                Label = "Discounts",
+                Path = path,
+                Icon = "Percent",
+                SortOrder = anchor.SortOrder + 1,
+                IsActive = true,
+                RequiredModule = PermissionModule.BillingFinance.ToString(),
+            });
         }
 
         private static async Task EnsureParentFeedbackMenusAsync(MeetToManageDbContext context)

@@ -56,6 +56,14 @@ namespace iucs.meettomanage.domain.Entities.Billing
 
         public decimal AmountPaid { get; set; }
 
+        /// <summary>Amount taken off before payment (promo code or sibling discount). <see cref="Amount"/> is already net of it.</summary>
+        [Precision(12, 2)]
+        public decimal DiscountAmount { get; set; }
+
+        /// <summary>What the discount was, e.g. "Code SUMMER10" or "Sibling discount 10%".</summary>
+        [MaxLength(120)]
+        public string? DiscountLabel { get; set; }
+
         [MaxLength(3)]
         public string Currency { get; set; } = "INR";
 
