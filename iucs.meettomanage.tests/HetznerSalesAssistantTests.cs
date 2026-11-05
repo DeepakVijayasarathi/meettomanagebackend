@@ -94,10 +94,39 @@ public class HetznerSalesAssistantTests
             TopPages = [new() { Name = "/pricing", Count = 69 }, new() { Name = "/get-started", Count = 37 }],
         });
 
-        Assert.Contains(result.NextActions, x => x.Contains("complete test booking", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.NextActions, x => x.Contains("test booking", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.NextActions, x => x.Contains("UTM", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.NextActions, x => x.Contains("After tracking is verified", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(result.NextActions, x => x.Contains("A/B test", StringComparison.OrdinalIgnoreCase) && !x.Contains("before", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Marketing_fallback_distinguishes_submit_persistence_gap_from_no_conversion()
+    {
+        var result = await Create(new FakeHandler((HttpStatusCode.OK, OkBody)), new()).AnalyzeMarketingAsync(new MarketingDashboardDto
+        {
+            Days = 7,
+            Totals = new() { Visitors = 17, FormStartedVisitors = 3, FormSubmittedVisitors = 2, DemoRequests = 0 },
+            Sources = [new() { Name = "Direct", Count = 17 }],
+        });
+
+        Assert.Contains(result.NextActions, x => x.Contains("persistence", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Observations, x => x.Contains("2 form submitter", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.NextActions, x => x.Contains("UTM", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Marketing_fallback_does_not_recommend_legal_page_as_conversion_page()
+    {
+        var result = await Create(new FakeHandler((HttpStatusCode.OK, OkBody)), new()).AnalyzeMarketingAsync(new MarketingDashboardDto
+        {
+            Days = 7,
+            Totals = new() { Visitors = 17 },
+            TopPages = [new() { Name = "/privacy-policy", Count = 10 }, new() { Name = "/", Count = 7 }],
+        });
+
+        Assert.DoesNotContain(result.NextActions, x => x.Contains("privacy-policy", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.NextActions, x => x.Contains("highest-traffic conversion-eligible page", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

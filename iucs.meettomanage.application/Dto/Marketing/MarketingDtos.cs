@@ -426,6 +426,18 @@ namespace iucs.meettomanage.application.Dto.Marketing
 
         public int DemoRequests { get; set; }
 
+        /// <summary>Unique visitors who started the demo form during the period.</summary>
+        public int FormStartedVisitors { get; set; }
+
+        /// <summary>Unique visitors whose browser emitted a demo-form submitted event.</summary>
+        public int FormSubmittedVisitors { get; set; }
+
+        /// <summary>Unique visitors who encountered demo-form validation failures.</summary>
+        public int FormValidationFailedVisitors { get; set; }
+
+        /// <summary>Unique visitors who started but left the demo form.</summary>
+        public int FormAbandonedVisitors { get; set; }
+
         /// <summary>Demo requests the chat assistant booked itself (a subset of DemoRequests).</summary>
         public int ChatBookings { get; set; }
 

@@ -303,6 +303,8 @@ namespace iucs.meettomanage.api.Services
                     pageViewsAreNotVisitors = true,
                     zeroDemoRequestsMeansNoRequestsWereRecorded_NotProofOfTrackingFailure = true,
                     directMeansNoAttributionWasCaptured_NotProofOfBrandAwareness = true,
+                    formSubmittedVisitorsAboveDemoRequestsIndicatesAConversionPersistenceDiscrepancy = true,
+                    formStartsWithoutSubmissionsIndicateDropOff_NotBrokenPageTracking = true,
                 },
                 period = new { dashboard.Days, dashboard.StartDate, dashboard.EndDate },
                 currentPeriodTotals = dashboard.Totals,
@@ -324,6 +326,7 @@ namespace iucs.meettomanage.api.Services
                     "The authoritative period visitor total is currentPeriodTotals.Visitors. NEVER sum daily UniqueVisitorsThatDay because returning people can appear on several days. Page views are not visitors. " +
                     "Never report a visitor count above the authoritative total. Never describe a change above 100% as a share of visitors; distinguish percentage growth from percentage share. " +
                     "Zero recorded demo requests does not prove a broken funnel or tracking error. State both possible explanations neutrally: no conversion was recorded, and tracking should be verified before changing UX. " +
+                    "Use the form funnel evidence: submitted visitors above saved demo requests is a persistence discrepancy; starts without submissions is form drop-off; no starts means no form attempt was observed. " +
                     "Direct means attribution was not captured; it does not prove brand traffic, organic traffic, a launch, a campaign, or internal testing. A traffic increase is an observation, not evidence of its cause. " +
                     "Do not prescribe A/B testing when there are zero recorded conversions; first verify tracking and gather enough baseline conversions. Never invent causes, revenue, demographics or intent. " +
                     "Use exact labels: views for TopPages, visitors for Totals/Sources. Prefer checks that distinguish measurement problems from real behaviour. " +
@@ -961,11 +964,15 @@ namespace iucs.meettomanage.api.Services
         {
             var t = dashboard.Totals;
             var actions = new List<string>();
+            if (t.FormSubmittedVisitors > t.DemoRequests)
+                actions.Add($"Verify conversion persistence now: {t.FormSubmittedVisitors} form submitter(s) were tracked but only {t.DemoRequests} demo request(s) were saved. Complete one test and inspect the API response and server logs.");
+            else if (t.DemoRequests == 0 && t.FormStartedVisitors > 0)
+                actions.Add($"Review the demo form funnel: {t.FormStartedVisitors} visitor(s) started, {t.FormValidationFailedVisitors} encountered validation failures and {t.FormAbandonedVisitors} abandoned; then complete one mobile and one desktop test.");
+            else if (t.DemoRequests == 0)
+                actions.Add("Complete one test booking through /get-started and confirm it appears in Demo Requests; no visitor started the form in this period, so zero requests alone does not show a tracking failure.");
             if (t.Visitors < 50) actions.Add("Increase qualified traffic with UTM-tagged links before drawing strong conversion conclusions.");
-            if (t.Visitors >= 20 && t.DemoRequests == 0)
-                actions.Add("Run one complete test booking through /get-started and one through website chat; confirm the request appears in Demo Requests before diagnosing a conversion problem.");
             var attributed = dashboard.Sources.Where(s => !s.Name.Equals("Direct", StringComparison.OrdinalIgnoreCase)).Sum(s => s.Count);
-            if (t.Visitors >= 20 && attributed * 100d / Math.Max(1, t.Visitors) < 30)
+            if (t.Visitors > 0 && attributed * 100d / t.Visitors < 30)
                 actions.Add("Add UTM source, medium and campaign parameters to every email, social, partner and advertising link so new traffic can be attributed.");
             if (t.ChatStartRate < 10 && t.Visitors >= 20) actions.Add("Test a clearer chat call-to-action on the highest-traffic page and compare the next equal period.");
             var pricingViews = dashboard.TopPages.FirstOrDefault(p => p.Name.Equals("/pricing", StringComparison.OrdinalIgnoreCase))?.Count ?? 0;
@@ -973,10 +980,17 @@ namespace iucs.meettomanage.api.Services
             if (t.DemoRequests == 0 && (pricingViews >= 20 || startedViews >= 20))
                 actions.Add($"After tracking is verified, review the path from pricing ({pricingViews} views) and Get Started ({startedViews} views) to form completion; inspect validation errors and mobile usability before running an A/B test.");
             if (t.DemoRequests > 0 && t.DemoPipelineConversionRate == 0) actions.Add("Follow up every open demo request and record its status so the sales conversion gap is measurable.");
-            if (dashboard.TopPages.FirstOrDefault() is { } page) actions.Add($"Review the demo CTA and mobile experience on {page.Name}, the highest-traffic page.");
+            static bool IsConversionPage(string path) =>
+                !new[] { "/privacy", "/policy", "/legal", "/terms", "/login", "/forgot-", "/reset-" }
+                    .Any(fragment => path.Contains(fragment, StringComparison.OrdinalIgnoreCase));
+            if (dashboard.TopPages.FirstOrDefault(p => IsConversionPage(p.Name)) is { } page)
+                actions.Add($"Review the demo CTA and mobile experience on {page.Name}, the highest-traffic conversion-eligible page.");
             if (actions.Count < 3) actions.Add("Compare the next equal period and change only one acquisition or page variable at a time.");
             if (actions.Count < 3) actions.Add("Exclude known staff and automated test traffic from marketing analysis where possible.");
-            return new MarketingAiInsightsDto { Summary = $"{t.Visitors} visitors produced {t.DemoRequests} demo requests ({t.ConversionRate:0.#}%) during this {dashboard.Days}-day period.", Observations = [$"Visitors viewed {t.PagesPerVisitor:0.#} pages each on average.", $"{t.ChatStartRate:0.#}% started chat; {t.ChatBookings} demo requests came through chat."], NextActions = actions, AiPowered = false, GeneratedAtUtc = DateTime.UtcNow };
+            var funnelObservation = t.FormSubmittedVisitors > t.DemoRequests
+                ? $"The browser tracked {t.FormSubmittedVisitors} form submitter(s), while {t.DemoRequests} demo request(s) were saved."
+                : $"{t.FormStartedVisitors} visitor(s) started the demo form and {t.FormSubmittedVisitors} submitted it.";
+            return new MarketingAiInsightsDto { Summary = $"{t.Visitors} visitors produced {t.DemoRequests} demo requests ({t.ConversionRate:0.#}%) during this {dashboard.Days}-day period.", Observations = [$"Visitors viewed {t.PagesPerVisitor:0.#} pages each on average.", funnelObservation, $"{t.ChatStartRate:0.#}% started chat; {t.ChatBookings} demo requests came through chat."], NextActions = actions.Take(5).ToList(), AiPowered = false, GeneratedAtUtc = DateTime.UtcNow };
         }
 
         public async Task<MarketingLeadRecommendationDto> RecommendLeadAsync(PlatformDemoRequestDto lead, CancellationToken cancellationToken = default)
