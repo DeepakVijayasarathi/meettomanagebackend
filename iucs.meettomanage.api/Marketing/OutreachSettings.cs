@@ -27,6 +27,17 @@ public sealed record OutreachSettings
     public int MinFollowUpDays { get; init; }
     /// <summary>Failed sends of one step before the address is treated as bounced.</summary>
     public int MaxFailuresPerStep { get; init; }
+    public bool EmailEnabled { get; init; } = true;
+    public bool CampaignSendingEnabled { get; init; } = true;
+    public bool ManualEmailEnabled { get; init; } = true;
+    public bool ReplySendingEnabled { get; init; } = true;
+    public bool ReplySyncEnabled { get; init; } = true;
+    public bool AiEnabled { get; init; } = true;
+    public bool AiLeadQualification { get; init; } = true;
+    public bool AiMessageDrafting { get; init; } = true;
+    public bool AiCampaignGeneration { get; init; } = true;
+    public bool AiReplyAssistant { get; init; } = true;
+    public bool AiInsights { get; init; } = true;
 
     public string From => $"{FromName.Replace("\"", "").Replace("<", "").Replace(">", "").Trim()} <{FromAddress.Trim()}>";
 
@@ -63,6 +74,17 @@ public sealed record OutreachSettings
         (P + "companyLine", CompanyLine.Trim()),
         (P + "minFollowUpDays", MinFollowUpDays.ToString(CultureInfo.InvariantCulture)),
         (P + "maxFailuresPerStep", MaxFailuresPerStep.ToString(CultureInfo.InvariantCulture)),
+        (P + "emailEnabled", EmailEnabled.ToString(CultureInfo.InvariantCulture)),
+        (P + "campaignSendingEnabled", CampaignSendingEnabled.ToString(CultureInfo.InvariantCulture)),
+        (P + "manualEmailEnabled", ManualEmailEnabled.ToString(CultureInfo.InvariantCulture)),
+        (P + "replySendingEnabled", ReplySendingEnabled.ToString(CultureInfo.InvariantCulture)),
+        (P + "replySyncEnabled", ReplySyncEnabled.ToString(CultureInfo.InvariantCulture)),
+        (P + "aiEnabled", AiEnabled.ToString(CultureInfo.InvariantCulture)),
+        (P + "aiLeadQualification", AiLeadQualification.ToString(CultureInfo.InvariantCulture)),
+        (P + "aiMessageDrafting", AiMessageDrafting.ToString(CultureInfo.InvariantCulture)),
+        (P + "aiCampaignGeneration", AiCampaignGeneration.ToString(CultureInfo.InvariantCulture)),
+        (P + "aiReplyAssistant", AiReplyAssistant.ToString(CultureInfo.InvariantCulture)),
+        (P + "aiInsights", AiInsights.ToString(CultureInfo.InvariantCulture)),
     ];
 
     /// <summary>These defaults with any saved values on top (a saved value that no longer validates is ignored).</summary>
@@ -70,6 +92,7 @@ public sealed record OutreachSettings
     {
         string? S(string key) => saved.TryGetValue(P + key, out var v) && !string.IsNullOrWhiteSpace(v) ? v.Trim() : null;
         int I(string key, int fallback, int min, int max) => int.TryParse(S(key), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) && v >= min && v <= max ? v : fallback;
+        bool B(string key, bool fallback) => bool.TryParse(S(key), out var v) ? v : fallback;
         var merged = this with
         {
             FromName = S("fromName") ?? FromName,
@@ -84,6 +107,17 @@ public sealed record OutreachSettings
             CompanyLine = S("companyLine") ?? CompanyLine,
             MinFollowUpDays = I("minFollowUpDays", MinFollowUpDays, 1, 30),
             MaxFailuresPerStep = I("maxFailuresPerStep", MaxFailuresPerStep, 1, 10),
+            EmailEnabled = B("emailEnabled", EmailEnabled),
+            CampaignSendingEnabled = B("campaignSendingEnabled", CampaignSendingEnabled),
+            ManualEmailEnabled = B("manualEmailEnabled", ManualEmailEnabled),
+            ReplySendingEnabled = B("replySendingEnabled", ReplySendingEnabled),
+            ReplySyncEnabled = B("replySyncEnabled", ReplySyncEnabled),
+            AiEnabled = B("aiEnabled", AiEnabled),
+            AiLeadQualification = B("aiLeadQualification", AiLeadQualification),
+            AiMessageDrafting = B("aiMessageDrafting", AiMessageDrafting),
+            AiCampaignGeneration = B("aiCampaignGeneration", AiCampaignGeneration),
+            AiReplyAssistant = B("aiReplyAssistant", AiReplyAssistant),
+            AiInsights = B("aiInsights", AiInsights),
         };
         // Never let a bad combination (end before start) stop sending entirely: fall back to the defaults' window.
         return merged.WindowEndHour > merged.WindowStartHour ? merged : merged with { WindowStartHour = WindowStartHour, WindowEndHour = WindowEndHour };

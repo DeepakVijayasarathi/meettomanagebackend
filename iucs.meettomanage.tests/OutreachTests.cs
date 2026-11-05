@@ -172,12 +172,19 @@ public sealed class OutreachTests : IDisposable
         {
             FromName = "Deepak from Meet to Manage", FromAddress = "deepak@meettomanage.cloud", ReplyTo = "",
             WindowStartHour = 10, WindowEndHour = 17, TimeZoneId = "Asia/Dubai", FooterText = "We found you on Justdial.", CompanyLine = "Infinity Uniquers, Chennai 600001",
+            AiCampaignGeneration = false, AiReplyAssistant = false, ManualEmailEnabled = false, ReplySyncEnabled = false,
         };
         Assert.Null(await svc.SaveSettingsAsync(custom, CancellationToken.None));
         var saved = await svc.GetSettingsAsync(CancellationToken.None);
         Assert.Equal("Deepak from Meet to Manage <deepak@meettomanage.cloud>", saved.From);
         Assert.Null(saved.ReplyTo); // cleared on purpose
         Assert.Equal("Asia/Dubai", saved.TimeZoneId);
+        Assert.False(saved.AiCampaignGeneration);
+        Assert.False(saved.AiReplyAssistant);
+        Assert.True(saved.AiMessageDrafting);
+        Assert.False(saved.ManualEmailEnabled);
+        Assert.False(saved.ReplySyncEnabled);
+        Assert.True(saved.CampaignSendingEnabled);
 
         // Sending hours follow the saved time zone: 05:00 UTC is 09:00 in Dubai, before the 10:00 start...
         await SeedAsync();
@@ -222,6 +229,17 @@ public sealed class OutreachTests : IDisposable
     {
         const string input = "Please send pricing and the available demo times.";
         Assert.Equal(input, OutreachImapBackgroundService.CleanReply(input));
+    }
+
+    [Fact]
+    public async Task EmailMasterSwitchStopsCampaignWorker()
+    {
+        var service = Service();
+        var settings = await service.GetSettingsAsync(CancellationToken.None);
+        Assert.Null(await service.SaveSettingsAsync(settings with { EmailEnabled = false }, CancellationToken.None));
+        await SeedAsync();
+        Assert.False(await service.ProcessDueAsync(Morning, CancellationToken.None));
+        Assert.Empty(_resend.Sent);
     }
 
     public void Dispose() => _db.Dispose();

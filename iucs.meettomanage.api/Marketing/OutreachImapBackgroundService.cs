@@ -58,6 +58,11 @@ public sealed class OutreachImapBackgroundService(
         SetState(Status with { IsRunning = true, LastAttemptAtUtc = DateTime.UtcNow, LastError = null });
         try
         {
+        if (!await ReplySyncEnabledAsync(ct))
+        {
+            SetState(Status with { IsRunning = false, LastError = "Reply synchronization is disabled in Marketing Console settings." });
+            return Status;
+        }
         runId = await StartRunAsync(trigger, ct);
         var username = configuration["Outreach:Imap:Username"];
         var password = configuration["Outreach:Imap:Password"];
@@ -71,7 +76,7 @@ public sealed class OutreachImapBackgroundService(
             return Status;
         }
 
-        var host = configuration["Outreach:Imap:Host"] ?? "imap.zoho.in";
+        var host = configuration["Outreach:Imap:Host"] ?? "imappro.zoho.in";
         var port = configuration.GetValue("Outreach:Imap:Port", 993);
         using var imap = new ImapClient();
         await imap.ConnectAsync(host, port, SecureSocketOptions.SslOnConnect, ct);
@@ -147,7 +152,7 @@ public sealed class OutreachImapBackgroundService(
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogError(ex, "Zoho outreach mailbox sync failed.");
-            SetState(Status with { IsRunning = false, LastError = "Mailbox sync failed. Check IMAP settings and the app password." });
+            SetState(Status with { IsRunning = false, LastError = SafeFailure(ex) });
             await FinishRunAsync(runId, Status, [], CancellationToken.None);
             return Status;
         }
@@ -178,7 +183,7 @@ public sealed class OutreachImapBackgroundService(
         try
         {
             using var imap = new ImapClient();
-            await imap.ConnectAsync(configuration["Outreach:Imap:Host"] ?? "imap.zoho.in", configuration.GetValue("Outreach:Imap:Port", 993), SecureSocketOptions.SslOnConnect, ct);
+            await imap.ConnectAsync(configuration["Outreach:Imap:Host"] ?? "imappro.zoho.in", configuration.GetValue("Outreach:Imap:Port", 993), SecureSocketOptions.SslOnConnect, ct);
             await imap.AuthenticateAsync(configuration["Outreach:Imap:Username"]!, configuration["Outreach:Imap:Password"]!, ct);
             await imap.DisconnectAsync(true, ct);
             return (true, "Zoho IMAP authentication succeeded.");
@@ -186,9 +191,18 @@ public sealed class OutreachImapBackgroundService(
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             logger.LogWarning(ex, "Zoho IMAP connection test failed.");
-            return (false, "Zoho IMAP authentication failed. Check the mailbox and app password.");
+            return (false, SafeFailure(ex));
         }
     }
+
+    private static string SafeFailure(Exception ex) => ex switch
+    {
+        MailKit.Security.AuthenticationException => "Zoho rejected IMAP authentication. Use the full mailbox address, enable IMAP access, and use an app-specific password when 2FA or SAML is enabled.",
+        System.Net.Sockets.SocketException => "The server could not reach the Zoho IMAP host on port 993. Check the host, DNS, firewall, and network egress.",
+        MailKit.Security.SslHandshakeException => "Zoho IMAP TLS negotiation failed. Check the server clock, certificate trust, and SSL inspection.",
+        ImapCommandException => "Zoho accepted the connection but rejected an IMAP command. Confirm IMAP access is enabled for this mailbox and allowed by the organization policy.",
+        _ => "Mailbox synchronization failed before messages could be checked. Review the backend log for the safe exception type."
+    };
 
     private async Task<Guid> StartRunAsync(string trigger, CancellationToken ct)
     {
@@ -203,6 +217,14 @@ public sealed class OutreachImapBackgroundService(
         database.OutreachMailboxSyncRuns.Add(run);
         await database.SaveChangesAsync(ct);
         return run.Id;
+    }
+
+    private async Task<bool> ReplySyncEnabledAsync(CancellationToken ct)
+    {
+        using var scope = scopes.CreateScope();
+        var service = scope.ServiceProvider.GetRequiredService<OutreachService>();
+        var settings = await service.GetSettingsAsync(ct);
+        return settings.EmailEnabled && settings.ReplySyncEnabled;
     }
 
     private async Task<Guid?> FindProspectByThreadAsync(string? inReplyTo, IEnumerable<string> references, string? subject, CancellationToken ct)

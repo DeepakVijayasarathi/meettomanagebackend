@@ -52,7 +52,7 @@ human action is appropriate.
 Create one Jenkins **Username with password** credential with ID
 `meettomanage-zoho-imap`. Set the username to the full Zoho mailbox address and
 the password to a Zoho application-specific password. The deployed worker connects
-to `imap.zoho.in:993` over TLS every 60 seconds. It reads unread Inbox messages,
+to `imappro.zoho.in:993` over TLS every 60 seconds for an India-hosted organization mailbox. It reads unread Inbox messages,
 passes them through the same secure webhook processing, and marks a message read
 only after the API accepts it. Failed messages remain unread and retry later.
 

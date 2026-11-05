@@ -99,6 +99,13 @@ public sealed class EnrollInput
 [ApiController, Route("api/marketing/outreach")]
 public sealed class MarketingOutreachController(MeetToManageDbContext db, OutreachService outreach, ISalesAssistant salesAssistant, IConfiguration configuration, OutreachImapBackgroundService imapSync) : ControllerBase
 {
+    private async Task RequireAiAsync(Func<OutreachSettings, bool> feature, string featureName, CancellationToken ct)
+    {
+        var settings = await outreach.GetSettingsAsync(ct);
+        if (!settings.AiEnabled || !feature(settings))
+            throw new DomainValidationException($"{featureName} is disabled in Marketing Console settings.");
+    }
+
     // ---------------------------------------------------------------- status
 
     [HttpGet("summary"), Authorize(Roles = nameof(UserRole.Marketing))]
@@ -110,10 +117,10 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
             .Select(x => new { status = x.Key.ToString(), x.count });
         return Ok(new
         {
-            ready = outreach.NotReadyReason is null,
+            ready = outreach.NotReadyReason is null && settings.EmailEnabled && settings.CampaignSendingEnabled,
             replySyncReady = !string.IsNullOrWhiteSpace(configuration["Outreach:InboundWebhookSecret"]),
             imapSyncReady = !string.IsNullOrWhiteSpace(configuration["Outreach:Imap:Username"]) && !string.IsNullOrWhiteSpace(configuration["Outreach:Imap:Password"]),
-            notReadyReason = outreach.NotReadyReason,
+            notReadyReason = outreach.NotReadyReason ?? (!settings.EmailEnabled ? "Email operations are disabled in Marketing Console settings." : !settings.CampaignSendingEnabled ? "Campaign delivery is disabled in Marketing Console settings." : null),
             from = settings.From,
             replyTo = settings.ReplyTo,
             dailyLimit = settings.DailyLimit,
@@ -239,6 +246,7 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     [HttpGet("analytics/insights"), Authorize(Roles = nameof(UserRole.Marketing))]
     public async Task<IActionResult> AnalyticsInsights(CancellationToken ct)
     {
+        await RequireAiAsync(x => x.AiInsights, "AI insights", ct);
         var evidence = await db.OutreachProspects.AsNoTracking().GroupBy(x => x.Region ?? "Unassigned").Select(g => new
         {
             region = g.Key, prospects = g.Count(), contacted = g.Count(x => x.Status == OutreachProspectStatus.Contacted),
@@ -300,6 +308,7 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     [HttpGet("growth/ai-plan"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
     public async Task<IActionResult> GrowthAiPlan(CancellationToken ct)
     {
+        await RequireAiAsync(x => x.AiInsights, "AI insights", ct);
         var prospects = await db.OutreachProspects.AsNoTracking().ToListAsync(ct);
         var sources = prospects.GroupBy(x => x.Source ?? "Unknown").Select(g => new { source = g.Key, leads = g.Count(), contacted = g.Count(x => x.Status != OutreachProspectStatus.New), replies = g.Count(x => x.Status is OutreachProspectStatus.Replied or OutreachProspectStatus.Interested), demos = g.Count(x => x.PipelineStage is OutreachPipelineStage.DemoBooked or OutreachPipelineStage.Trial or OutreachPipelineStage.Negotiation or OutreachPipelineStage.Won), won = g.Count(x => x.PipelineStage == OutreachPipelineStage.Won) }).ToList();
         var pipeline = prospects.GroupBy(x => x.PipelineStage).Select(g => new { stage = g.Key.ToString(), count = g.Count() }).ToList();
@@ -424,6 +433,7 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     [HttpPost("replies/{id:guid}/analyze"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
     public async Task<IActionResult> AnalyzeReply(Guid id, CancellationToken ct)
     {
+        await RequireAiAsync(x => x.AiReplyAssistant, "AI reply assistant", ct);
         var reply = await db.OutreachProspectActivities.AsNoTracking().Where(x => x.Id == id && x.Type == OutreachActivityType.ReplyReceived).Select(x => new { x.Subject, x.Detail, prospect = new { x.Prospect.FirstName, x.Prospect.AcademyName, x.Prospect.City, x.Prospect.Region, x.Prospect.Status, x.Prospect.PipelineStage } }).FirstOrDefaultAsync(ct) ?? throw new NotFoundException("Reply", id);
         return Ok(await salesAssistant.AnalyzeOutreachReplyAsync(reply, ct));
     }
@@ -459,6 +469,7 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     [HttpPost("prospects/{id:guid}/draft"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
     public async Task<IActionResult> DraftMessage(Guid id, DraftMessageInput input, CancellationToken ct)
     {
+        await RequireAiAsync(x => x.AiMessageDrafting, "AI message drafting", ct);
         var p = await db.OutreachProspects.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Prospect", id);
         var latestReply = input.Purpose == "reply" ? await db.OutreachProspectActivities.AsNoTracking().Where(x => x.ProspectId == id && x.Type == OutreachActivityType.ReplyReceived).OrderByDescending(x => x.CreatedAtUtc).Select(x => new { x.Subject, x.Detail }).FirstOrDefaultAsync(ct) : null;
         var evidence = new { p.FirstName, p.AcademyName, p.City, p.Region, p.Source, p.Notes, p.LeadScore, p.ScoreReason, latestReply };
@@ -479,6 +490,7 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     [HttpPost("campaigns/ai-draft"), Authorize(Roles = nameof(UserRole.Marketing)), EnableRateLimiting("login")]
     public async Task<IActionResult> DraftCampaign(CampaignAiBriefInput input, CancellationToken ct)
     {
+        await RequireAiAsync(x => x.AiCampaignGeneration, "AI campaign generation", ct);
         return Ok(await salesAssistant.DraftOutreachCampaignAsync(new
         {
             input.Audience, input.Region, input.Goal, input.Offer, input.Tone,
@@ -544,6 +556,7 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     [HttpPost("prospects/{id:guid}/rescore"), Authorize(Roles = nameof(UserRole.Marketing))]
     public async Task<IActionResult> Rescore(Guid id, CancellationToken ct)
     {
+        await RequireAiAsync(x => x.AiLeadQualification, "AI lead qualification", ct);
         var p = await db.OutreachProspects.FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Prospect", id);
         var input = new ProspectInput { Email = p.Email, AcademyName = p.AcademyName, Phone = p.Phone, Region = p.Region, Source = p.Source, Notes = p.Notes };
         p.LeadScore = Score(input); p.ScoreReason = ScoreReason(input);
@@ -558,6 +571,9 @@ public sealed class MarketingOutreachController(MeetToManageDbContext db, Outrea
     {
         var secret = configuration["Outreach:InboundWebhookSecret"];
         if (string.IsNullOrWhiteSpace(secret) || Request.Headers["X-Outreach-Webhook-Secret"] != secret) return Unauthorized();
+        var mailSettings = await outreach.GetSettingsAsync(ct);
+        if (!mailSettings.EmailEnabled || !mailSettings.ReplySyncEnabled)
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { disabled = true, message = "Reply synchronization is disabled." });
         var email = input.From.Trim().ToLowerInvariant();
         var p = input.ProspectId is { } prospectId
             ? await db.OutreachProspects.FirstOrDefaultAsync(x => x.Id == prospectId, ct)

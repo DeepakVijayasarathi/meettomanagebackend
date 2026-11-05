@@ -65,6 +65,17 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
             CompanyLine = configuration["Outreach:CompanyLine"] is { Length: > 0 } c ? c : "Meet to Manage · Infinity Uniquers, India",
             MinFollowUpDays = configuration.GetValue("Outreach:MinFollowUpDays", 2),
             MaxFailuresPerStep = configuration.GetValue("Outreach:MaxFailuresPerStep", 3),
+            EmailEnabled = configuration.GetValue("Outreach:Email:Enabled", true),
+            CampaignSendingEnabled = configuration.GetValue("Outreach:Email:CampaignSending", true),
+            ManualEmailEnabled = configuration.GetValue("Outreach:Email:ManualSending", true),
+            ReplySendingEnabled = configuration.GetValue("Outreach:Email:ReplySending", true),
+            ReplySyncEnabled = configuration.GetValue("Outreach:Email:ReplySync", true),
+            AiEnabled = configuration.GetValue("Outreach:Ai:Enabled", true),
+            AiLeadQualification = configuration.GetValue("Outreach:Ai:LeadQualification", true),
+            AiMessageDrafting = configuration.GetValue("Outreach:Ai:MessageDrafting", true),
+            AiCampaignGeneration = configuration.GetValue("Outreach:Ai:CampaignGeneration", true),
+            AiReplyAssistant = configuration.GetValue("Outreach:Ai:ReplyAssistant", true),
+            AiInsights = configuration.GetValue("Outreach:Ai:Insights", true),
         };
     }
 
@@ -173,7 +184,9 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
     public async Task<string?> SendReplyAsync(OutreachProspect prospect, string subject, string body, string? sentBy, CancellationToken ct)
     {
         if (NotReadyReason is { } reason) return reason;
-        var error = await SendAsync(prospect, subject, body, await GetSettingsAsync(ct), ct);
+        var settings = await GetSettingsAsync(ct);
+        if (!settings.EmailEnabled || !settings.ReplySendingEnabled) return "Reply sending is disabled in Marketing Console settings.";
+        var error = await SendAsync(prospect, subject, body, settings, ct);
         if (error is null)
         {
             prospect.LastContactedAtUtc = DateTime.UtcNow;
@@ -189,7 +202,10 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
     public async Task<string?> SendApprovedMessageAsync(OutreachProspect prospect, string subject, string body, bool isReply, string? sentBy, CancellationToken ct)
     {
         if (NotReadyReason is { } reason) return reason;
-        var error = await SendAsync(prospect, subject, body, await GetSettingsAsync(ct), ct);
+        var settings = await GetSettingsAsync(ct);
+        if (!settings.EmailEnabled || (isReply ? !settings.ReplySendingEnabled : !settings.ManualEmailEnabled))
+            return isReply ? "Reply sending is disabled in Marketing Console settings." : "Manual email sending is disabled in Marketing Console settings.";
+        var error = await SendAsync(prospect, subject, body, settings, ct);
         if (error is not null) return error;
         prospect.LastContactedAtUtc = DateTime.UtcNow;
         prospect.NextActionAtUtc = isReply ? null : DateTime.UtcNow.AddDays(3);
@@ -217,8 +233,10 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
         var step = await db.OutreachCampaignSteps.AsNoTracking().FirstOrDefaultAsync(x => x.CampaignId == original.CampaignId && x.Order == original.StepOrder, ct);
         if (step is null) return "The original campaign step no longer exists.";
         if (NotReadyReason is { } reason) return reason;
+        var settings = await GetSettingsAsync(ct);
+        if (!settings.EmailEnabled || !settings.CampaignSendingEnabled) return "Campaign sending is disabled in Marketing Console settings.";
         string? error;
-        try { error = await SendAsync(prospect, step.Subject, step.Body, await GetSettingsAsync(ct), ct); }
+        try { error = await SendAsync(prospect, step.Subject, step.Body, settings, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { error = ex.Message; }
         var now = DateTime.UtcNow;
         db.OutreachSends.Add(new OutreachSend { CampaignId = original.CampaignId, ProspectId = original.ProspectId, StepOrder = original.StepOrder, Email = prospect.Email, Subject = Render(step.Subject, prospect), SentAtUtc = now, Succeeded = error is null, Error = error is null ? null : error[..Math.Min(error.Length, 500)] });
@@ -235,10 +253,12 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
     public async Task<string?> SendTestAsync(Guid campaignId, int stepOrder, string to, CancellationToken ct)
     {
         if (NotReadyReason is { } reason) return reason;
+        var settings = await GetSettingsAsync(ct);
+        if (!settings.EmailEnabled || !settings.CampaignSendingEnabled) return "Campaign sending is disabled in Marketing Console settings.";
         var step = await db.OutreachCampaignSteps.AsNoTracking().FirstOrDefaultAsync(x => x.CampaignId == campaignId && x.Order == stepOrder, ct);
         if (step is null) return "That step does not exist.";
         var sample = new OutreachProspect { Email = to.Trim(), FirstName = "Priya", AcademyName = "Bright Minds Academy", City = "Chennai", UnsubscribeToken = Guid.Empty };
-        var error = await SendAsync(sample, "[Test] " + step.Subject, step.Body, await GetSettingsAsync(ct), ct);
+        var error = await SendAsync(sample, "[Test] " + step.Subject, step.Body, settings, ct);
         db.OutreachSends.Add(new OutreachSend { CampaignId = campaignId, ProspectId = Guid.Empty, StepOrder = stepOrder, Email = sample.Email, Subject = "[Test] " + step.Subject, Succeeded = error is null, Error = error });
         await db.SaveChangesAsync(ct);
         return error;
@@ -261,6 +281,7 @@ public sealed class OutreachService(MeetToManageDbContext db, IHttpClientFactory
 
         if (NotReadyReason is not null) return false;
         var settings = await GetSettingsAsync(ct);
+        if (!settings.EmailEnabled || !settings.CampaignSendingEnabled) return false;
         var local = TimeZoneInfo.ConvertTimeFromUtc(nowUtc, settings.Zone);
         if (local.Hour < settings.WindowStartHour || local.Hour >= settings.WindowEndHour) return false;
 

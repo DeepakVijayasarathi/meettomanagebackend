@@ -150,7 +150,7 @@ pipeline {
                       -e HetznerAi__ApiKey="\${HETZNER_AI_API_KEY:-}" \
                       -e Resend__ApiKey="\${RESEND_API_KEY:-}" \
                       -e Outreach__InboundWebhookSecret="\${OUTREACH_WEBHOOK_SECRET:-}" \
-                      -e Outreach__Imap__Host="imap.zoho.in" \
+                      -e Outreach__Imap__Host="imappro.zoho.in" \
                       -e Outreach__Imap__Port="993" \
                       -e Outreach__Imap__Username="\${ZOHO_IMAP_USER:-}" \
                       -e Outreach__Imap__Password="\${ZOHO_IMAP_PASSWORD:-}" \
