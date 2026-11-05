@@ -15,5 +15,11 @@ namespace iucs.meettomanage.application.Services
 
         /// <summary>Aggregated stars + badges per participant — session-scoped or all-time.</summary>
         Task<IReadOnlyList<LeaderboardEntryDto>> GetLeaderboardAsync(Guid? sessionId, int top, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// A parent's own child's all-time stars + badges. Another family's child looks like a missing one.
+        /// Awards are stored under the participant's full name, so that is what is matched.
+        /// </summary>
+        Task<ChildRewardsDto> GetChildRewardsAsync(Guid parentUserId, Guid childId, CancellationToken cancellationToken = default);
     }
 }

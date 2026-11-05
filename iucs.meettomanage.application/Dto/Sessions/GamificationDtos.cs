@@ -46,4 +46,34 @@ namespace iucs.meettomanage.application.Dto.Sessions
 
         public IReadOnlyList<string> Badges { get; set; } = [];
     }
+
+    /// <summary>A badge or milestone a child earned, for the family app's rewards screen.</summary>
+    public class ChildRewardDto
+    {
+        public string Label { get; set; } = null!;
+
+        public AwardKind Kind { get; set; }
+
+        public DateTime EarnedAtUtc { get; set; }
+    }
+
+    /// <summary>One child's all-time stars and earned badges. Never includes other children.</summary>
+    public class ChildRewardsDto
+    {
+        public Guid ChildId { get; set; }
+
+        public string ChildName { get; set; } = null!;
+
+        public int TotalStars { get; set; }
+
+        public int StarsLast30Days { get; set; }
+
+        /// <summary>Badges and milestones, newest first.</summary>
+        public IReadOnlyList<ChildRewardDto> Rewards { get; set; } = [];
+
+        /// <summary>Next milestone's star target and label, or null once every milestone is earned.</summary>
+        public int? NextMilestoneStars { get; set; }
+
+        public string? NextMilestoneLabel { get; set; }
+    }
 }

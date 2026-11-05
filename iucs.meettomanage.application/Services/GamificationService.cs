@@ -169,6 +169,60 @@ namespace iucs.meettomanage.application.Services
                 .ToList();
         }
 
+        public async Task<ChildRewardsDto> GetChildRewardsAsync(
+            Guid parentUserId, Guid childId, CancellationToken cancellationToken = default)
+        {
+            var parent = await _unitOfWork.Repository<ParentProfile>().Query()
+                .FirstOrDefaultAsync(p => p.UserId == parentUserId, cancellationToken)
+                ?? throw new NotFoundException("No parent profile is linked to the current account.");
+
+            // Another family's child looks exactly like a missing one — never confirm it exists.
+            var child = await _unitOfWork.Repository<Child>().Query().AsNoTracking()
+                .FirstOrDefaultAsync(c => c.Id == childId && c.ParentProfileId == parent.Id, cancellationToken)
+                ?? throw new NotFoundException(nameof(Child), childId);
+
+            // Awards are persisted under the participant's full name (ChildId is rarely set), the same
+            // "First Last" the live-class self-report check compares against.
+            var name = $"{child.FirstName} {child.LastName}".Trim();
+            var awards = (await _unitOfWork.Repository<StudentAward>().Query().AsNoTracking()
+                    .Where(a => a.ChildId == childId || (a.ChildId == null && a.ParticipantName.ToLower() == name.ToLower()))
+                    .ToListAsync(cancellationToken))
+                .ToList();
+
+            var stars = awards.Where(a => a.Kind == AwardKind.Star).ToList();
+            var totalStars = stars.Sum(a => a.Points);
+            var since = DateTime.UtcNow.AddDays(-30);
+
+            // The same badge earned in several classes is one reward, shown at its first earning.
+            var rewards = awards
+                .Where(a => a.Kind != AwardKind.Star && !string.IsNullOrWhiteSpace(a.Label))
+                .GroupBy(a => a.Label!.Trim(), StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.OrderBy(a => a.CreatedAtUtc).First())
+                .OrderByDescending(a => a.CreatedAtUtc)
+                .Select(a => new ChildRewardDto { Label = a.Label!.Trim(), Kind = a.Kind, EarnedAtUtc = a.CreatedAtUtc })
+                .ToList();
+
+            // Milestones are earned per class (3/6/10 stars in one session); the next target here is
+            // therefore against the best single class so far, which is what the thresholds measure.
+            var bestInOneClass = stars.Where(a => a.ClassSessionId != null)
+                .GroupBy(a => a.ClassSessionId)
+                .Select(g => g.Sum(a => a.Points))
+                .DefaultIfEmpty(0)
+                .Max();
+            var next = Milestones.Cast<(int Stars, string Label)?>().FirstOrDefault(m => m!.Value.Stars > bestInOneClass);
+
+            return new ChildRewardsDto
+            {
+                ChildId = child.Id,
+                ChildName = name,
+                TotalStars = totalStars,
+                StarsLast30Days = stars.Where(a => a.CreatedAtUtc >= since).Sum(a => a.Points),
+                Rewards = rewards,
+                NextMilestoneStars = next?.Stars,
+                NextMilestoneLabel = next?.Label,
+            };
+        }
+
         private static AwardDto ToDto(StudentAward award) => new()
         {
             Id = award.Id,

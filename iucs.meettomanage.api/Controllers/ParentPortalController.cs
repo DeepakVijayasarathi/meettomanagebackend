@@ -61,6 +61,16 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _schedulePreferences.SaveForParentAsync(UserId(), childId, request, cancellationToken));
         }
 
+        /// <summary>A parent's own child's stars and earned badges (never other children).</summary>
+        [HttpGet("children/{childId:guid}/rewards")]
+        public async Task<ActionResult<ChildRewardsDto>> ChildRewards(
+            Guid childId,
+            [FromServices] IGamificationService gamification,
+            CancellationToken cancellationToken)
+        {
+            return Ok(await gamification.GetChildRewardsAsync(UserId(), childId, cancellationToken));
+        }
+
         [HttpGet("schedule")]
         public async Task<ActionResult<IReadOnlyList<ClassSessionDto>>> Schedule(
             [FromQuery] DateTime fromUtc,
