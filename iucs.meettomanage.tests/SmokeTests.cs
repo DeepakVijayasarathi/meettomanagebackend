@@ -12336,8 +12336,15 @@ namespace iucs.meettomanage.tests
                 Id = Guid.NewGuid(), Type = "page_view", Path = x.Path, VisitorId = x.Visitor, Device = "desktop", Country = "IN",
             }).ToList();
             foreach (var row in rows) await repo.AddAsync(row);
+            var contentClick = new iucs.meettomanage.domain.Entities.Marketing.MarketingEvent
+            {
+                Id = Guid.NewGuid(), Type = iucs.meettomanage.domain.Entities.Marketing.MarketingEvent.ContentCtaClicked,
+                Path = "/blog/admissions-crm", VisitorId = "visitor-behave-a", Device = "desktop", Country = "IN",
+            };
+            await repo.AddAsync(contentClick);
             await _db.UnitOfWork.SaveChangesAsync();
             for (var i = 0; i < rows.Count; i++) rows[i].CreatedAtUtc = start.AddSeconds(plan[i].Second);
+            contentClick.CreatedAtUtc = start.AddSeconds(30);
             await _db.UnitOfWork.SaveChangesAsync();
 
             // 2 days, not 1: "1 day" means today in the given time zone (UTC here), and visits seeded
@@ -12347,7 +12354,7 @@ namespace iucs.meettomanage.tests
             Assert.Equal(3, b.Visitors);
             Assert.Equal(3, b.Visits);
             Assert.Equal(1, b.SinglePageVisits);
-            Assert.Equal([3, 0, 2, 1, 0, 0, 0], b.Funnel.Select(f => f.Visitors).ToArray());
+            Assert.Equal([3, 0, 1, 2, 1, 0, 0, 0], b.Funnel.Select(f => f.Visitors).ToArray());
             var home = Assert.Single(b.Pages, p => p.Path == "/");
             Assert.Equal(45, home.AvgSeconds);          // (60 + 30) / 2; B's lone view is not timed
             Assert.Equal(33.3, home.ExitRate);          // 1 of 3 home views ended a visit
