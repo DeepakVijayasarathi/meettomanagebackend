@@ -12340,7 +12340,9 @@ namespace iucs.meettomanage.tests
             for (var i = 0; i < rows.Count; i++) rows[i].CreatedAtUtc = start.AddSeconds(plan[i].Second);
             await _db.UnitOfWork.SaveChangesAsync();
 
-            var b = await analytics.GetSiteBehaviourAsync(1, 0, "IN");
+            // 2 days, not 1: "1 day" means today in the given time zone (UTC here), and visits seeded
+            // 3 hours ago fall on yesterday between 00:00 and 03:00 UTC, which made this fail every morning in India.
+            var b = await analytics.GetSiteBehaviourAsync(2, 0, "IN");
 
             Assert.Equal(3, b.Visitors);
             Assert.Equal(3, b.Visits);

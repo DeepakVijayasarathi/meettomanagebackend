@@ -158,7 +158,7 @@ pipeline {
                       -e Resend__From="Meet to Manage <notifications@meettomanage.cloud>" \
                       -e Marketing__LeadAlertEmail="deepanvijayasarathi32@gmail.com" \
                       -e Seed__MarketingEmail="marketing@meettomanage.cloud" \
-                      -e Seed__MarketingPin="1234" \
+                      -e Seed__MarketingPin="\${MARKETING_SEED_PIN:-}" \
                       -e MultiTenancy__Enabled=true \
                       -e SaasBilling__SignupEnabled=true \
                       -e ConnectionStrings__MasterDb="Host=${DB_HOST};Port=${DB_PORT};Database=${DB_NAME};Username=${DB_USER};Password=\${DB_PASS}" \
