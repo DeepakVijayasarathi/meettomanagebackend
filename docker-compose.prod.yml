@@ -47,7 +47,8 @@ services:
       Jwt__Audience: reader-nest-portals
       Jwt__SigningKey: ${JWT_SIGNING_KEY:?set in .env}
       Seed__AdminEmail: ${SEED_ADMIN_EMAIL:?set in .env}
-      Seed__AdminPin: ${SEED_ADMIN_PIN:-1234}
+      # No default: a fallback PIN would be reset on every restart for anyone who forgot to set it.
+      Seed__AdminPin: ${SEED_ADMIN_PIN:?set in .env}
       Seed__AdminFirstName: Meet to Manage
       Seed__AdminLastName: Admin
       Cors__AllowedOrigins__0: ${PORTAL_ORIGIN:?set in .env}
