@@ -26,6 +26,7 @@ namespace iucs.meettomanage.api.Controllers
             "app.minimumVersion", "app.forceUpgrade", "app.quickActions",
             "app.features.classes", "app.features.fees", "app.features.updates", "app.features.reports",
             "app.features.resources", "app.features.recordings", "app.features.enrollment", "app.features.support", "app.features.feedback", "app.features.mito",
+            "app.features.homework", "app.features.certificates", "app.features.rewards", "app.features.schedulePreferences", "app.features.webPortal",
             "app.mito.chatEnabled", "app.mito.quizEnabled", "app.mito.voiceEnabled", "app.mito.modes.doubt", "app.mito.modes.plan",
             "app.mito.modes.review", "app.mito.displayName", "app.mito.welcomeMessage", "app.mito.dailyLimit",
         ];
@@ -67,6 +68,8 @@ namespace iucs.meettomanage.api.Controllers
                     classes = Enabled("app.features.classes"), fees = Enabled("app.features.fees"), updates = Enabled("app.features.updates"),
                     reports = Enabled("app.features.reports"), resources = Enabled("app.features.resources"), recordings = Enabled("app.features.recordings"),
                     enrollment = Enabled("app.features.enrollment"), support = Enabled("app.features.support"), feedback = Enabled("app.features.feedback"), mito = Enabled("app.features.mito"),
+                    homework = Enabled("app.features.homework"), certificates = Enabled("app.features.certificates"), rewards = Enabled("app.features.rewards"),
+                    schedulePreferences = Enabled("app.features.schedulePreferences"), webPortal = Enabled("app.features.webPortal"),
                 },
                 mito = new
                 {
