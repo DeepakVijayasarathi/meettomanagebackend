@@ -31,6 +31,8 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         public const string DemoLoginClicked = "demo_login_clicked";
         /// <summary>The visitor followed a contextual content link to a product workflow.</summary>
         public const string ContentCtaClicked = "content_cta_clicked";
+        /// <summary>The visitor clicked a primary Book demo or Schedule call action.</summary>
+        public const string SalesCtaClicked = "sales_cta_clicked";
 
         [MaxLength(32)]
         public string Type { get; set; } = PageView;

@@ -347,7 +347,7 @@ namespace iucs.meettomanage.application.Dto.Marketing
     public class TrackMarketingEventRequest
     {
         [Required]
-        [RegularExpression("^(page_view|chat_started|form_started|form_validation_failed|form_abandoned|form_submitted|whatsapp_clicked|exit_intent_shown|exit_intent_submitted|experiment_viewed|signin_clicked|demo_login_clicked|content_cta_clicked)$")]
+        [RegularExpression("^(page_view|chat_started|form_started|form_validation_failed|form_abandoned|form_submitted|whatsapp_clicked|exit_intent_shown|exit_intent_submitted|experiment_viewed|signin_clicked|demo_login_clicked|content_cta_clicked|sales_cta_clicked)$")]
         public string Type { get; set; } = null!;
 
         [Required]

@@ -316,7 +316,7 @@ namespace iucs.meettomanage.application.Services
                     .GroupBy(e => e.Path)
                     .Select(g => new NamedCountDto { Name = g.Key, Count = g.Select(e => e.VisitorId).Distinct().Count() })
                     .OrderByDescending(x => x.Count).Take(10).ToList(),
-                Experiments = events.Where(e => e.Variant != null && e.Type != MarketingEvent.DemoLoginClicked && e.Type != MarketingEvent.ContentCtaClicked).GroupBy(e => e.Variant!).Select(g =>
+                Experiments = events.Where(e => e.Variant != null && e.Type != MarketingEvent.DemoLoginClicked && e.Type != MarketingEvent.ContentCtaClicked && e.Type != MarketingEvent.SalesCtaClicked).GroupBy(e => e.Variant!).Select(g =>
                 {
                     int Count(string type) => g.Where(e => e.Type == type).Select(e => e.VisitorId).Distinct().Count();
                     var seen = Count(MarketingEvent.ExperimentViewed);
@@ -338,6 +338,7 @@ namespace iucs.meettomanage.application.Services
                     new() { Name = "Read a blog post or feature page", Visitors = Reached(p => p.Any(x => x.StartsWith("/blog/") || x.StartsWith("/solutions/") || x.StartsWith("/customers"))) },
                     new() { Name = "Clicked a product workflow", Visitors = events.Where(e => e.Type == MarketingEvent.ContentCtaClicked).Select(e => e.VisitorId).Distinct().Count() },
                     new() { Name = "Looked at pricing", Visitors = Reached(p => p.Contains("/pricing")) },
+                    new() { Name = "Clicked Book demo or Schedule call", Visitors = events.Where(e => e.Type == MarketingEvent.SalesCtaClicked).Select(e => e.VisitorId).Distinct().Count() },
                     new() { Name = "Opened Get Started or Demo", Visitors = Reached(p => p.Contains("/get-started") || p.Contains("/demo")) },
                     new() { Name = "Started the demo form", Visitors = events.Where(e => e.Type == MarketingEvent.FormStarted).Select(e => e.VisitorId).Distinct().Count() },
                     new() { Name = "Submitted the demo form", Visitors = events.Where(e => e.Type == MarketingEvent.FormSubmitted).Select(e => e.VisitorId).Distinct().Count() },
