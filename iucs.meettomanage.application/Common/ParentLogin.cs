@@ -40,6 +40,22 @@ namespace iucs.meettomanage.application.Common
         public static bool IsDeliverable(string? email) => !string.IsNullOrWhiteSpace(email) && !IsPlaceholderEmail(email);
 
         /// <summary>
+        /// Addresses on domains reserved for documentation and testing (RFC 2606 / 6761):
+        /// example.com/.net/.org and anything under .example, .test, .invalid or .localhost.
+        /// No mail can ever be delivered there, so a real sender should skip them.
+        /// </summary>
+        public static bool IsReservedTestAddress(string? email)
+        {
+            var at = email?.LastIndexOf('@') ?? -1;
+            if (email is null || at < 0) return false;
+            var domain = email[(at + 1)..].Trim().TrimEnd('.').ToLowerInvariant();
+            return domain is "example.com" or "example.net" or "example.org"
+                || domain.EndsWith(".example.com") || domain.EndsWith(".example.net") || domain.EndsWith(".example.org")
+                || domain.EndsWith(".example") || domain.EndsWith(".test") || domain.EndsWith(".invalid") || domain.EndsWith(".localhost")
+                || domain is "example" or "test" or "invalid" or "localhost";
+        }
+
+        /// <summary>
         /// A parent's email is optional (WhatsApp-only parents), but then a mobile number is a must:
         /// it's how they're reached and how they log in. Returns the lower-cased email or, with none,
         /// the internal login key. Storing that key on the demo booking keeps every email-based

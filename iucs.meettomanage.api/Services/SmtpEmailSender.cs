@@ -48,6 +48,14 @@ namespace iucs.meettomanage.api.Services
                 return;
             }
 
+            // Demo and seed accounts use example.com-style addresses; providers reject them (Resend
+            // returns 422), which only filled the error log. Nothing can be delivered there anyway.
+            if (application.Common.ParentLogin.IsReservedTestAddress(toEmail))
+            {
+                _logger.LogDebug("Skipping email to reserved test domain for {Subject}", subject);
+                return;
+            }
+
             var integration = await _unitOfWork.Repository<Integration>().Query()
                 .FirstOrDefaultAsync(i => i.Key == EmailIntegrationKey, cancellationToken);
 
