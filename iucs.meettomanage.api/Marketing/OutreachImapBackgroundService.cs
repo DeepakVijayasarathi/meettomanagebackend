@@ -204,9 +204,32 @@ public sealed class OutreachImapBackgroundService(
         _ => "Mailbox synchronization failed before messages could be checked. Review the backend log for the safe exception type."
     };
 
+    /// <summary>
+    /// A DI scope bound to the database that holds the outreach data. With multi-tenancy on, a
+    /// background job has no request to resolve a tenant from, so it binds the tenant that owns the
+    /// configured marketing account, the same one the marketing site and the reply webhook use.
+    /// Without multi-tenancy this is a plain scope.
+    /// </summary>
+    private async Task<IServiceScope> MarketingScopeAsync(CancellationToken ct)
+    {
+        var scope = scopes.CreateScope();
+        try
+        {
+            var tenant = scope.ServiceProvider.GetService<iucs.meettomanage.api.Tenancy.TenantContext>();
+            if (tenant is { TenantId: null })
+                await scope.ServiceProvider.GetRequiredService<iucs.meettomanage.api.Tenancy.TenantResolver>().ResolveMarketingAsync(ct);
+            return scope;
+        }
+        catch
+        {
+            scope.Dispose();
+            throw;
+        }
+    }
+
     private async Task<Guid> StartRunAsync(string trigger, CancellationToken ct)
     {
-        using var scope = scopes.CreateScope();
+        using var scope = await MarketingScopeAsync(ct);
         var database = scope.ServiceProvider.GetRequiredService<MeetToManageDbContext>();
         var now = DateTime.UtcNow;
         await database.OutreachMailboxSyncRuns.Where(x => x.Status == "Running" && x.StartedAtUtc < now.AddMinutes(-15))
@@ -221,7 +244,7 @@ public sealed class OutreachImapBackgroundService(
 
     private async Task<bool> ReplySyncEnabledAsync(CancellationToken ct)
     {
-        using var scope = scopes.CreateScope();
+        using var scope = await MarketingScopeAsync(ct);
         var service = scope.ServiceProvider.GetRequiredService<OutreachService>();
         var settings = await service.GetSettingsAsync(ct);
         return settings.EmailEnabled && settings.ReplySyncEnabled;
@@ -231,7 +254,7 @@ public sealed class OutreachImapBackgroundService(
     {
         var ids = references.Append(inReplyTo).Where(x => !string.IsNullOrWhiteSpace(x))
             .SelectMany(x => new[] { x!, $"zoho:{x}" }).Distinct().ToList();
-        using var scope = scopes.CreateScope();
+        using var scope = await MarketingScopeAsync(ct);
         var database = scope.ServiceProvider.GetRequiredService<MeetToManageDbContext>();
         if (ids.Count > 0)
         {
@@ -255,7 +278,7 @@ public sealed class OutreachImapBackgroundService(
         if (runId == Guid.Empty) return;
         try
         {
-            using var scope = scopes.CreateScope();
+            using var scope = await MarketingScopeAsync(ct);
             var database = scope.ServiceProvider.GetRequiredService<MeetToManageDbContext>();
             var run = await database.OutreachMailboxSyncRuns.FindAsync([runId], ct);
             if (run is not null)
