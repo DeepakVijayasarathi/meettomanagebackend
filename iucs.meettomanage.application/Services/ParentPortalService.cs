@@ -1,3 +1,4 @@
+using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.application.Dto.Billing;
@@ -22,9 +23,12 @@ namespace iucs.meettomanage.application.Services
     {
         private readonly IUnitOfWork _unitOfWork;
 
-        public ParentPortalService(IUnitOfWork unitOfWork)
+        private readonly IDirectUploadStorage? _directUploads;
+
+        public ParentPortalService(IUnitOfWork unitOfWork, IDirectUploadStorage? directUploads = null)
         {
             _unitOfWork = unitOfWork;
+            _directUploads = directUploads;
         }
 
         public async Task<ParentDashboardDto> GetDashboardAsync(Guid parentUserId, CancellationToken cancellationToken = default)
@@ -500,7 +504,7 @@ namespace iucs.meettomanage.application.Services
             {
                 Id = r.Id,
                 ClassSessionId = r.ClassSessionId,
-                StorageUrl = r.StorageUrl,
+                StorageUrl = RecordingPlayback.Url(_directUploads, r.StorageUrl),
                 DurationSeconds = r.DurationSeconds,
                 ExpiresAtUtc = r.ExpiresAtUtc,
                 CreatedAtUtc = r.CreatedAtUtc,
@@ -561,7 +565,7 @@ namespace iucs.meettomanage.application.Services
                 {
                     Id = r.Id,
                     ClassSessionId = r.ClassSessionId,
-                    StorageUrl = r.StorageUrl,
+                    StorageUrl = RecordingPlayback.Url(_directUploads, r.StorageUrl),
                     DurationSeconds = r.DurationSeconds,
                     ExpiresAtUtc = r.ExpiresAtUtc,
                     CreatedAtUtc = r.CreatedAtUtc,

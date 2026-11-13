@@ -102,6 +102,9 @@ namespace iucs.meettomanage.application.Services
             RegisterRecordingRequest request,
             CancellationToken cancellationToken = default);
 
+        /// <summary>Throws unless the caller may attach a recording to this session (its own teacher, or an admin).</summary>
+        Task EnsureCanAttachRecordingAsync(Guid sessionId, CancellationToken cancellationToken = default);
+
         Task<IReadOnlyList<SessionRecordingDto>> ListRecordingsAsync(
             Guid sessionId,
             CancellationToken cancellationToken = default);

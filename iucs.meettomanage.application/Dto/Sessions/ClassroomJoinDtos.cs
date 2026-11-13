@@ -85,6 +85,17 @@ namespace iucs.meettomanage.application.Dto.Sessions
 
         public bool AutoRecordEnabled { get; set; }
 
+        /// <summary>
+        /// Where class recordings are made: "server" (the video server's recorder, Jibri — today's
+        /// behaviour and the default), "browser" (in the teacher's own browser, uploaded as it
+        /// records — no recording-server cost), or "smart" (the browser when the teacher's device
+        /// can do it, the server otherwise, each covering for the other when it can't start).
+        /// </summary>
+        public string RecordingMode { get; set; } = "server";
+
+        /// <summary>Whether a teacher may switch between server and browser recording in class.</summary>
+        public bool TeacherCanChooseRecording { get; set; }
+
         /// <summary>Whether a class should start with Jitsi's lobby (waiting room) already on, so a
         /// student can't land straight in an unattended room before the teacher's even joined —
         /// admin-configurable (Settings → Integrations) rather than always off, which is what a

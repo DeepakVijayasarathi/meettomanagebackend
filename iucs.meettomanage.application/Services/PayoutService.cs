@@ -1,3 +1,4 @@
+using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.application.Dto.Payouts;
@@ -23,12 +24,16 @@ namespace iucs.meettomanage.application.Services
         private readonly INotificationService _notificationService;
         private readonly IConfiguration _configuration;
 
+        private readonly IDirectUploadStorage? _directUploads;
+
         public PayoutService(
             IUnitOfWork unitOfWork,
             IAuditLogService auditLog,
             INotificationService notificationService,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            IDirectUploadStorage? directUploads = null)
         {
+            _directUploads = directUploads;
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _notificationService = notificationService;
@@ -467,7 +472,7 @@ namespace iucs.meettomanage.application.Services
             {
                 Id = r.Id,
                 ClassSessionId = r.ClassSessionId,
-                StorageUrl = r.StorageUrl,
+                StorageUrl = RecordingPlayback.Url(_directUploads, r.StorageUrl),
                 DurationSeconds = r.DurationSeconds,
                 ExpiresAtUtc = r.ExpiresAtUtc,
                 CreatedAtUtc = r.CreatedAtUtc,

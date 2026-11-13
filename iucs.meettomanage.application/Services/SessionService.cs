@@ -51,6 +51,7 @@ namespace iucs.meettomanage.application.Services
         private readonly IJitsiTokenService _jitsiTokenService;
         private readonly IClassSessionEventLogService _eventLog;
         private readonly ITokenService _tokenService;
+        private readonly IDirectUploadStorage? _directUploads;
 
         public SessionService(
             IUnitOfWork unitOfWork,
@@ -60,8 +61,10 @@ namespace iucs.meettomanage.application.Services
             ICurrentUserService currentUser,
             IJitsiTokenService jitsiTokenService,
             IClassSessionEventLogService eventLog,
-            ITokenService tokenService)
+            ITokenService tokenService,
+            IDirectUploadStorage? directUploads = null)
         {
+            _directUploads = directUploads;
             _unitOfWork = unitOfWork;
             _auditLog = auditLog;
             _payoutService = payoutService;
@@ -1047,6 +1050,13 @@ namespace iucs.meettomanage.application.Services
             return candidateUtc;
         }
 
+        public async Task EnsureCanAttachRecordingAsync(Guid sessionId, CancellationToken cancellationToken = default)
+        {
+            var session = await _unitOfWork.Repository<ClassSession>().GetByIdAsync(sessionId, cancellationToken)
+                ?? throw new NotFoundException(nameof(ClassSession), sessionId);
+            await EnsureSessionParticipantAsync(session, cancellationToken);
+        }
+
         public async Task<SessionRecordingDto> AddRecordingAsync(
             Guid sessionId,
             RegisterRecordingRequest request,
@@ -1336,7 +1346,7 @@ namespace iucs.meettomanage.application.Services
                 {
                     Id = r.Id,
                     ClassSessionId = r.ClassSessionId,
-                    StorageUrl = r.StorageUrl,
+                    StorageUrl = RecordingPlayback.Url(_directUploads, r.StorageUrl),
                     DurationSeconds = r.DurationSeconds,
                     FileSizeBytes = r.FileSizeBytes,
                     ExpiresAtUtc = r.ExpiresAtUtc,
@@ -2511,6 +2521,8 @@ namespace iucs.meettomanage.application.Services
                 Domain = JitsiLinkBuilder.ResolveDomain(configJson),
                 AutoRecordEnabled = ReadAutoRecordEnabled(configJson),
                 DefaultLobbyEnabled = ReadDefaultLobbyEnabled(configJson),
+                RecordingMode = ReadRecordingMode(configJson),
+                TeacherCanChooseRecording = ReadConfigFlag(configJson, "teacherRecordingChoice", true),
             };
         }
 
@@ -2606,6 +2618,30 @@ namespace iucs.meettomanage.application.Services
                 .FirstOrDefaultAsync(p => p.ClassSessionId == sessionId, cancellationToken)
                 ?? throw new NotFoundException(nameof(SessionPresentation), sessionId);
             return new SessionPresentationDownloadDto { StorageUrl = presentation.StorageUrl, OriginalFileName = presentation.OriginalFileName };
+        }
+
+        /// <summary>"server" (default, today's behaviour), "browser" or "smart" — see ClassroomSettingsDto.RecordingMode.</summary>
+        public static string ReadRecordingMode(string? configJson)
+        {
+            var value = ReadConfigValue(configJson, "recordingMode")?.Trim().ToLowerInvariant();
+            return value is "browser" or "smart" ? value : "server";
+        }
+
+        private static bool ReadConfigFlag(string? configJson, string key, bool fallback) =>
+            bool.TryParse(ReadConfigValue(configJson, key), out var parsed) ? parsed : fallback;
+
+        private static string? ReadConfigValue(string? configJson, string key)
+        {
+            if (string.IsNullOrWhiteSpace(configJson)) return null;
+            try
+            {
+                var config = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(configJson);
+                return config is not null && config.TryGetValue(key, out var value) ? value : null;
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                return null;
+            }
         }
 
         /// <summary>Defaults to on (today's unconditional behaviour) until an admin explicitly turns it off.</summary>
@@ -2804,13 +2840,13 @@ namespace iucs.meettomanage.application.Services
             }
         }
 
-        private static SessionRecordingDto ToRecordingDto(SessionRecording recording)
+        private SessionRecordingDto ToRecordingDto(SessionRecording recording)
         {
             return new SessionRecordingDto
             {
                 Id = recording.Id,
                 ClassSessionId = recording.ClassSessionId,
-                StorageUrl = recording.StorageUrl,
+                StorageUrl = RecordingPlayback.Url(_directUploads, recording.StorageUrl),
                 DurationSeconds = recording.DurationSeconds,
                 FileSizeBytes = recording.FileSizeBytes,
                 ExpiresAtUtc = recording.ExpiresAtUtc,

@@ -25,8 +25,11 @@ namespace iucs.meettomanage.api.Controllers
         private readonly IAcademicOpsService _academicOpsService;
         private readonly IHubContext<ClassroomHub> _classroomHub;
 
-        public SessionsController(ISessionService sessionService, IFileStorage fileStorage, IAcademicOpsService academicOpsService, IHubContext<ClassroomHub> classroomHub)
+        private readonly IDirectUploadStorage _directUploads;
+
+        public SessionsController(ISessionService sessionService, IFileStorage fileStorage, IAcademicOpsService academicOpsService, IHubContext<ClassroomHub> classroomHub, IDirectUploadStorage directUploads)
         {
+            _directUploads = directUploads;
             _sessionService = sessionService;
             _fileStorage = fileStorage;
             _academicOpsService = academicOpsService;
@@ -365,6 +368,85 @@ namespace iucs.meettomanage.api.Controllers
         {
             request.FileSizeBytes = await ResolveRecordingSizeAsync(request.StorageUrl, request.FileSizeBytes, cancellationToken);
             return Ok(await _sessionService.AddRecordingAsync(id, request, cancellationToken));
+        }
+
+        // ---- Browser recording: the teacher's browser records the class and uploads it in parts
+        // straight to object storage while it records (no recording server involved). ----
+
+        /// <summary>An object key this app issued (optionally tenant-prefixed) for a recording file.</summary>
+        private static readonly System.Text.RegularExpressions.Regex BrowserRecordingKey =
+            new(@"^([0-9a-f]{32}-)?[0-9a-f]{32}\.(mp4|webm)$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        [HttpPost("{id:guid}/recordings/uploads")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.Teacher)}")]
+        [RequiresFeature(EntitlementKeys.Recordings)]
+        public async Task<ActionResult<BrowserRecordingUploadDto>> StartBrowserRecording(
+            Guid id, StartBrowserRecordingRequest request, CancellationToken cancellationToken)
+        {
+            await _sessionService.EnsureCanAttachRecordingAsync(id, cancellationToken);
+            var type = request.ContentType.Split(';')[0].Trim().ToLowerInvariant();
+            var extension = type switch { "video/mp4" => ".mp4", "video/webm" => ".webm", _ => null };
+            if (extension is null)
+            {
+                return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "Recordings must be video/mp4 or video/webm." });
+            }
+
+            var upload = await _directUploads.StartMultipartAsync($"class-recording{extension}", type, cancellationToken);
+            return Ok(new BrowserRecordingUploadDto { Key = upload.Key, UploadId = upload.UploadId, PartSizeBytes = upload.PartSizeBytes });
+        }
+
+        [HttpPost("{id:guid}/recordings/uploads/parts")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.Teacher)}")]
+        [RequiresFeature(EntitlementKeys.Recordings)]
+        public async Task<ActionResult<IReadOnlyList<BrowserRecordingPartUrlDto>>> BrowserRecordingPartUrls(
+            Guid id, BrowserRecordingPartsRequest request, CancellationToken cancellationToken)
+        {
+            if (!BrowserRecordingKey.IsMatch(request.Key) || request.PartNumbers.Any(n => n < 1 || n > 10000))
+            {
+                return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "Invalid upload reference." });
+            }
+
+            await _sessionService.EnsureCanAttachRecordingAsync(id, cancellationToken);
+            return Ok(_directUploads.GetPartUrls(request.Key, request.UploadId, request.PartNumbers)
+                .Select(p => new BrowserRecordingPartUrlDto { PartNumber = p.PartNumber, Url = p.Url }).ToList());
+        }
+
+        /// <summary>Joins the uploaded parts into one file and registers it like any other class recording.</summary>
+        [HttpPost("{id:guid}/recordings/uploads/complete")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.Teacher)}")]
+        [RequiresFeature(EntitlementKeys.Recordings)]
+        public async Task<ActionResult<SessionRecordingDto>> CompleteBrowserRecording(
+            Guid id, CompleteBrowserRecordingRequest request, CancellationToken cancellationToken)
+        {
+            if (!BrowserRecordingKey.IsMatch(request.Key))
+            {
+                return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "Invalid upload reference." });
+            }
+
+            await _sessionService.EnsureCanAttachRecordingAsync(id, cancellationToken);
+            var size = await _directUploads.CompleteMultipartAsync(
+                request.Key,
+                request.UploadId,
+                request.Parts.OrderBy(p => p.PartNumber).Select(p => new UploadedPart { PartNumber = p.PartNumber, ETag = p.ETag }).ToList(),
+                cancellationToken);
+            return Ok(await _sessionService.AddRecordingAsync(
+                id,
+                new RegisterRecordingRequest { StorageUrl = request.Key, DurationSeconds = request.DurationSeconds, FileSizeBytes = size },
+                cancellationToken));
+        }
+
+        [HttpPost("{id:guid}/recordings/uploads/abort")]
+        [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.Teacher)}")]
+        public async Task<IActionResult> AbortBrowserRecording(Guid id, AbortBrowserRecordingRequest request, CancellationToken cancellationToken)
+        {
+            if (!BrowserRecordingKey.IsMatch(request.Key))
+            {
+                return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "Invalid upload reference." });
+            }
+
+            await _sessionService.EnsureCanAttachRecordingAsync(id, cancellationToken);
+            await _directUploads.AbortMultipartAsync(request.Key, request.UploadId, cancellationToken);
+            return NoContent();
         }
 
         /// <summary>
