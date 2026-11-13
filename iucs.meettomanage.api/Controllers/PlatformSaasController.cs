@@ -77,7 +77,7 @@ public sealed class BillingProfileRequest
 /// <summary>The platform operator's view of the SaaS layer: plans, subscriptions, invoices, revenue and reminders.</summary>
 [ApiController, Route("api/platform"), Authorize(Policy = "PlatformAdmin")]
 public sealed class PlatformSaasController(MasterDbContext master, SaasSubscriptionService subscriptions, IEntitlementService entitlements,
-    SaasLifecycleBackgroundService lifecycle, SaasUsageBackgroundService usageWorker, IConfiguration configuration, IMonitoringService monitoring) : ControllerBase
+    SaasLifecycleBackgroundService lifecycle, SaasUsageBackgroundService usageWorker, IConfiguration configuration) : ControllerBase
 {
     private string Actor => "platform:" + User.Identity?.Name;
 
@@ -93,7 +93,10 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
     }
 
     [HttpGet("monitoring")]
-    public async Task<IActionResult> Monitoring(CancellationToken ct)
+    // IMonitoringService is requested here only, not in the constructor: it depends on a tenant's
+    // business database, and every platform request runs without a tenant -- as a constructor
+    // dependency it made every /api/platform endpoint fail with "A tenant must be resolved".
+    public async Task<IActionResult> Monitoring([FromServices] IMonitoringService monitoring, CancellationToken ct)
     {
         var infrastructureTask = monitoring.GetPlatformInfrastructureAsync(ct);
         // MasterDbContext is scoped and not thread-safe: keep its queries sequential while the
