@@ -93,12 +93,12 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
     }
 
     [HttpGet("monitoring")]
-    // IMonitoringService is requested here only, not in the constructor: it depends on a tenant's
-    // business database, and every platform request runs without a tenant -- as a constructor
-    // dependency it made every /api/platform endpoint fail with "A tenant must be resolved".
-    public async Task<IActionResult> Monitoring([FromServices] IMonitoringService monitoring, CancellationToken ct)
+    // Deliberately tenant-independent: platform login has no tenant database to resolve.
+    public async Task<IActionResult> Monitoring([FromServices] PlatformMonitoringSettingsService monitoringSettings,
+        [FromServices] PlatformInfrastructureMonitor infrastructureMonitor, CancellationToken ct)
     {
-        var infrastructureTask = monitoring.GetPlatformInfrastructureAsync(ct);
+        var savedMonitoring = await monitoringSettings.GetResolvedAsync(ct);
+        var infrastructureTask = infrastructureMonitor.GetAsync(savedMonitoring.PrometheusBaseUrl, PlatformMonitoringSettingsService.ToOptions(savedMonitoring), ct);
         // MasterDbContext is scoped and not thread-safe: keep its queries sequential while the
         // independent Prometheus request runs in parallel.
         var tenantStatusRows = await master.Tenants.AsNoTracking().GroupBy(x => x.Status).Select(g => new { Status = g.Key, Count = g.Count() }).ToListAsync(ct);
@@ -117,6 +117,11 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
         return Ok(new
         {
             infrastructure = await infrastructureTask,
+            monitoringPolicy = new
+            {
+                refreshSeconds = savedMonitoring.RefreshSeconds,
+                servers = savedMonitoring.Servers.Select(x => new { x.Name, x.MaintenanceMode, x.CpuWarningPercent, x.MemoryWarningPercent, x.DiskWarningPercent }),
+            },
             saas = new
             {
                 totalTenants = tenantStatuses.Values.Sum(), activeTenants = tenantStatuses.GetValueOrDefault("Active"), provisioningTenants = tenantStatuses.GetValueOrDefault("Provisioning"),
@@ -137,6 +142,23 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
             },
             generatedAtUtc = DateTime.UtcNow,
         });
+    }
+
+    [HttpGet("monitoring/settings")]
+    public async Task<IActionResult> MonitoringSettings([FromServices] PlatformMonitoringSettingsService settings, CancellationToken ct) => Ok(await settings.GetSafeAsync(ct));
+
+    [HttpPut("monitoring/settings")]
+    public async Task<IActionResult> SaveMonitoringSettings([FromServices] PlatformMonitoringSettingsService settings, PlatformMonitoringSettings input, CancellationToken ct)
+    {
+        if (await settings.SaveAsync(input, ct) is { } problem) throw new DomainValidationException(problem);
+        return Ok(await settings.GetSafeAsync(ct));
+    }
+
+    [HttpPost("monitoring/servers/{id:guid}/test-ssh")]
+    public async Task<IActionResult> TestMonitoringSsh([FromServices] PlatformMonitoringSettingsService settings, Guid id, CancellationToken ct)
+    {
+        var result = await settings.TestSshAsync(id, ct);
+        return Ok(new { ok = result.Ok, message = result.Message, latencyMs = result.LatencyMs });
     }
 
     // ------------------------------------------------------------------ plans

@@ -1,5 +1,4 @@
 using iucs.meettomanage.application.Common.Options;
-using iucs.meettomanage.application.Services;
 using iucs.meettomanage.domain.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -8,7 +7,8 @@ using iucs.meettomanage.api.Saas;
 namespace iucs.meettomanage.api.Controllers;
 
 [ApiController, Route("api/status")]
-public sealed class PublicStatusController(IMonitoringService monitoring, MasterDbContext master, StatusPageSettingsService settings) : ControllerBase
+public sealed class PublicStatusController(MasterDbContext master, StatusPageSettingsService settings,
+    PlatformMonitoringSettingsService monitoringSettings, PlatformInfrastructureMonitor infrastructureMonitor) : ControllerBase
 {
     [HttpGet]
     [ResponseCache(Duration = 15, Location = ResponseCacheLocation.Any)]
@@ -16,7 +16,8 @@ public sealed class PublicStatusController(IMonitoringService monitoring, Master
     {
         var options = await settings.GetAsync(ct);
         if (!options.Enabled) return NotFound();
-        var infrastructureTask = monitoring.GetPlatformInfrastructureAsync(ct);
+        var savedMonitoring = await monitoringSettings.GetResolvedAsync(ct);
+        var infrastructureTask = infrastructureMonitor.GetAsync(savedMonitoring.PrometheusBaseUrl, PlatformMonitoringSettingsService.ToOptions(savedMonitoring), ct);
         bool databaseHealthy;
         try { databaseHealthy = await master.Database.CanConnectAsync(ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { databaseHealthy = false; }
@@ -25,7 +26,8 @@ public sealed class PublicStatusController(IMonitoringService monitoring, Master
         var components = definitions.Select(c =>
         {
             var status = Normalise(c.ManualStatus);
-            if (status == "Operational") status = AutomaticStatus(c, databaseHealthy, infrastructure);
+            if (status == "Operational") status = savedMonitoring.Servers.Any(x => x.MaintenanceMode && x.Name.Equals(c.Server, StringComparison.OrdinalIgnoreCase))
+                ? "Maintenance" : AutomaticStatus(c, databaseHealthy, infrastructure);
             return new { key = SafeKey(c.Key), name = c.Name.Trim(), description = c.Description?.Trim(), status };
         }).ToList();
         var manual = Normalise(options.ManualStatus);
