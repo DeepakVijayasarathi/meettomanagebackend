@@ -15,6 +15,41 @@ using Xunit;
 
 namespace iucs.meettomanage.tests;
 
+public sealed class StatusPageIncidentHistoryTests : IDisposable
+{
+    private readonly SqliteConnection _connection = new("Data Source=:memory:");
+    private sealed class Factory(DbContextOptions<MasterDbContext> options) : IDbContextFactory<MasterDbContext>
+    {
+        public MasterDbContext CreateDbContext() => new(options);
+        public Task<MasterDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) => Task.FromResult(CreateDbContext());
+    }
+
+    public StatusPageIncidentHistoryTests() { _connection.Open(); using var db = Db(); db.Database.EnsureCreated(); }
+    private MasterDbContext Db() => new(new DbContextOptionsBuilder<MasterDbContext>().UseSqlite(_connection).Options);
+
+    [Fact]
+    public async Task ClearingAnIncidentPublishesItToHistory()
+    {
+        var factory = new Factory(new DbContextOptionsBuilder<MasterDbContext>().UseSqlite(_connection).Options);
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var service = new StatusPageSettingsService(factory, cache);
+        var incident = StatusPageSettingsService.Defaults();
+        incident.ManualStatus = "Degraded"; incident.IncidentTitle = "Delayed recordings";
+        incident.IncidentMessage = "Uploads are processing slowly."; incident.IncidentStartedAtUtc = DateTime.UtcNow.AddMinutes(-20);
+        Assert.Null(await service.SaveAsync(incident));
+        Assert.Empty(await service.GetHistoryAsync());
+
+        Assert.Null(await service.SaveAsync(StatusPageSettingsService.Defaults()));
+        var history = await service.GetHistoryAsync();
+        var saved = Assert.Single(history);
+        Assert.Equal("Delayed recordings", saved.Title);
+        Assert.Equal("Degraded", saved.Status);
+        Assert.True(saved.ResolvedAtUtc >= saved.StartedAtUtc);
+    }
+
+    public void Dispose() => _connection.Dispose();
+}
+
 public sealed class SaasNamingTests
 {
     [Fact]

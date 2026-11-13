@@ -38,7 +38,12 @@ public sealed class PublicSaasController(MasterDbContext master, TenantProvision
             .Where(x => x.IsPublic && x.IsActive).OrderBy(x => x.SortOrder).ToListAsync(ct);
         return Ok(plans.Select(p => new
         {
-            p.Id, p.Code, p.Name, p.Description, p.TrialDays, isFree = IsFreePlan(p),
+            p.Id, p.Code, p.Name, p.Description,
+            // Public paid plans all enter the same trial plan at signup. Expose the effective
+            // duration instead of the paid plan row's own zero, so website copy and API data
+            // have one source of truth.
+            trialDays = IsFreePlan(p) ? 0 : p.TrialDays > 0 ? p.TrialDays : options.Value.DefaultTrialDays,
+            isFree = IsFreePlan(p),
             prices = p.Prices.Where(x => x.IsActive).OrderBy(x => x.BillingInterval)
                 .Select(x => new { x.Id, billingInterval = x.BillingInterval.ToString(), x.Currency, x.Amount }),
             entitlements = p.Entitlements.Select(x => new { x.Key, x.Value }),

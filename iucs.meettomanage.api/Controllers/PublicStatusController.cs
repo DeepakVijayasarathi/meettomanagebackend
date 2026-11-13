@@ -15,6 +15,7 @@ public sealed class PublicStatusController(MasterDbContext master, StatusPageSet
     public async Task<IActionResult> Get(CancellationToken ct)
     {
         var options = await settings.GetAsync(ct);
+        var historyTask = settings.GetHistoryAsync(ct);
         if (!options.Enabled) return NotFound();
         var savedMonitoring = await monitoringSettings.GetResolvedAsync(ct);
         var infrastructureTask = infrastructureMonitor.GetAsync(savedMonitoring.PrometheusBaseUrl, PlatformMonitoringSettingsService.ToOptions(savedMonitoring), ct);
@@ -22,6 +23,7 @@ public sealed class PublicStatusController(MasterDbContext master, StatusPageSet
         try { databaseHealthy = await master.Database.CanConnectAsync(ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { databaseHealthy = false; }
         var infrastructure = await infrastructureTask;
+        var history = await historyTask;
         var definitions = options.Components.Count > 0 ? options.Components : DefaultComponents(infrastructure.Servers.Select(x => x.Name));
         var components = definitions.Select(c =>
         {
@@ -41,6 +43,7 @@ public sealed class PublicStatusController(MasterDbContext master, StatusPageSet
             title = options.Title.Trim(), description = options.Description.Trim(), supportUrl = options.SupportUrl,
             refreshSeconds = Math.Clamp(options.RefreshSeconds, 15, 300), overallStatus = overall, components,
             incident = hasIncident ? new { title = options.IncidentTitle ?? StatusLabel(overall), message = options.IncidentMessage, startedAtUtc = options.IncidentStartedAtUtc } : null,
+            history,
             checkedAtUtc = DateTime.UtcNow,
         });
     }

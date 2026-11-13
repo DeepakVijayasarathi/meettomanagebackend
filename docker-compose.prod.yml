@@ -31,6 +31,9 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_HTTP_PORTS: "8080"
+      # Release identity is returned by /health, so operators can prove exactly what is live.
+      RELEASE_VERSION: ${RELEASE_VERSION:-compose-local}
+      GIT_COMMIT: ${GIT_COMMIT:-unknown}
       MultiTenancy__Enabled: "true"
       # Public self-service signup at /signup (Free plan or trial); off makes /signup a request form.
       SaasBilling__SignupEnabled: "true"

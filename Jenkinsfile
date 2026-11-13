@@ -20,9 +20,9 @@ pipeline {
         STORAGE_S3_BUCKET_NAME   = 'readernest'
 
         // Replace with the real public URLs. CORS must be the exact frontend origin, never '*'.
-        FRONTEND_BASE_URL    = 'https://app.example.com'
-        API_BASE_URL         = 'https://api.example.com'
-        PLATFORM_ADMIN_EMAIL = 'platform-admin@example.com'
+        FRONTEND_BASE_URL    = 'https://meettomanage.cloud'
+        API_BASE_URL         = 'https://api.meettomanage.cloud'
+        PLATFORM_ADMIN_EMAIL = 'platform-admin@meettomanage.cloud'
 
         DOCKER_NETWORK     = 'reader-network'
     }
@@ -141,6 +141,8 @@ pipeline {
                       --restart unless-stopped \
                       -e ASPNETCORE_ENVIRONMENT=Production \
                       -e ASPNETCORE_URLS=http://+:8080 \
+                      -e RELEASE_VERSION="${RELEASE_VERSION}" \
+                      -e GIT_COMMIT="${GIT_COMMIT}" \
                        -e Storage__S3__Endpoint="${STORAGE_S3_ENDPOINT}" \
                       -e Storage__S3__AccessKey="\${S3_ACCESS_KEY}" \
                       -e Storage__S3__SecretKey="\${S3_SECRET_KEY}" \
@@ -179,7 +181,11 @@ pipeline {
         stage('Verify Deployment') {
             steps {
                 sh """
-                    sleep 15
+                    for attempt in \$(seq 1 30); do
+                      curl --fail --silent http://127.0.0.1:2200/health >/dev/null && break
+                      test "\${attempt}" -eq 30 && { docker logs --tail 100 ${CONTAINER_NAME}; exit 1; }
+                      sleep 2
+                    done
                     docker ps | grep ${CONTAINER_NAME}
                     docker logs --tail 50 ${CONTAINER_NAME}
                     # A missing master/tenant connection fails startup, so require /health to answer.
@@ -187,6 +193,9 @@ pipeline {
                     echo "\${HEALTH_JSON}"
                     echo "\${HEALTH_JSON}" | grep -F '"version":"${RELEASE_VERSION}"'
                     echo "\${HEALTH_JSON}" | grep -F '"commit":"${GIT_COMMIT}"'
+                    PUBLIC_HEALTH=\$(curl --fail --silent --show-error ${API_BASE_URL}/health)
+                    echo "\${PUBLIC_HEALTH}" | grep -F '"version":"${RELEASE_VERSION}"'
+                    echo "\${PUBLIC_HEALTH}" | grep -F '"commit":"${GIT_COMMIT}"'
                 """
             }
         }

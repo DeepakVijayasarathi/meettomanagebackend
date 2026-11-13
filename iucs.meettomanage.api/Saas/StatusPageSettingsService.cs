@@ -12,6 +12,7 @@ public sealed class StatusPageSettingsService(IDbContextFactory<MasterDbContext>
     private const string Prefix = "statusPage.";
     private const string CacheKey = "platform-status-page-settings";
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    public sealed record IncidentHistoryItem(string Title, string? Message, string Status, DateTime StartedAtUtc, DateTime ResolvedAtUtc);
 
     public static StatusPageOptions Defaults() => new()
     {
@@ -75,12 +76,50 @@ public sealed class StatusPageSettingsService(IDbContextFactory<MasterDbContext>
         };
         await using var db = await factory.CreateDbContextAsync(ct);
         var existing = await db.PlatformSettings.Where(x => x.Key.StartsWith(Prefix)).ToDictionaryAsync(x => x.Key, ct);
+        ArchiveResolvedIncident(existing, value, db);
         foreach (var (suffix, content) in values) {
             var key = Prefix + suffix;
             if (!existing.TryGetValue(key, out var row)) db.PlatformSettings.Add(row = new PlatformSetting { Key = key });
             row.Value = content; row.UpdatedAtUtc = DateTime.UtcNow;
         }
         await db.SaveChangesAsync(ct); cache.Remove(CacheKey); return null;
+    }
+
+    public async Task<IReadOnlyList<IncidentHistoryItem>> GetHistoryAsync(CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var raw = await db.PlatformSettings.AsNoTracking().Where(x => x.Key == Prefix + "history").Select(x => x.Value).SingleOrDefaultAsync(ct);
+        return ParseHistory(raw);
+    }
+
+    private static void ArchiveResolvedIncident(IReadOnlyDictionary<string, PlatformSetting> existing, StatusPageOptions next, MasterDbContext db)
+    {
+        string? Old(string suffix) => existing.GetValueOrDefault(Prefix + suffix)?.Value;
+        var oldTitle = Clean(Old("incidentTitle"));
+        var oldStatus = NormalizeStatus(Old("manualStatus"));
+        var nextTitle = Clean(next.IncidentTitle);
+        var nextStatus = NormalizeStatus(next.ManualStatus);
+        var hadIncident = oldTitle is not null || oldStatus != "Operational";
+        var incidentChanged = !string.Equals(oldTitle, nextTitle, StringComparison.Ordinal) || oldStatus != nextStatus;
+        if (!hadIncident || !incidentChanged) return;
+
+        var now = DateTime.UtcNow;
+        var started = DateTime.TryParse(Old("incidentStartedAtUtc"), out var parsed) ? parsed.ToUniversalTime() : now;
+        var title = oldTitle ?? oldStatus switch { "MajorOutage" => "Service outage", "Degraded" => "Degraded performance", "Maintenance" => "Scheduled maintenance", _ => "Service incident" };
+        var history = ParseHistory(Old("history")).ToList();
+        history.Insert(0, new IncidentHistoryItem(title, Clean(Old("incidentMessage")), oldStatus, started, now));
+        // PlatformSetting.Value is deliberately bounded. Keep the most recent concise entries.
+        var json = JsonSerializer.Serialize(history.Take(8).Select(x => x with { Message = x.Message is { Length: > 160 } m ? m[..160] : x.Message }), Json);
+        while (json.Length > 1900 && history.Count > 1) { history.RemoveAt(history.Count - 1); json = JsonSerializer.Serialize(history, Json); }
+        if (!existing.TryGetValue(Prefix + "history", out var row)) db.PlatformSettings.Add(row = new PlatformSetting { Key = Prefix + "history" });
+        row.Value = json; row.UpdatedAtUtc = now;
+    }
+
+    private static IReadOnlyList<IncidentHistoryItem> ParseHistory(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return [];
+        try { return JsonSerializer.Deserialize<List<IncidentHistoryItem>>(raw, Json) ?? []; }
+        catch (JsonException) { return []; }
     }
 
     private static string NormalizeStatus(string? value) => value?.Trim().ToLowerInvariant() switch { "degraded" => "Degraded", "maintenance" => "Maintenance", "majoroutage" or "major-outage" => "MajorOutage", _ => "Operational" };
