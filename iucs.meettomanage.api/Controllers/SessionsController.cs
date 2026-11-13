@@ -1,3 +1,4 @@
+using iucs.meettomanage.application.Common.Exceptions;
 using System.Security.Claims;
 using iucs.meettomanage.api.Auth;
 using iucs.meettomanage.api.Saas;
@@ -378,8 +379,14 @@ namespace iucs.meettomanage.api.Controllers
         [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.Teacher)}")]
         [RequiresFeature(EntitlementKeys.Recordings)]
         public async Task<ActionResult<BrowserRecordingUploadDto>> StartBrowserRecording(
-            Guid id, StartBrowserRecordingRequest request, CancellationToken cancellationToken)
+            Guid id, StartBrowserRecordingRequest request, [FromServices] RecordingQuota quota, CancellationToken cancellationToken)
         {
+            // Refuse before the class is uploaded, not after.
+            if (await quota.RefusalAsync(cancellationToken) is { } refusal)
+            {
+                throw new PlanLimitException($"{refusal} This class can't be recorded until an admin frees space or upgrades the plan.");
+            }
+
             var (key, uploadId, partSize) = await _sessionService.StartBrowserRecordingAsync(id, request.ContentType, cancellationToken);
             return Ok(new BrowserRecordingUploadDto { Key = key, UploadId = uploadId, PartSizeBytes = partSize });
         }
@@ -404,8 +411,15 @@ namespace iucs.meettomanage.api.Controllers
         [Authorize(Roles = $"{nameof(UserRole.Admin)},{nameof(UserRole.Teacher)}")]
         [RequiresFeature(EntitlementKeys.Recordings)]
         public async Task<ActionResult<SessionRecordingDto>> CompleteBrowserRecording(
-            Guid id, CompleteBrowserRecordingRequest request, CancellationToken cancellationToken)
+            Guid id, CompleteBrowserRecordingRequest request, [FromServices] RecordingQuota quota, CancellationToken cancellationToken)
         {
+            // Over the limit now: keep the uploaded parts (nothing is joined), so the recording is saved
+            // automatically if the plan gets room within two days (BrowserRecordingRecoveryBackgroundService).
+            if (await quota.RefusalAsync(cancellationToken) is { } refusal)
+            {
+                throw new PlanLimitException($"{refusal} The recording is kept for two days and saved automatically if an admin frees space or upgrades the plan.");
+            }
+
             if (!BrowserRecordingKey.IsMatch(request.Key))
             {
                 return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "Invalid upload reference." });

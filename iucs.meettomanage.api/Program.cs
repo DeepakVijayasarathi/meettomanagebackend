@@ -196,6 +196,8 @@ builder.Services.AddTenantWorker<WaitlistBackgroundService>(tenantMode);
 // with no error yet still fail later in the pipeline, which nothing else catches
 builder.Services.AddTenantWorker<RecordingReconciliationBackgroundService>(tenantMode);
 builder.Services.AddTenantWorker<BrowserRecordingRecoveryBackgroundService>(tenantMode);
+builder.Services.AddScoped<iucs.meettomanage.api.Saas.RecordingQuota>();
+builder.Services.AddSingleton<iucs.meettomanage.api.Saas.StatusPageSettingsService>();
 // Cold outreach e-mail for the marketing console (only the marketing tenant has campaigns).
 builder.Services.AddScoped<iucs.meettomanage.api.Marketing.OutreachService>();
 builder.Services.AddHttpClient(nameof(iucs.meettomanage.api.Marketing.OutreachService), client => client.Timeout = TimeSpan.FromSeconds(20));

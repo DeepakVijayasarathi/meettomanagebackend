@@ -1160,16 +1160,56 @@ namespace iucs.meettomanage.application.Services
 
         public async Task<int> RecoverStalledBrowserRecordingsAsync(TimeSpan stalledAfter, CancellationToken cancellationToken = default)
         {
-            if (_directUploads is null) return 0;
-            var now = DateTime.UtcNow;
-            var cutoff = now - stalledAfter;
-            var stalled = await _unitOfWork.Repository<BrowserRecordingUpload>().TrackedQuery()
+            var saved = 0;
+            foreach (var (id, _) in await ListStalledBrowserRecordingsAsync(stalledAfter, 20, cancellationToken))
+            {
+                if (await RecoverBrowserRecordingAsync(id, cancellationToken)) saved++;
+            }
+
+            return saved;
+        }
+
+        public async Task<IReadOnlyList<(Guid Id, DateTime LastActivityAtUtc)>> ListStalledBrowserRecordingsAsync(
+            TimeSpan stalledAfter, int max, CancellationToken cancellationToken = default)
+        {
+            var cutoff = DateTime.UtcNow - stalledAfter;
+            var rows = await _unitOfWork.Repository<BrowserRecordingUpload>().Query()
                 .Where(u => u.CompletedAtUtc == null && u.LastActivityAtUtc < cutoff)
                 .OrderBy(u => u.LastActivityAtUtc)
-                .Take(20)
+                .Take(max)
+                .Select(u => new { u.Id, u.LastActivityAtUtc })
                 .ToListAsync(cancellationToken);
-            var saved = 0;
-            foreach (var upload in stalled)
+            return rows.Select(r => (r.Id, r.LastActivityAtUtc)).ToList();
+        }
+
+        public async Task CloseBrowserRecordingAsync(Guid uploadRowId, CancellationToken cancellationToken = default)
+        {
+            var upload = await _unitOfWork.Repository<BrowserRecordingUpload>().TrackedQuery()
+                .FirstOrDefaultAsync(u => u.Id == uploadRowId && u.CompletedAtUtc == null, cancellationToken);
+            if (upload is null) return;
+            if (_directUploads is not null)
+            {
+                try
+                {
+                    await _directUploads.AbortMultipartAsync(upload.StorageKey, upload.UploadId, cancellationToken);
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // Already gone from storage.
+                }
+            }
+
+            _unitOfWork.Repository<BrowserRecordingUpload>().Remove(upload);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        public async Task<bool> RecoverBrowserRecordingAsync(Guid uploadRowId, CancellationToken cancellationToken = default)
+        {
+            if (_directUploads is null) return false;
+            var now = DateTime.UtcNow;
+            var upload = await _unitOfWork.Repository<BrowserRecordingUpload>().TrackedQuery()
+                .FirstOrDefaultAsync(u => u.Id == uploadRowId && u.CompletedAtUtc == null, cancellationToken);
+            if (upload is null) return false;
             {
                 var stored = await _directUploads.ListPartsAsync(upload.StorageKey, upload.UploadId, cancellationToken);
                 // Parts must run 1, 2, 3...: keep the unbroken run from the start.
@@ -1185,18 +1225,17 @@ namespace iucs.meettomanage.application.Services
                     var size = await _directUploads.CompleteMultipartAsync(upload.StorageKey, upload.UploadId, run, cancellationToken);
                     var seconds = (int)Math.Max(0, (upload.LastActivityAtUtc - upload.CreatedAtUtc).TotalSeconds);
                     await SaveBrowserRecordingAsync(upload, seconds, size, cancellationToken);
-                    saved++;
+                    return true;
                 }
-                else if (now - upload.LastActivityAtUtc > TimeSpan.FromDays(1))
+
+                if (now - upload.LastActivityAtUtc > TimeSpan.FromDays(1))
                 {
                     // Nothing ever arrived (or storage already discarded it): close it out.
-                    await _directUploads.AbortMultipartAsync(upload.StorageKey, upload.UploadId, cancellationToken);
-                    _unitOfWork.Repository<BrowserRecordingUpload>().Remove(upload);
-                    await _unitOfWork.SaveChangesAsync(cancellationToken);
+                    await CloseBrowserRecordingAsync(upload.Id, cancellationToken);
                 }
-            }
 
-            return saved;
+                return false;
+            }
         }
 
         public async Task<SessionRecordingDto> AddRecordingAsync(

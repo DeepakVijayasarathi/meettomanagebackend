@@ -122,6 +122,15 @@ namespace iucs.meettomanage.application.Services
         /// </summary>
         Task<int> RecoverStalledBrowserRecordingsAsync(TimeSpan stalledAfter, CancellationToken cancellationToken = default);
 
+        /// <summary>Browser recording uploads with no activity for this long (oldest first).</summary>
+        Task<IReadOnlyList<(Guid Id, DateTime LastActivityAtUtc)>> ListStalledBrowserRecordingsAsync(TimeSpan stalledAfter, int max, CancellationToken cancellationToken = default);
+
+        /// <summary>Finishes one stalled upload from its stored parts. True when a recording was saved.</summary>
+        Task<bool> RecoverBrowserRecordingAsync(Guid uploadRowId, CancellationToken cancellationToken = default);
+
+        /// <summary>Gives up on an upload: discards its parts and closes it so it isn't tried again.</summary>
+        Task CloseBrowserRecordingAsync(Guid uploadRowId, CancellationToken cancellationToken = default);
+
         Task<IReadOnlyList<SessionRecordingDto>> ListRecordingsAsync(
             Guid sessionId,
             CancellationToken cancellationToken = default);
