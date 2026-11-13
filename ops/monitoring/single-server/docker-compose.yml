@@ -1,0 +1,31 @@
+services:
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    container_name: mtm-node-exporter
+    restart: unless-stopped
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+      - --collector.textfile.directory=/textfile
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro,rslave
+      - /opt/mtm-monitoring/textfile:/textfile:ro
+    networks: [reader-network]
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    container_name: mtm-prometheus
+    restart: unless-stopped
+    command: [--config.file=/etc/prometheus/prometheus.yml, --storage.tsdb.path=/prometheus, --storage.tsdb.retention.time=30d, --web.enable-lifecycle]
+    volumes:
+      - /opt/mtm-monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks: [reader-network]
+volumes:
+  prometheus-data:
+networks:
+  reader-network:
+    external: true
