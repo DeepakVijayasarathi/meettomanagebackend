@@ -37,7 +37,13 @@ public sealed class PlatformInfrastructureMonitor(IPrometheusClient prometheus)
         var read = Q($"sum(rate(node_disk_read_bytes_total{{instance=\"{i}\"}}[5m]))/1048576"); var write = Q($"sum(rate(node_disk_written_bytes_total{{instance=\"{i}\"}}[5m]))/1048576");
         var services = prometheus.QueryVectorAsync(url, $"rn_service_active{{instance=\"{i}\"}}", ct);
         var containerCpu = prometheus.QueryVectorAsync(url, $"rn_container_cpu_percent{{instance=\"{i}\"}}", ct); var containerMemory = prometheus.QueryVectorAsync(url, $"rn_container_memory_bytes{{instance=\"{i}\"}}", ct);
-        await Task.WhenAll(new Task[] { up, fresh, cores, cpu, memory, memoryTotal, swapTotal, swapFree, disk, diskTotal, load, uptime, rx, tx, read, write, services, containerCpu, containerMemory });
+        Task<double?> J(string metric, string aggregate = "sum") => server.TracksLiveCalls ? Q($"{aggregate}({metric}{{instance=\"{i}\"}})") : Task.FromResult<double?>(null);
+        var conferences = J("jitsi_jvb_conferences"); var participants = J("jitsi_jvb_current_endpoints"); var averageRtt = J("jitsi_jvb_average_rtt", "avg");
+        var incomingLoss = J("jitsi_jvb_incoming_loss_fraction", "avg"); var outgoingLoss = J("jitsi_jvb_outgoing_loss_fraction", "avg");
+        var incomingBitrate = J("jitsi_jvb_incoming_bitrate"); var outgoingBitrate = J("jitsi_jvb_outgoing_bitrate"); var stress = J("jitsi_jvb_stress", "max");
+        var healthy = J("jitsi_jvb_healthy", "min"); var audioSenders = J("jitsi_jvb_endpoints_sending_audio"); var videoSenders = J("jitsi_jvb_endpoints_sending_video");
+        await Task.WhenAll(new Task[] { up, fresh, cores, cpu, memory, memoryTotal, swapTotal, swapFree, disk, diskTotal, load, uptime, rx, tx, read, write, services, containerCpu, containerMemory,
+            conferences, participants, averageRtt, incomingLoss, outgoingLoss, incomingBitrate, outgoingBitrate, stress, healthy, audioSenders, videoSenders });
         var alive = (await up ?? 0) >= .5; var totalSwap = await swapTotal ?? 0; var serviceRows = await services;
         var memoryByContainer = (await containerMemory).Where(x => x.Labels.ContainsKey("name")).ToDictionary(x => x.Labels["name"], x => x.Value / 1048576d);
         return new ServerStatusDto
@@ -48,6 +54,14 @@ public sealed class PlatformInfrastructureMonitor(IPrometheusClient prometheus)
             LoadAverage1m = await load ?? 0, UptimeSeconds = (long)(await uptime ?? 0), NetworkRxMbps = await rx ?? 0, NetworkTxMbps = await tx ?? 0, DiskReadMbps = await read ?? 0, DiskWriteMbps = await write ?? 0,
             Services = serviceRows.Select(x => new MonitoredServiceDto { Name = x.Labels.GetValueOrDefault("name", "service"), Active = x.Value >= .5 }).ToList(),
             ContainerMetrics = (await containerCpu).Select(x => new ContainerMetricDto { Name = x.Labels.GetValueOrDefault("name", "container"), CpuPercent = x.Value, MemoryMb = memoryByContainer.GetValueOrDefault(x.Labels.GetValueOrDefault("name", "")) }).OrderByDescending(x => x.CpuPercent).ToList(),
+            LiveCalls = server.TracksLiveCalls ? new LiveCallSummaryDto { ActiveConferences = (int)(await conferences ?? 0), TotalParticipants = (int)(await participants ?? 0) } : null,
+            CallQuality = server.TracksLiveCalls ? new CallQualityDto
+            {
+                AverageRttMs = await averageRtt ?? 0, IncomingLossPercent = 100 * (await incomingLoss ?? 0), OutgoingLossPercent = 100 * (await outgoingLoss ?? 0),
+                IncomingBitrateKbps = (await incomingBitrate ?? 0) / 1000, OutgoingBitrateKbps = (await outgoingBitrate ?? 0) / 1000,
+                JvbStressPercent = 100 * (await stress ?? 0), JvbHealthy = (await healthy ?? 0) >= .5,
+                EndpointsSendingAudio = (int)(await audioSenders ?? 0), EndpointsSendingVideo = (int)(await videoSenders ?? 0),
+            } : null,
         };
     }
 

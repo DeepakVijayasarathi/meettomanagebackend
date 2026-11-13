@@ -23,9 +23,12 @@ services:
     volumes:
       - /opt/mtm-monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
-    networks: [reader-network]
+    networks: [reader-network, jitsi-network]
 volumes:
   prometheus-data:
 networks:
   reader-network:
     external: true
+  jitsi-network:
+    external: true
+    name: docker-jitsi-meet_meet.jitsi
