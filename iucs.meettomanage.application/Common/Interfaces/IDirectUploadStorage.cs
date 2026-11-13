@@ -42,6 +42,12 @@ namespace iucs.meettomanage.application.Common.Interfaces
         /// <summary>Stitches the parts into the object and returns its final size in bytes.</summary>
         Task<long> CompleteMultipartAsync(string key, string uploadId, IReadOnlyList<UploadedPart> parts, CancellationToken cancellationToken = default);
 
+        /// <summary>
+        /// The parts already stored for an unfinished upload, in order (used to finish an upload whose
+        /// browser went away). Empty when the upload no longer exists.
+        /// </summary>
+        Task<IReadOnlyList<UploadedPart>> ListPartsAsync(string key, string uploadId, CancellationToken cancellationToken = default);
+
         /// <summary>Discards an unfinished upload and its stored parts.</summary>
         Task AbortMultipartAsync(string key, string uploadId, CancellationToken cancellationToken = default);
 

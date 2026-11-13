@@ -62,6 +62,8 @@ namespace iucs.meettomanage.domain.Data
         public DbSet<SessionAttendance> SessionAttendances => Set<SessionAttendance>();
         public DbSet<SessionRecording> SessionRecordings => Set<SessionRecording>();
 
+        public DbSet<BrowserRecordingUpload> BrowserRecordingUploads => Set<BrowserRecordingUpload>();
+
         public DbSet<PersonalRoomRecording> PersonalRoomRecordings => Set<PersonalRoomRecording>();
 
         public DbSet<SessionPresentation> SessionPresentations => Set<SessionPresentation>();

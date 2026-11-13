@@ -272,6 +272,26 @@ namespace iucs.meettomanage.api.Services
             return $"\"{Convert.ToHexString(md5.GetHashAndReset()).ToLowerInvariant()}\"";
         }
 
+        public Task<IReadOnlyList<UploadedPart>> ListPartsAsync(string key, string uploadId, CancellationToken cancellationToken = default)
+        {
+            if (!UploadIdPattern.IsMatch(uploadId) || !Directory.Exists(PartsFolderFor(uploadId)))
+            {
+                return Task.FromResult<IReadOnlyList<UploadedPart>>([]);
+            }
+
+            EnsureUploadBelongsTo(uploadId, key);
+            var parts = Directory.EnumerateFiles(PartsFolderFor(uploadId), "part-*")
+                .Select(Path.GetFileName)
+                .Where(name => name is not null && !name.EndsWith(".tmp", StringComparison.Ordinal))
+                .Select(name => int.TryParse(name!["part-".Length..], out var n) ? n : 0)
+                .Where(n => n > 0)
+                .OrderBy(n => n)
+                // Only the part number matters for joining local parts.
+                .Select(n => new UploadedPart { PartNumber = n, ETag = string.Empty })
+                .ToList();
+            return Task.FromResult<IReadOnlyList<UploadedPart>>(parts);
+        }
+
         public async Task<long> CompleteMultipartAsync(string key, string uploadId, IReadOnlyList<UploadedPart> parts, CancellationToken cancellationToken = default)
         {
             EnsureUploadBelongsTo(uploadId, key);

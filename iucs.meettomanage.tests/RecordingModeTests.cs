@@ -60,6 +60,7 @@ namespace iucs.meettomanage.tests
             public IReadOnlyList<PresignedPart> GetPartUrls(string key, string uploadId, IEnumerable<int> partNumbers) => throw new NotSupportedException();
             public Task<long> CompleteMultipartAsync(string key, string uploadId, IReadOnlyList<UploadedPart> parts, CancellationToken cancellationToken = default) => throw new NotSupportedException();
             public Task AbortMultipartAsync(string key, string uploadId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+            public Task<IReadOnlyList<UploadedPart>> ListPartsAsync(string key, string uploadId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         }
     }
 }

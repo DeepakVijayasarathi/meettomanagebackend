@@ -89,6 +89,9 @@ namespace iucs.meettomanage.api.Services
         public Task AbortMultipartAsync(string key, string uploadId, CancellationToken cancellationToken = default) =>
             StoreFor(uploadId).AbortMultipartAsync(key, uploadId, cancellationToken);
 
+        public Task<IReadOnlyList<UploadedPart>> ListPartsAsync(string key, string uploadId, CancellationToken cancellationToken = default) =>
+            StoreFor(uploadId).ListPartsAsync(key, uploadId, cancellationToken);
+
         public string GetReadUrl(string key, TimeSpan validFor, string? contentType)
         {
             if (!UseS3)

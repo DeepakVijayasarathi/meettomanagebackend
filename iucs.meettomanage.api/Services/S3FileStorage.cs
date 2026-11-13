@@ -209,6 +209,35 @@ namespace iucs.meettomanage.api.Services
             }
         }
 
+        public async Task<IReadOnlyList<UploadedPart>> ListPartsAsync(string key, string uploadId, CancellationToken cancellationToken = default)
+        {
+            RequireOwnedKey(key);
+            var parts = new List<UploadedPart>();
+            try
+            {
+                int? marker = null;
+                while (true)
+                {
+                    var request = new ListPartsRequest { BucketName = _bucket, Key = key, UploadId = uploadId };
+                    if (marker is not null) request.PartNumberMarker = marker.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    var response = await _client.ListPartsAsync(request, cancellationToken);
+                    parts.AddRange(response.Parts.Select(p => new UploadedPart { PartNumber = p.PartNumber ?? 0, ETag = p.ETag }));
+                    if (response.IsTruncated != true || response.Parts.Count == 0) break;
+                    marker = response.NextPartNumberMarker;
+                }
+            }
+            catch (AmazonS3Exception ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                return [];
+            }
+            catch (AmazonServiceException ex)
+            {
+                throw StorageFailure("read the upload", ex);
+            }
+
+            return parts.OrderBy(p => p.PartNumber).ToList();
+        }
+
         public async Task AbortMultipartAsync(string key, string uploadId, CancellationToken cancellationToken = default)
         {
             RequireOwnedKey(key);

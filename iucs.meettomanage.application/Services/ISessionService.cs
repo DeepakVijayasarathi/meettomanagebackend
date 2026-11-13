@@ -105,6 +105,23 @@ namespace iucs.meettomanage.application.Services
         /// <summary>Throws unless the caller may attach a recording to this session (its own teacher, or an admin).</summary>
         Task EnsureCanAttachRecordingAsync(Guid sessionId, CancellationToken cancellationToken = default);
 
+        /// <summary>Starts a browser recording upload for this class and tracks it.</summary>
+        Task<(string Key, string UploadId, long PartSizeBytes)> StartBrowserRecordingAsync(Guid sessionId, string contentType, CancellationToken cancellationToken = default);
+
+        /// <summary>Upload addresses for parts of a tracked browser recording (also marks it as still active).</summary>
+        Task<IReadOnlyList<(int PartNumber, string Url)>> BrowserRecordingPartUrlsAsync(Guid sessionId, string key, string uploadId, IReadOnlyList<int> partNumbers, CancellationToken cancellationToken = default);
+
+        /// <summary>Joins the parts and registers the recording. Safe to call again: returns the saved recording.</summary>
+        Task<SessionRecordingDto> CompleteBrowserRecordingAsync(Guid sessionId, string key, string uploadId, IReadOnlyList<(int PartNumber, string ETag)> parts, int? durationSeconds, CancellationToken cancellationToken = default);
+
+        Task AbortBrowserRecordingAsync(Guid sessionId, string key, string uploadId, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Background: finishes browser recordings whose upload stopped (browser crashed or closed)
+        /// from the parts already stored. Returns how many recordings were saved.
+        /// </summary>
+        Task<int> RecoverStalledBrowserRecordingsAsync(TimeSpan stalledAfter, CancellationToken cancellationToken = default);
+
         Task<IReadOnlyList<SessionRecordingDto>> ListRecordingsAsync(
             Guid sessionId,
             CancellationToken cancellationToken = default);

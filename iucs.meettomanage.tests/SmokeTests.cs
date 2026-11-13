@@ -35,6 +35,7 @@ using iucs.meettomanage.domain.Entities.Settings;
 using iucs.meettomanage.domain.Entities.Users;
 using iucs.meettomanage.domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using iucs.meettomanage.application.Common.Interfaces;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -1926,6 +1927,107 @@ namespace iucs.meettomanage.tests
                 Prompt = "x",
                 Options = [new() { Text = "A", IsCorrect = true }, new() { Text = "B", IsCorrect = false }],
             }));
+        }
+
+        private sealed class FakeDirectUploads : IDirectUploadStorage
+        {
+            public Dictionary<string, List<UploadedPart>> Stored { get; } = [];
+            public List<string> Completed { get; } = [];
+            public List<string> Aborted { get; } = [];
+
+            public Task<DirectUploadSession> StartMultipartAsync(string originalFileName, string? contentType, CancellationToken cancellationToken = default)
+            {
+                var key = $"{Guid.NewGuid():N}{Path.GetExtension(originalFileName)}";
+                Stored[key] = [];
+                return Task.FromResult(new DirectUploadSession { Key = key, UploadId = "up-" + key, PartSizeBytes = 64L * 1024 * 1024 });
+            }
+
+            public IReadOnlyList<PresignedPart> GetPartUrls(string key, string uploadId, IEnumerable<int> partNumbers) =>
+                partNumbers.Select(n => new PresignedPart { PartNumber = n, Url = $"https://store/{key}/{n}" }).ToList();
+
+            public Task<long> CompleteMultipartAsync(string key, string uploadId, IReadOnlyList<UploadedPart> parts, CancellationToken cancellationToken = default)
+            {
+                Completed.Add(key);
+                return Task.FromResult(parts.Count * 8L * 1024 * 1024);
+            }
+
+            public Task AbortMultipartAsync(string key, string uploadId, CancellationToken cancellationToken = default)
+            {
+                Aborted.Add(key);
+                return Task.CompletedTask;
+            }
+
+            public Task<IReadOnlyList<UploadedPart>> ListPartsAsync(string key, string uploadId, CancellationToken cancellationToken = default) =>
+                Task.FromResult<IReadOnlyList<UploadedPart>>(Stored.TryGetValue(key, out var parts) ? parts : []);
+
+            public string GetReadUrl(string key, TimeSpan validFor, string? contentType) => $"https://signed/{key}";
+        }
+
+        private SessionService CreateSessionService(IDirectUploadStorage uploads) =>
+            new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, new FakeJitsiTokenService(), CreateEventLogService(), new FakeTokenService(), uploads);
+
+        [Fact]
+        public async Task BrowserRecording_UploadsTracksAndSavesOnce()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var uploads = new FakeDirectUploads();
+            var service = CreateSessionService(uploads);
+
+            var (key, uploadId, _) = await service.StartBrowserRecordingAsync(session.Id, "video/mp4;codecs=avc1");
+            Assert.EndsWith(".mp4", key);
+            var urls = await service.BrowserRecordingPartUrlsAsync(session.Id, key, uploadId, [1]);
+            Assert.Single(urls);
+
+            var recording = await service.CompleteBrowserRecordingAsync(session.Id, key, uploadId, [(1, "\"e1\"")], 1800);
+            Assert.Equal(key, (await _db.Context.SessionRecordings.FindAsync(recording.Id))!.StorageUrl);
+            // Listed with a signed address, not the bare storage key.
+            Assert.Equal($"https://signed/{key}", recording.StorageUrl);
+
+            // A retry (or the browser's crash recovery) gets the same recording, not a second one.
+            var again = await service.CompleteBrowserRecordingAsync(session.Id, key, uploadId, [(1, "\"e1\"")], 1800);
+            Assert.Equal(recording.Id, again.Id);
+            Assert.Single(uploads.Completed);
+            Assert.Equal(1, await _db.Context.SessionRecordings.CountAsync(r => r.ClassSessionId == session.Id));
+        }
+
+        [Fact]
+        public async Task BrowserRecording_RefusesAnUploadFromAnotherClass()
+        {
+            // Seeding makes the signed-in user the teacher of the class seeded last.
+            var (_, _, other) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var service = CreateSessionService(new FakeDirectUploads());
+            var (key, uploadId, _) = await service.StartBrowserRecordingAsync(session.Id, "video/webm");
+
+            // Another class: refused (not their class, or not that class's upload).
+            await Assert.ThrowsAnyAsync<Exception>(() => service.CompleteBrowserRecordingAsync(other.Id, key, uploadId, [(1, "e")], 10));
+            await Assert.ThrowsAsync<DomainValidationException>(() => service.CompleteBrowserRecordingAsync(session.Id, key, "wrong-upload", [(1, "e")], 10));
+            await Assert.ThrowsAsync<DomainValidationException>(() => service.StartBrowserRecordingAsync(session.Id, "application/zip"));
+        }
+
+        [Fact]
+        public async Task BrowserRecording_StalledUploadIsSavedFromStoredParts()
+        {
+            var (_, _, session) = await SeedBatchWithSessionAsync(totalSessions: 1);
+            var uploads = new FakeDirectUploads();
+            var service = CreateSessionService(uploads);
+            var (key, uploadId, _) = await service.StartBrowserRecordingAsync(session.Id, "video/mp4");
+            var (emptyKey, _, _) = await service.StartBrowserRecordingAsync(session.Id, "video/mp4");
+            // The browser crashed after parts 1-3 (part 5 arrived out of order and is ignored).
+            uploads.Stored[key] = [new() { PartNumber = 1, ETag = "a" }, new() { PartNumber = 2, ETag = "b" }, new() { PartNumber = 3, ETag = "c" }, new() { PartNumber = 5, ETag = "e" }];
+            var tracked = await _db.Context.BrowserRecordingUploads.ToListAsync();
+            foreach (var t in tracked) t.LastActivityAtUtc = DateTime.UtcNow.AddHours(-2);
+            tracked.Single(t => t.StorageKey == emptyKey).LastActivityAtUtc = DateTime.UtcNow.AddDays(-2);
+            await _db.Context.SaveChangesAsync();
+
+            Assert.Equal(1, await service.RecoverStalledBrowserRecordingsAsync(TimeSpan.FromMinutes(20)));
+            var saved = await _db.Context.SessionRecordings.SingleAsync(r => r.ClassSessionId == session.Id);
+            Assert.Equal(key, saved.StorageUrl);
+            Assert.Equal(3 * 8L * 1024 * 1024, saved.FileSizeBytes);
+            // An upload where nothing ever arrived is closed out after a day.
+            Assert.Contains(emptyKey, uploads.Aborted);
+            // Nothing left to recover.
+            Assert.Equal(0, await service.RecoverStalledBrowserRecordingsAsync(TimeSpan.FromMinutes(20)));
         }
 
         [Fact]

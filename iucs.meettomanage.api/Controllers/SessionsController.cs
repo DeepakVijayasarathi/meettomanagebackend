@@ -25,11 +25,8 @@ namespace iucs.meettomanage.api.Controllers
         private readonly IAcademicOpsService _academicOpsService;
         private readonly IHubContext<ClassroomHub> _classroomHub;
 
-        private readonly IDirectUploadStorage _directUploads;
-
-        public SessionsController(ISessionService sessionService, IFileStorage fileStorage, IAcademicOpsService academicOpsService, IHubContext<ClassroomHub> classroomHub, IDirectUploadStorage directUploads)
+        public SessionsController(ISessionService sessionService, IFileStorage fileStorage, IAcademicOpsService academicOpsService, IHubContext<ClassroomHub> classroomHub)
         {
-            _directUploads = directUploads;
             _sessionService = sessionService;
             _fileStorage = fileStorage;
             _academicOpsService = academicOpsService;
@@ -383,16 +380,8 @@ namespace iucs.meettomanage.api.Controllers
         public async Task<ActionResult<BrowserRecordingUploadDto>> StartBrowserRecording(
             Guid id, StartBrowserRecordingRequest request, CancellationToken cancellationToken)
         {
-            await _sessionService.EnsureCanAttachRecordingAsync(id, cancellationToken);
-            var type = request.ContentType.Split(';')[0].Trim().ToLowerInvariant();
-            var extension = type switch { "video/mp4" => ".mp4", "video/webm" => ".webm", _ => null };
-            if (extension is null)
-            {
-                return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "Recordings must be video/mp4 or video/webm." });
-            }
-
-            var upload = await _directUploads.StartMultipartAsync($"class-recording{extension}", type, cancellationToken);
-            return Ok(new BrowserRecordingUploadDto { Key = upload.Key, UploadId = upload.UploadId, PartSizeBytes = upload.PartSizeBytes });
+            var (key, uploadId, partSize) = await _sessionService.StartBrowserRecordingAsync(id, request.ContentType, cancellationToken);
+            return Ok(new BrowserRecordingUploadDto { Key = key, UploadId = uploadId, PartSizeBytes = partSize });
         }
 
         [HttpPost("{id:guid}/recordings/uploads/parts")]
@@ -406,9 +395,8 @@ namespace iucs.meettomanage.api.Controllers
                 return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "Invalid upload reference." });
             }
 
-            await _sessionService.EnsureCanAttachRecordingAsync(id, cancellationToken);
-            return Ok(_directUploads.GetPartUrls(request.Key, request.UploadId, request.PartNumbers)
-                .Select(p => new BrowserRecordingPartUrlDto { PartNumber = p.PartNumber, Url = p.Url }).ToList());
+            var urls = await _sessionService.BrowserRecordingPartUrlsAsync(id, request.Key, request.UploadId, request.PartNumbers, cancellationToken);
+            return Ok(urls.Select(u => new BrowserRecordingPartUrlDto { PartNumber = u.PartNumber, Url = u.Url }).ToList());
         }
 
         /// <summary>Joins the uploaded parts into one file and registers it like any other class recording.</summary>
@@ -423,16 +411,8 @@ namespace iucs.meettomanage.api.Controllers
                 return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "Invalid upload reference." });
             }
 
-            await _sessionService.EnsureCanAttachRecordingAsync(id, cancellationToken);
-            var size = await _directUploads.CompleteMultipartAsync(
-                request.Key,
-                request.UploadId,
-                request.Parts.OrderBy(p => p.PartNumber).Select(p => new UploadedPart { PartNumber = p.PartNumber, ETag = p.ETag }).ToList(),
-                cancellationToken);
-            return Ok(await _sessionService.AddRecordingAsync(
-                id,
-                new RegisterRecordingRequest { StorageUrl = request.Key, DurationSeconds = request.DurationSeconds, FileSizeBytes = size },
-                cancellationToken));
+            return Ok(await _sessionService.CompleteBrowserRecordingAsync(
+                id, request.Key, request.UploadId, request.Parts.Select(p => (p.PartNumber, p.ETag)).ToList(), request.DurationSeconds, cancellationToken));
         }
 
         [HttpPost("{id:guid}/recordings/uploads/abort")]
@@ -444,8 +424,7 @@ namespace iucs.meettomanage.api.Controllers
                 return BadRequest(new ProblemDetails { Status = 400, Title = "Bad Request", Detail = "Invalid upload reference." });
             }
 
-            await _sessionService.EnsureCanAttachRecordingAsync(id, cancellationToken);
-            await _directUploads.AbortMultipartAsync(request.Key, request.UploadId, cancellationToken);
+            await _sessionService.AbortBrowserRecordingAsync(id, request.Key, request.UploadId, cancellationToken);
             return NoContent();
         }
 

@@ -195,6 +195,7 @@ builder.Services.AddTenantWorker<WaitlistBackgroundService>(tenantMode);
 // Catches a completed class that never received a recording — auto-record can start
 // with no error yet still fail later in the pipeline, which nothing else catches
 builder.Services.AddTenantWorker<RecordingReconciliationBackgroundService>(tenantMode);
+builder.Services.AddTenantWorker<BrowserRecordingRecoveryBackgroundService>(tenantMode);
 // Cold outreach e-mail for the marketing console (only the marketing tenant has campaigns).
 builder.Services.AddScoped<iucs.meettomanage.api.Marketing.OutreachService>();
 builder.Services.AddHttpClient(nameof(iucs.meettomanage.api.Marketing.OutreachService), client => client.Timeout = TimeSpan.FromSeconds(20));

@@ -6282,6 +6282,74 @@ namespace iucs.meettomanage.domain.Migrations
                     b.ToTable("resource_folder_batch_accesses");
                 });
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.BrowserRecordingUpload", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ClassSessionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("class_session_id");
+
+                    b.Property<DateTime?>("CompletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at_utc");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at_utc");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("deleted_at_utc");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_deleted");
+
+                    b.Property<DateTime>("LastActivityAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_activity_at_utc");
+
+                    b.Property<Guid?>("StartedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("started_by_user_id");
+
+                    b.Property<string>("StorageKey")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("storage_key");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.Property<string>("UploadId")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("upload_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_browser_recording_uploads");
+
+                    b.HasIndex("ClassSessionId")
+                        .HasDatabaseName("ix_browser_recording_uploads_class_session_id");
+
+                    b.HasIndex("StorageKey")
+                        .IsUnique()
+                        .HasDatabaseName("ix_browser_recording_uploads_storage_key")
+                        .HasFilter("\"is_deleted\" = FALSE");
+
+                    b.HasIndex("CompletedAtUtc", "LastActivityAtUtc")
+                        .HasDatabaseName("ix_browser_recording_uploads_completed_at_utc_last_activity_at");
+
+                    b.ToTable("browser_recording_uploads");
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.ClassSession", b =>
                 {
                     b.Property<Guid>("Id")
@@ -9026,6 +9094,18 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Navigation("Batch");
 
                     b.Navigation("Folder");
+                });
+
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.BrowserRecordingUpload", b =>
+                {
+                    b.HasOne("iucs.meettomanage.domain.Entities.Sessions.ClassSession", "ClassSession")
+                        .WithMany()
+                        .HasForeignKey("ClassSessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_browser_recording_uploads_class_sessions_class_session_id");
+
+                    b.Navigation("ClassSession");
                 });
 
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Sessions.ClassSession", b =>

@@ -1057,6 +1057,148 @@ namespace iucs.meettomanage.application.Services
             await EnsureSessionParticipantAsync(session, cancellationToken);
         }
 
+        private IDirectUploadStorage RequireDirectUploads() =>
+            _directUploads ?? throw new DomainValidationException("Recording uploads aren't available on this server.");
+
+        public async Task<(string Key, string UploadId, long PartSizeBytes)> StartBrowserRecordingAsync(
+            Guid sessionId, string contentType, CancellationToken cancellationToken = default)
+        {
+            await EnsureCanAttachRecordingAsync(sessionId, cancellationToken);
+            var type = contentType.Split(';')[0].Trim().ToLowerInvariant();
+            var extension = type switch { "video/mp4" => ".mp4", "video/webm" => ".webm", _ => null }
+                ?? throw new DomainValidationException("Recordings must be video/mp4 or video/webm.");
+            var upload = await RequireDirectUploads().StartMultipartAsync($"class-recording{extension}", type, cancellationToken);
+            await _unitOfWork.Repository<BrowserRecordingUpload>().AddAsync(new BrowserRecordingUpload
+            {
+                ClassSessionId = sessionId,
+                StorageKey = upload.Key,
+                UploadId = upload.UploadId,
+                LastActivityAtUtc = DateTime.UtcNow,
+                StartedByUserId = _currentUser.UserId,
+            }, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return (upload.Key, upload.UploadId, upload.PartSizeBytes);
+        }
+
+        /// <summary>The tracked upload for this class with this key and id — anything else is refused.</summary>
+        private async Task<BrowserRecordingUpload> TrackedUploadAsync(Guid sessionId, string key, string uploadId, CancellationToken cancellationToken)
+        {
+            // Tracked: the caller updates it (activity time, completion).
+            var upload = await _unitOfWork.Repository<BrowserRecordingUpload>().TrackedQuery()
+                .FirstOrDefaultAsync(u => u.StorageKey == key && u.ClassSessionId == sessionId, cancellationToken);
+            if (upload is null || upload.UploadId != uploadId)
+            {
+                throw new DomainValidationException("That recording upload doesn't belong to this class.");
+            }
+
+            return upload;
+        }
+
+        public async Task<IReadOnlyList<(int PartNumber, string Url)>> BrowserRecordingPartUrlsAsync(
+            Guid sessionId, string key, string uploadId, IReadOnlyList<int> partNumbers, CancellationToken cancellationToken = default)
+        {
+            await EnsureCanAttachRecordingAsync(sessionId, cancellationToken);
+            var upload = await TrackedUploadAsync(sessionId, key, uploadId, cancellationToken);
+            if (upload.CompletedAtUtc is not null)
+            {
+                throw new DomainValidationException("This recording has already been saved.");
+            }
+
+            upload.LastActivityAtUtc = DateTime.UtcNow;
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return RequireDirectUploads().GetPartUrls(key, uploadId, partNumbers).Select(p => (p.PartNumber, p.Url)).ToList();
+        }
+
+        public async Task<SessionRecordingDto> CompleteBrowserRecordingAsync(
+            Guid sessionId, string key, string uploadId, IReadOnlyList<(int PartNumber, string ETag)> parts, int? durationSeconds, CancellationToken cancellationToken = default)
+        {
+            await EnsureCanAttachRecordingAsync(sessionId, cancellationToken);
+            var upload = await TrackedUploadAsync(sessionId, key, uploadId, cancellationToken);
+            if (upload.CompletedAtUtc is not null)
+            {
+                // Already saved (a retry, or the background recovery got there first).
+                var existing = await _unitOfWork.Repository<SessionRecording>().Query()
+                    .FirstOrDefaultAsync(r => r.ClassSessionId == sessionId && r.StorageUrl == key, cancellationToken);
+                if (existing is not null) return ToRecordingDto(existing);
+                throw new DomainValidationException("This recording upload was closed without being saved.");
+            }
+
+            var size = await RequireDirectUploads().CompleteMultipartAsync(
+                key, uploadId, parts.OrderBy(p => p.PartNumber).Select(p => new UploadedPart { PartNumber = p.PartNumber, ETag = p.ETag }).ToList(), cancellationToken);
+            var recording = await SaveBrowserRecordingAsync(upload, durationSeconds, size, cancellationToken);
+            return ToRecordingDto(recording);
+        }
+
+        public async Task AbortBrowserRecordingAsync(Guid sessionId, string key, string uploadId, CancellationToken cancellationToken = default)
+        {
+            await EnsureCanAttachRecordingAsync(sessionId, cancellationToken);
+            var upload = await TrackedUploadAsync(sessionId, key, uploadId, cancellationToken);
+            if (upload.CompletedAtUtc is not null) return;
+            await RequireDirectUploads().AbortMultipartAsync(key, uploadId, cancellationToken);
+            _unitOfWork.Repository<BrowserRecordingUpload>().Remove(upload);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        /// <summary>Registers a finished browser recording and closes its upload (no caller check: callers do that).</summary>
+        private async Task<SessionRecording> SaveBrowserRecordingAsync(BrowserRecordingUpload upload, int? durationSeconds, long? sizeBytes, CancellationToken cancellationToken)
+        {
+            var recording = new SessionRecording
+            {
+                ClassSessionId = upload.ClassSessionId,
+                StorageUrl = upload.StorageKey,
+                DurationSeconds = durationSeconds,
+                FileSizeBytes = sizeBytes,
+                // Safe legacy default; the entitlement interceptor applies the tenant's retention.
+                ExpiresAtUtc = DateTime.UtcNow.AddDays(15),
+            };
+            await _unitOfWork.Repository<SessionRecording>().AddAsync(recording, cancellationToken);
+            upload.CompletedAtUtc = DateTime.UtcNow;
+            await _auditLog.StageAsync(AuditAction.Create, nameof(SessionRecording), recording.Id.ToString(), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return recording;
+        }
+
+        public async Task<int> RecoverStalledBrowserRecordingsAsync(TimeSpan stalledAfter, CancellationToken cancellationToken = default)
+        {
+            if (_directUploads is null) return 0;
+            var now = DateTime.UtcNow;
+            var cutoff = now - stalledAfter;
+            var stalled = await _unitOfWork.Repository<BrowserRecordingUpload>().TrackedQuery()
+                .Where(u => u.CompletedAtUtc == null && u.LastActivityAtUtc < cutoff)
+                .OrderBy(u => u.LastActivityAtUtc)
+                .Take(20)
+                .ToListAsync(cancellationToken);
+            var saved = 0;
+            foreach (var upload in stalled)
+            {
+                var stored = await _directUploads.ListPartsAsync(upload.StorageKey, upload.UploadId, cancellationToken);
+                // Parts must run 1, 2, 3...: keep the unbroken run from the start.
+                var run = new List<UploadedPart>();
+                foreach (var part in stored.OrderBy(p => p.PartNumber))
+                {
+                    if (part.PartNumber != run.Count + 1) break;
+                    run.Add(part);
+                }
+
+                if (run.Count > 0)
+                {
+                    var size = await _directUploads.CompleteMultipartAsync(upload.StorageKey, upload.UploadId, run, cancellationToken);
+                    var seconds = (int)Math.Max(0, (upload.LastActivityAtUtc - upload.CreatedAtUtc).TotalSeconds);
+                    await SaveBrowserRecordingAsync(upload, seconds, size, cancellationToken);
+                    saved++;
+                }
+                else if (now - upload.LastActivityAtUtc > TimeSpan.FromDays(1))
+                {
+                    // Nothing ever arrived (or storage already discarded it): close it out.
+                    await _directUploads.AbortMultipartAsync(upload.StorageKey, upload.UploadId, cancellationToken);
+                    _unitOfWork.Repository<BrowserRecordingUpload>().Remove(upload);
+                    await _unitOfWork.SaveChangesAsync(cancellationToken);
+                }
+            }
+
+            return saved;
+        }
+
         public async Task<SessionRecordingDto> AddRecordingAsync(
             Guid sessionId,
             RegisterRecordingRequest request,
