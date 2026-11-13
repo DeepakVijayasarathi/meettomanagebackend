@@ -4,6 +4,7 @@ using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.domain.Data;
 using iucs.meettomanage.domain.Entities.Saas;
 using iucs.meettomanage.domain.Entities.Tenancy;
+using iucs.meettomanage.application.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -76,9 +77,64 @@ public sealed class BillingProfileRequest
 /// <summary>The platform operator's view of the SaaS layer: plans, subscriptions, invoices, revenue and reminders.</summary>
 [ApiController, Route("api/platform"), Authorize(Policy = "PlatformAdmin")]
 public sealed class PlatformSaasController(MasterDbContext master, SaasSubscriptionService subscriptions, IEntitlementService entitlements,
-    SaasLifecycleBackgroundService lifecycle, SaasUsageBackgroundService usageWorker, IConfiguration configuration) : ControllerBase
+    SaasLifecycleBackgroundService lifecycle, SaasUsageBackgroundService usageWorker, IConfiguration configuration, IMonitoringService monitoring) : ControllerBase
 {
     private string Actor => "platform:" + User.Identity?.Name;
+
+    [HttpGet("status-page-settings")]
+    public async Task<IActionResult> StatusPageSettings([FromServices] StatusPageSettingsService settings, CancellationToken ct) => Ok(await settings.GetAsync(ct));
+
+    [HttpPut("status-page-settings")]
+    public async Task<IActionResult> SaveStatusPageSettings([FromServices] StatusPageSettingsService settings,
+        iucs.meettomanage.application.Common.Options.StatusPageOptions input, CancellationToken ct)
+    {
+        if (await settings.SaveAsync(input, ct) is { } problem) throw new DomainValidationException(problem);
+        return Ok(await settings.GetAsync(ct));
+    }
+
+    [HttpGet("monitoring")]
+    public async Task<IActionResult> Monitoring(CancellationToken ct)
+    {
+        var infrastructureTask = monitoring.GetPlatformInfrastructureAsync(ct);
+        // MasterDbContext is scoped and not thread-safe: keep its queries sequential while the
+        // independent Prometheus request runs in parallel.
+        var tenantStatusRows = await master.Tenants.AsNoTracking().GroupBy(x => x.Status).Select(g => new { Status = g.Key, Count = g.Count() }).ToListAsync(ct);
+        var subscriptionStatusRows = await master.TenantSubscriptions.AsNoTracking().GroupBy(x => x.Status).Select(g => new { Status = g.Key, Count = g.Count() }).ToListAsync(ct);
+        var latestUsageDate = await master.TenantUsageSnapshots.AsNoTracking().Select(x => (DateOnly?)x.SnapshotDate).MaxAsync(ct);
+        var usage = latestUsageDate is null ? null : await master.TenantUsageSnapshots.AsNoTracking().Where(x => x.SnapshotDate == latestUsageDate)
+            .GroupBy(_ => 1).Select(g => new { TenantSnapshots = g.Count(), ActiveStudents = g.Sum(x => x.ActiveStudents), Staff = g.Sum(x => x.StaffCount), StorageBytes = g.Sum(x => x.StorageBytes), SessionMinutesMonth = g.Sum(x => x.SessionMinutesMonth), SessionsMonth = g.Sum(x => x.SessionsMonth), RecordingsMonth = g.Sum(x => x.RecordingsMonth) }).SingleOrDefaultAsync(ct);
+
+        var dbTimer = System.Diagnostics.Stopwatch.StartNew();
+        var databaseHealthy = await master.Database.CanConnectAsync(ct);
+        dbTimer.Stop();
+        using var process = System.Diagnostics.Process.GetCurrentProcess();
+        var tenantStatuses = tenantStatusRows.ToDictionary(x => x.Status.ToString(), x => x.Count);
+        var subscriptionStatuses = subscriptionStatusRows.ToDictionary(x => x.Status.ToString(), x => x.Count);
+
+        return Ok(new
+        {
+            infrastructure = await infrastructureTask,
+            saas = new
+            {
+                totalTenants = tenantStatuses.Values.Sum(), activeTenants = tenantStatuses.GetValueOrDefault("Active"), provisioningTenants = tenantStatuses.GetValueOrDefault("Provisioning"),
+                suspendedTenants = tenantStatuses.GetValueOrDefault("Suspended"), failedTenants = tenantStatuses.GetValueOrDefault("Failed"), subscriptionStatuses,
+                usageDate = latestUsageDate, usage,
+            },
+            masterDatabase = new { healthy = databaseHealthy, latencyMs = Math.Round(dbTimer.Elapsed.TotalMilliseconds, 1) },
+            runtime = new
+            {
+                framework = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+                os = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+                processorCount = Environment.ProcessorCount,
+                processUptimeSeconds = Math.Max(0, (long)(DateTime.UtcNow - process.StartTime.ToUniversalTime()).TotalSeconds),
+                workingSetMb = Math.Round(process.WorkingSet64 / 1048576d, 1),
+                managedHeapMb = Math.Round(GC.GetTotalMemory(false) / 1048576d, 1),
+                threadCount = process.Threads.Count,
+                gcGen0 = GC.CollectionCount(0), gcGen1 = GC.CollectionCount(1), gcGen2 = GC.CollectionCount(2),
+            },
+            generatedAtUtc = DateTime.UtcNow,
+        });
+    }
 
     // ------------------------------------------------------------------ plans
 

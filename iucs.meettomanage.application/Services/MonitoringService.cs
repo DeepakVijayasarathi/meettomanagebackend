@@ -120,6 +120,24 @@ namespace iucs.meettomanage.application.Services
             };
         }
 
+        public async Task<PlatformInfrastructureDto> GetPlatformInfrastructureAsync(CancellationToken cancellationToken = default)
+        {
+            var serverTasks = _options.Servers.Select(server => GetServerStatusAsync(server, cancellationToken)).ToList();
+            var alertsTask = _prometheus.GetActiveAlertsAsync(_options.PrometheusBaseUrl, cancellationToken);
+            await Task.WhenAll(serverTasks.Cast<Task>().Append(alertsTask));
+            return new PlatformInfrastructureDto
+            {
+                Servers = serverTasks.Select(t => t.Result).ToList(),
+                ActiveAlerts = (await alertsTask).Select(a => new AlertDto
+                {
+                    Name = a.Name, Severity = a.Severity, Summary = a.Summary, Description = a.Description,
+                    State = a.State, ActiveSince = a.ActiveSince,
+                    Instance = a.Labels.TryGetValue("instance", out var instance) ? instance : null,
+                }).OrderByDescending(a => a.Severity == "critical").ThenBy(a => a.ActiveSince).ToList(),
+                GeneratedAtUtc = DateTime.UtcNow,
+            };
+        }
+
         /// <summary>
         /// Database-side checks (see <see cref="DataHealthAlerts"/>). Never throws: a failed query
         /// just means no data-health alerts this refresh, rather than taking down the whole summary.

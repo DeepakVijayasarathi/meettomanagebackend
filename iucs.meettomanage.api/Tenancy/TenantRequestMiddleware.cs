@@ -62,7 +62,7 @@ public sealed class TenantRequestMiddleware(RequestDelegate next)
             using var ambient = TenantExecution.Enter(id, tenant.TenantCode!);
             await next(http);
         }
-        else if (path.StartsWith("/api/platform", StringComparison.Ordinal) || path == "/health" || path == "/api/tenant/resolve"
+        else if (path.StartsWith("/api/platform", StringComparison.Ordinal) || path == "/api/status" || path == "/health" || path == "/api/tenant/resolve"
                  || path.StartsWith("/openapi", StringComparison.Ordinal) || path.StartsWith("/scalar", StringComparison.Ordinal))
             await next(http);
         else if (http.Request.Method == "OPTIONS") await next(http);

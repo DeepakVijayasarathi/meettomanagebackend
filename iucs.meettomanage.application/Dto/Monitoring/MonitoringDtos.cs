@@ -520,4 +520,12 @@ namespace iucs.meettomanage.application.Dto.Monitoring
         public bool CallQualityIncidentsLookSystemic { get; set; }
         public DateTime GeneratedAtUtc { get; set; }
     }
+
+    /// <summary>Tenant-independent infrastructure facts safe for the platform control plane.</summary>
+    public class PlatformInfrastructureDto
+    {
+        public List<ServerStatusDto> Servers { get; set; } = new();
+        public List<AlertDto> ActiveAlerts { get; set; } = new();
+        public DateTime GeneratedAtUtc { get; set; }
+    }
 }

@@ -5,6 +5,7 @@ namespace iucs.meettomanage.application.Services
     public interface IMonitoringService
     {
         Task<MonitoringSummaryDto> GetSummaryAsync(CancellationToken cancellationToken = default);
+        Task<PlatformInfrastructureDto> GetPlatformInfrastructureAsync(CancellationToken cancellationToken = default);
 
         /// <summary>
         /// CPU/memory history for one server over an admin-selected window. "1h" (~2-minute
