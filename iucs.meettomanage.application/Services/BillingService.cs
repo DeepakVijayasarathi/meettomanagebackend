@@ -481,7 +481,7 @@ namespace iucs.meettomanage.application.Services
                 ?? throw new NotFoundException(nameof(Invoice), id);
 
             var data = await BuildInvoicePdfDataAsync(invoice, cancellationToken);
-            var content = _invoicePdfGenerator.Generate(data);
+            var content = await _invoicePdfGenerator.GenerateAsync(data, cancellationToken);
             return (content, $"{invoice.InvoiceNumber}.pdf");
         }
 
@@ -504,7 +504,7 @@ namespace iucs.meettomanage.application.Services
                 ?? throw new NotFoundException(nameof(Invoice), invoiceId);
 
             var data = await BuildInvoicePdfDataAsync(invoice, cancellationToken);
-            var content = _invoicePdfGenerator.Generate(data);
+            var content = await _invoicePdfGenerator.GenerateAsync(data, cancellationToken);
             return (content, $"{invoice.InvoiceNumber}.pdf");
         }
 

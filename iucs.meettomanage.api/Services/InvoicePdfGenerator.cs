@@ -1,6 +1,7 @@
 using System.Reflection;
 using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Billing;
+using iucs.meettomanage.application.Services;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -14,7 +15,7 @@ namespace iucs.meettomanage.api.Services
     /// layout only — the actual bank/GST/signatory values are resolved by the caller
     /// (BillingService, from AppSetting) and arrive already-filled-in on <see cref="InvoicePdfData"/>.
     /// </summary>
-    public class InvoicePdfGenerator : IInvoicePdfGenerator
+    public class InvoicePdfGenerator(IFileStorage storage, ISettingsService settings) : IInvoicePdfGenerator
     {
         private const string Cream = "#EDE7DC";
         private const string Red = "#D62839";
@@ -40,8 +41,17 @@ namespace iucs.meettomanage.api.Services
             return ms.ToArray();
         }
 
-        public byte[] Generate(InvoicePdfData data)
+        public async Task<byte[]> GenerateAsync(InvoicePdfData data, CancellationToken cancellationToken = default)
         {
+            var tenantLogo = await BrandLogo.OpenAsync(storage, settings, cancellationToken);
+            byte[] logoBytes = LogoBytes;
+            if (tenantLogo is { } logo)
+            {
+                await using var stream = logo.Content;
+                using var buffer = new MemoryStream();
+                await stream.CopyToAsync(buffer, cancellationToken);
+                if (buffer.Length > 0) logoBytes = buffer.ToArray();
+            }
             var document = Document.Create(container =>
             {
                 container.Page(page =>
@@ -58,7 +68,7 @@ namespace iucs.meettomanage.api.Services
                             row.RelativeItem().Text("BILL OF SUPPLY").FontSize(28).Bold().FontColor(Red);
                             row.ConstantItem(110).Column(c =>
                             {
-                                c.Item().AlignRight().Height(80).Image(LogoBytes).FitArea();
+                                c.Item().AlignRight().Height(80).Image(logoBytes).FitArea();
                                 c.Item().AlignRight().PaddingTop(4).Text($"DATE– {data.IssuedAtUtc:d MMMM,yyyy}".ToUpperInvariant()).FontSize(9);
                             });
                         });

@@ -106,10 +106,10 @@ namespace iucs.meettomanage.tests
     {
         public InvoicePdfData? LastRequest { get; private set; }
 
-        public byte[] Generate(InvoicePdfData data)
+        public Task<byte[]> GenerateAsync(InvoicePdfData data, CancellationToken cancellationToken = default)
         {
             LastRequest = data;
-            return [1, 2, 3];
+            return Task.FromResult<byte[]>([1, 2, 3]);
         }
     }
 

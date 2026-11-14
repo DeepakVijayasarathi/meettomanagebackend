@@ -168,7 +168,7 @@ builder.Services.AddSingleton<IBulkFileReader, BulkFileReader>();
 builder.Services.AddSingleton<IJitsiTokenService, JitsiTokenService>();
 // Renders the "Bill of Supply" invoice PDF (QuestPDF) — stateless beyond a static embedded
 // logo loaded once, so singleton is fine.
-builder.Services.AddSingleton<IInvoicePdfGenerator, InvoicePdfGenerator>();
+builder.Services.AddScoped<IInvoicePdfGenerator, InvoicePdfGenerator>();
 // Server Monitoring dashboard: polls each server's rn-status agent (Monitoring:Servers config).
 // Short timeout so one down/slow server can't stall the whole summary request.
 builder.Services.AddHttpClient("Prometheus", client => client.Timeout = TimeSpan.FromSeconds(5));

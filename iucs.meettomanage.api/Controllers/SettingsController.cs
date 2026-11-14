@@ -58,6 +58,8 @@ namespace iucs.meettomanage.api.Controllers
         {
             ["brand.name"] = "Meet to Manage",
             ["brand.logoUrl"] = "",
+            ["brand.darkLogoUrl"] = "",
+            ["brand.faviconUrl"] = "",
             ["brand.primaryColor"] = "#1E3A5F",
             ["brand.accentColor"] = "#E63329",
             ["brand.fontFamily"] = "DM Sans",

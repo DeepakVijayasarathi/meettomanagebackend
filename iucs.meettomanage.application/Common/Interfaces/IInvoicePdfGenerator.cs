@@ -10,6 +10,6 @@ namespace iucs.meettomanage.application.Common.Interfaces
     /// </summary>
     public interface IInvoicePdfGenerator
     {
-        byte[] Generate(InvoicePdfData data);
+        Task<byte[]> GenerateAsync(InvoicePdfData data, CancellationToken cancellationToken = default);
     }
 }
