@@ -52,11 +52,8 @@ pipeline {
 
         stage('Quality Gate') {
             steps {
-                sh '''
-                    dotnet restore iucs.meettomanage.api.sln
-                    dotnet build iucs.meettomanage.api.sln --configuration Release --no-restore
-                    dotnet test iucs.meettomanage.api.sln --configuration Release --no-build
-                '''
+                // Runs inside the .NET SDK image: the Jenkins machine has Docker but no dotnet.
+                sh 'docker build --target test -f iucs.meettomanage.api/Dockerfile .'
             }
         }
 

@@ -20,6 +20,14 @@ COPY . .
 WORKDIR "/src/iucs.meettomanage.api"
 RUN dotnet build "./iucs.meettomanage.api.csproj" -c $BUILD_CONFIGURATION -o /app/build
 
+# Quality gate: restores, builds and runs the whole test suite with the SDK image, so the
+# Jenkins machine needs only Docker (Jenkinsfile: docker build --target test). The release
+# image below never depends on this stage, so it is skipped when building the final image.
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS test
+WORKDIR /src
+COPY . .
+RUN dotnet restore iucs.meettomanage.api.sln  && dotnet build iucs.meettomanage.api.sln --configuration Release --no-restore  && dotnet test iucs.meettomanage.api.sln --configuration Release --no-build
+
 # This stage is used to publish the service project to be copied to the final stage
 FROM build AS publish
 ARG BUILD_CONFIGURATION=Release
