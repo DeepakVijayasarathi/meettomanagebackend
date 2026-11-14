@@ -1,6 +1,13 @@
 pipeline {
     agent any
 
+    options {
+        // Two deployments must never compete for the production container name/port.
+        disableConcurrentBuilds(abortPrevious: true)
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
     environment {
         IMAGE_NAME         = 'deepakrajv/meettomanagebackend'
         CONTAINER_NAME     = 'meettomanagebackend'
@@ -62,7 +69,6 @@ pipeline {
                       --build-arg RELEASE_VERSION=${RELEASE_VERSION} \
                       --build-arg GIT_COMMIT=${GIT_COMMIT} \
                       -t ${IMAGE_NAME}:${RELEASE_VERSION} \
-                      -t ${IMAGE_NAME}:latest \
                       -f iucs.meettomanage.api/Dockerfile .
                 """
                 }
@@ -78,11 +84,14 @@ pipeline {
             }
         }
 
-        stage('Remove Old Container') {
+        stage('Preserve Rollback Container') {
             steps {
                 sh """
-                    docker stop ${CONTAINER_NAME} || true
-                    docker rm ${CONTAINER_NAME} || true
+                    docker rm -f ${CONTAINER_NAME}-rollback >/dev/null 2>&1 || true
+                    if docker inspect ${CONTAINER_NAME} >/dev/null 2>&1; then
+                      docker stop ${CONTAINER_NAME}
+                      docker rename ${CONTAINER_NAME} ${CONTAINER_NAME}-rollback
+                    fi
                 """
             }
         }
@@ -182,20 +191,23 @@ pipeline {
             steps {
                 sh """
                     for attempt in \$(seq 1 30); do
-                      curl --fail --silent http://127.0.0.1:2200/health >/dev/null && break
+                      curl --fail --silent http://127.0.0.1:2200/health/ready >/dev/null && break
                       test "\${attempt}" -eq 30 && { docker logs --tail 100 ${CONTAINER_NAME}; exit 1; }
                       sleep 2
                     done
                     docker ps | grep ${CONTAINER_NAME}
                     docker logs --tail 50 ${CONTAINER_NAME}
-                    # A missing master/tenant connection fails startup, so require /health to answer.
-                    HEALTH_JSON=\$(curl --fail --silent --show-error http://127.0.0.1:2200/health)
+                    # Liveness proves the process started; readiness proves the master DB is usable.
+                    HEALTH_JSON=\$(curl --fail --silent --show-error http://127.0.0.1:2200/health/ready)
                     echo "\${HEALTH_JSON}"
                     echo "\${HEALTH_JSON}" | grep -F '"version":"${RELEASE_VERSION}"'
                     echo "\${HEALTH_JSON}" | grep -F '"commit":"${GIT_COMMIT}"'
-                    PUBLIC_HEALTH=\$(curl --fail --silent --show-error ${API_BASE_URL}/health)
+                    curl --fail --silent --dump-header - --output /dev/null http://127.0.0.1:2200/health/ready | grep -iF 'cache-control: no-store'
+                    PUBLIC_HEALTH=\$(curl --fail --silent --show-error ${API_BASE_URL}/health/ready)
                     echo "\${PUBLIC_HEALTH}" | grep -F '"version":"${RELEASE_VERSION}"'
                     echo "\${PUBLIC_HEALTH}" | grep -F '"commit":"${GIT_COMMIT}"'
+                    docker tag ${IMAGE_NAME}:${RELEASE_VERSION} ${IMAGE_NAME}:latest
+                    docker rm -f ${CONTAINER_NAME}-rollback >/dev/null 2>&1 || true
                 """
             }
         }
@@ -208,6 +220,15 @@ pipeline {
 
         failure {
             echo '❌ Deployment failed. Check Jenkins console logs.'
+            sh """
+                # Restore the exact previous container, including its original secrets,
+                # network and restart policy. This also covers docker-run failures.
+                if docker inspect ${CONTAINER_NAME}-rollback >/dev/null 2>&1; then
+                  docker rm -f ${CONTAINER_NAME} >/dev/null 2>&1 || true
+                  docker rename ${CONTAINER_NAME}-rollback ${CONTAINER_NAME}
+                  docker start ${CONTAINER_NAME}
+                fi
+            """
         }
 
         always {

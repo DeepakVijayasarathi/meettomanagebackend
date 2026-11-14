@@ -596,6 +596,14 @@ builder.Services.AddCors(options =>
         }
     }));
 
+// Match the public frontend's one-year transport policy. The default ASP.NET Core
+// HSTS duration is only 30 days, which caused inconsistent protection by hostname.
+builder.Services.AddHsts(options =>
+{
+    options.IncludeSubDomains = true;
+    options.MaxAge = TimeSpan.FromDays(365);
+});
+
 // Reported live as "APIs take 7 seconds": session lists were several MB of JSON. Compressing
 // JSON responses cuts them roughly tenfold on the wire.
 builder.Services.AddResponseCompression(options =>
@@ -726,10 +734,12 @@ else
     // This is a pure JSON API in production, so the policy can be tight.
     app.Use(async (context, next) =>
     {
-        context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
-        context.Response.Headers.Append("X-Frame-Options", "DENY");
-        context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
-        context.Response.Headers.Append("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+        context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        context.Response.Headers["X-Frame-Options"] = "DENY";
+        context.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+        context.Response.Headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'";
+        if (context.Request.Path.StartsWithSegments("/health"))
+            context.Response.Headers.CacheControl = "no-store";
         await next();
     });
 }
@@ -766,6 +776,32 @@ app.MapGet("/health", (IHostEnvironment environment) =>
         commit = Environment.GetEnvironmentVariable("GIT_COMMIT") ?? "unknown",
         environment = environment.EnvironmentName,
     });
+}).AllowAnonymous();
+
+// Readiness is deliberately separate from liveness: orchestration can keep a process
+// alive for diagnostics while refusing to promote it until the master database works.
+app.MapGet("/health/ready", async (MasterDbContext master, CancellationToken ct) =>
+{
+    // A readiness probe must fail quickly. Without a local deadline, a broken route or
+    // database network can hold every Jenkins probe open until the provider timeout.
+    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+    timeout.CancelAfter(TimeSpan.FromSeconds(5));
+    var databaseHealthy = false;
+    try { databaseHealthy = await master.Database.CanConnectAsync(timeout.Token); }
+    catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+    catch (Exception ex) when (ex is not OperationCanceledException) { }
+
+    var payload = new
+    {
+        status = databaseHealthy ? "ready" : "unavailable",
+        database = databaseHealthy ? "ok" : "unavailable",
+        timestampUtc = DateTime.UtcNow,
+        version = Environment.GetEnvironmentVariable("RELEASE_VERSION") ?? "unknown",
+        commit = Environment.GetEnvironmentVariable("GIT_COMMIT") ?? "unknown",
+    };
+    return databaseHealthy
+        ? Results.Ok(payload)
+        : Results.Json(payload, statusCode: StatusCodes.Status503ServiceUnavailable);
 }).AllowAnonymous();
 
 // Deliberately outside /api and unauthenticated -- the whole point of a short link is that

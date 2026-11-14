@@ -62,8 +62,7 @@ public sealed class TenantRequestMiddleware(RequestDelegate next)
             using var ambient = TenantExecution.Enter(id, tenant.TenantCode!);
             await next(http);
         }
-        else if (path.StartsWith("/api/platform", StringComparison.Ordinal) || path == "/api/status" || path == "/health" || path == "/api/tenant/resolve"
-                 || path.StartsWith("/openapi", StringComparison.Ordinal) || path.StartsWith("/scalar", StringComparison.Ordinal))
+        else if (IsTenantOptionalPath(path))
             await next(http);
         else if (http.Request.Method == "OPTIONS") await next(http);
         else if (path == "/api/settings/public") await http.Response.WriteAsJsonAsync(Array.Empty<object>());
@@ -79,4 +78,15 @@ public sealed class TenantRequestMiddleware(RequestDelegate next)
         || path.StartsWith("/api/blog/", StringComparison.OrdinalIgnoreCase)
         || path.Equals("/api/marketing", StringComparison.OrdinalIgnoreCase)
         || path.StartsWith("/api/marketing/", StringComparison.OrdinalIgnoreCase);
+
+    // Keep platform probes and operator endpoints independent of tenant discovery. In
+    // particular, every /health/* probe must work without a tenant URL or authenticated user.
+    internal static bool IsTenantOptionalPath(string path) =>
+        path.StartsWith("/api/platform", StringComparison.Ordinal)
+        || path == "/api/status"
+        || path.Equals("/health", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith("/health/", StringComparison.OrdinalIgnoreCase)
+        || path == "/api/tenant/resolve"
+        || path.StartsWith("/openapi", StringComparison.Ordinal)
+        || path.StartsWith("/scalar", StringComparison.Ordinal);
 }
