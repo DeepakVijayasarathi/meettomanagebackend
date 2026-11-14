@@ -76,6 +76,8 @@ public static class SaasSeeder
             await db.SaveChangesAsync(ct);
         }
 
+        await ApplyNovember2026PricingAsync(db, logger, ct);
+
         // Plans created before session/recording metering was introduced do not have these
         // catalogue rows. Backfill only missing values: operator-edited limits are never
         // overwritten, and custom plans remain unlimited until the operator chooses a value.
@@ -120,13 +122,94 @@ public static class SaasSeeder
         if (unmanaged.Count > 0) logger.LogInformation("{Count} existing tenant(s) were placed on the legacy plan.", unmanaged.Count);
     }
 
+    /// <summary>
+    /// The November 2026 price list: Free, Basic ₹999, Pro ₹2,499, Growth ₹5,999 (yearly = 10 months).
+    /// Runs on every start but changes only what is still as originally seeded, so an operator's edits
+    /// in the platform console always win. Existing subscribers keep the price row they bought
+    /// (old prices are deactivated, not changed), and Starter subscribers stay on Starter; it is only
+    /// hidden from new buyers.
+    /// </summary>
+    private static async Task ApplyNovember2026PricingAsync(MasterDbContext db, ILogger logger, CancellationToken ct)
+    {
+        var plans = await db.Plans.Include(x => x.Entitlements).Include(x => x.Prices).ToListAsync(ct);
+        Plan? Find(string code) => plans.FirstOrDefault(x => x.Code == code);
+        static bool StillPriced(Plan plan, decimal monthly) => plan.Prices.Any(p => p.IsActive && p.Currency == "INR"
+            && p.BillingInterval == BillingInterval.Month && p.Amount == monthly);
+        static void Raise(Plan plan, string key, long from, long to)
+        {
+            var row = plan.Entitlements.FirstOrDefault(x => x.Key == key);
+            if (row is not null && row.Value == from) row.Value = to;
+        }
+        static void Flag(MasterDbContext db, Plan plan, string key, long value)
+        {
+            if (plan.Entitlements.Any(x => x.Key == key)) return;
+            db.PlanEntitlements.Add(new PlanEntitlement { PlanId = plan.Id, Key = key, ValueType = EntitlementValueType.Bool, Value = value });
+        }
+        var changed = false;
+
+        if (Find("basic") is null && Find("pro") is null)
+        {
+            var basic = NewPlan("basic", "Basic", "For tuition centres and small academies starting online.", true, 14, 1,
+                new Limits(75, 5, 10 * 1024, 3_600, 300, 300, 7), Features(recordings: true, whiteLabel: true, gateway: true),
+                [(BillingInterval.Month, 999m), (BillingInterval.Year, 9_990m)]);
+            basic.Entitlements.Add(new PlanEntitlement { Key = EntitlementKeys.ServerRecording, ValueType = EntitlementValueType.Bool, Value = 0 });
+            foreach (var module in new[] { "Admission", "ReportsAnalytics", "Payouts" })
+                basic.Entitlements.Add(new PlanEntitlement { Key = EntitlementKeys.ModuleKey(module), ValueType = EntitlementValueType.Bool, Value = 0 });
+
+            var pro = NewPlan("pro", "Pro", "For academies running admissions, fees and parent updates in one place.", true, 14, 2,
+                new Limits(250, 15, 50 * 1024, 12_000, 2_000, 2_000, 30), Features(recordings: true, whiteLabel: true, gateway: true, whatsapp: true),
+                [(BillingInterval.Month, 2_499m), (BillingInterval.Year, 24_990m)]);
+            pro.Entitlements.Add(new PlanEntitlement { Key = EntitlementKeys.ServerRecording, ValueType = EntitlementValueType.Bool, Value = 0 });
+
+            db.Plans.AddRange(basic, pro);
+            changed = true;
+        }
+
+        if (Find("starter") is { IsPublic: true } starter && StillPriced(starter, 2_999m))
+        {
+            starter.IsPublic = false;
+            starter.UpdatedAtUtc = DateTime.UtcNow;
+            changed = true;
+        }
+
+        if (Find("growth") is { } growth && StillPriced(growth, 7_999m))
+        {
+            foreach (var price in growth.Prices.Where(p => p.IsActive && p.Currency == "INR")) price.IsActive = false;
+            db.PlanPrices.AddRange(
+                new PlanPrice { PlanId = growth.Id, BillingInterval = BillingInterval.Month, Amount = 5_999m },
+                new PlanPrice { PlanId = growth.Id, BillingInterval = BillingInterval.Year, Amount = 59_990m });
+            growth.Description = "For multi-batch academies with larger teams, server recording and API access.";
+            growth.SortOrder = 3;
+            Raise(growth, EntitlementKeys.MaxStudents, 500, 750);
+            Raise(growth, EntitlementKeys.MaxSessionMinutesPerMonth, 30_000, 36_000);
+            Raise(growth, EntitlementKeys.RecordingRetentionDays, 30, 90);
+            Flag(db, growth, EntitlementKeys.ServerRecording, 1);
+            growth.UpdatedAtUtc = DateTime.UtcNow;
+            changed = true;
+        }
+
+        if (Find("enterprise") is { SortOrder: 3 } enterprise) { enterprise.SortOrder = 4; changed = true; }
+
+        if (Find(FreePlanCode) is { } free && free.Entitlements.Any(x => x.Key == EntitlementKeys.MaxStudents && x.Value == 20))
+        {
+            Raise(free, EntitlementKeys.MaxStudents, 20, 25);
+            changed = true;
+        }
+
+        if (!changed) return;
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Applied the November 2026 price list (Free, Basic, Pro, Growth).");
+    }
+
     private sealed record Limits(long Students, long Staff, long StorageMb, long SessionMinutes,
         long Sessions, long Recordings, long RetentionDays);
 
     private static long DefaultUsageLimit(string planCode) => planCode switch
     {
         "trial" => 100,
+        "basic" => 300,
         "starter" => 1_000,
+        "pro" => 2_000,
         "growth" => 5_000,
         _ => EntitlementKeys.Unlimited,
     };

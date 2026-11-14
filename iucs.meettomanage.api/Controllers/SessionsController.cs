@@ -2,6 +2,8 @@ using iucs.meettomanage.application.Common.Exceptions;
 using System.Security.Claims;
 using iucs.meettomanage.api.Auth;
 using iucs.meettomanage.api.Saas;
+using iucs.meettomanage.api.Tenancy;
+using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Academics;
 using iucs.meettomanage.application.Dto.Sessions;
@@ -268,9 +270,21 @@ namespace iucs.meettomanage.api.Controllers
         /// <summary>Non-secret Jitsi settings (domain, auto-record) for whoever is about to join a live class.</summary>
         [HttpGet("classroom-settings")]
         [Authorize]
-        public async Task<ActionResult<ClassroomSettingsDto>> GetClassroomSettings(CancellationToken cancellationToken)
+        public async Task<ActionResult<ClassroomSettingsDto>> GetClassroomSettings(
+            [FromServices] IServiceProvider services, CancellationToken cancellationToken)
         {
-            return Ok(await _sessionService.GetClassroomSettingsAsync(cancellationToken));
+            var settings = await _sessionService.GetClassroomSettingsAsync(cancellationToken);
+            // A plan without server recording records in the teacher's browser, whatever the academy chose.
+            var entitlements = services.GetService<IEntitlementService>();
+            var tenantId = TenantExecution.Current?.Id ?? services.GetService<TenantContext>()?.TenantId;
+            if (entitlements is not null && tenantId is not null
+                && !(await entitlements.GetAsync(tenantId.Value, cancellationToken)).AllowsServerRecording)
+            {
+                settings.ServerRecordingAllowed = false;
+                settings.RecordingMode = "browser";
+                settings.TeacherCanChooseRecording = false;
+            }
+            return Ok(settings);
         }
 
         [HttpPost]

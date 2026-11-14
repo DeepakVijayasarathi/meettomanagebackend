@@ -347,6 +347,64 @@ public sealed class SaasSeederTests : IDisposable
     }
 
     [Fact]
+    public async Task NovemberPriceListAddsBasicAndProRepricesGrowthAndKeepsExistingSubscribersPrices()
+    {
+        var options = Options.Create(new SaasOptions());
+        await SaasSeeder.SeedAsync(_factory, options, NullLogger.Instance);
+        await SaasSeeder.SeedAsync(_factory, options, NullLogger.Instance); // idempotent
+
+        await using var db = _factory.CreateDbContext();
+        var plans = await db.Plans.Include(x => x.Entitlements).Include(x => x.Prices).ToListAsync();
+        decimal? Monthly(string code) => plans.Single(x => x.Code == code).Prices
+            .SingleOrDefault(p => p.IsActive && p.BillingInterval == BillingInterval.Month)?.Amount;
+        TenantEntitlements Granted(string code)
+        {
+            var plan = plans.Single(x => x.Code == code);
+            return new TenantEntitlements(true, plan.Code, plan.Name, SaasSubscriptionStatus.Active, plan.Entitlements.ToDictionary(x => x.Key, x => x.Value));
+        }
+
+        Assert.Equal(999m, Monthly("basic"));
+        Assert.Equal(2_499m, Monthly("pro"));
+        Assert.Equal(5_999m, Monthly("growth"));
+        Assert.Equal(1, plans.Count(x => x.Code == "basic"));
+        // Growth's old price stays on file (inactive) for anyone already paying it.
+        Assert.Contains(plans.Single(x => x.Code == "growth").Prices, p => !p.IsActive && p.Amount == 7_999m);
+        // Starter is hidden from new buyers but still exists for its subscribers.
+        Assert.False(plans.Single(x => x.Code == "starter").IsPublic);
+
+        Assert.False(Granted("basic").AllowsServerRecording);
+        Assert.False(Granted("pro").AllowsServerRecording);
+        Assert.True(Granted("growth").AllowsServerRecording);
+        Assert.True(Granted("starter").AllowsServerRecording); // plans that never mention it keep it
+        Assert.False(Granted("basic").HasModule(EntitlementKeys.ModuleKey(domain.Enums.PermissionModule.Admission)));
+        Assert.True(Granted("pro").HasModule(EntitlementKeys.ModuleKey(domain.Enums.PermissionModule.Admission)));
+        Assert.Equal(750, Granted("growth").Limit(EntitlementKeys.MaxStudents));
+        Assert.Equal(25, Granted(SaasSeeder.FreePlanCode).Limit(EntitlementKeys.MaxStudents));
+    }
+
+    [Fact]
+    public async Task NovemberPriceListLeavesAGrowthPriceTheOperatorChangedAlone()
+    {
+        var options = Options.Create(new SaasOptions());
+        await using (var db = _factory.CreateDbContext())
+        {
+            // A catalogue whose Growth price the operator already edited in the console.
+            await SaasSeeder.SeedAsync(_factory, options, NullLogger.Instance);
+        }
+        await using (var db = _factory.CreateDbContext())
+        {
+            var growth = await db.Plans.Include(x => x.Prices).SingleAsync(x => x.Code == "growth");
+            foreach (var p in growth.Prices) p.Amount = p.BillingInterval == BillingInterval.Month ? 6_500m : 65_000m;
+            await db.SaveChangesAsync();
+        }
+        await SaasSeeder.SeedAsync(_factory, options, NullLogger.Instance);
+
+        await using var check = _factory.CreateDbContext();
+        var active = await check.PlanPrices.Where(x => x.Plan.Code == "growth" && x.IsActive && x.BillingInterval == BillingInterval.Month).ToListAsync();
+        Assert.Equal(6_500m, Assert.Single(active).Amount);
+    }
+
+    [Fact]
     public async Task PlatformRulesDefaultFromConfigAndRefuseAPaidFallbackPlan()
     {
         var options = Options.Create(new SaasOptions());

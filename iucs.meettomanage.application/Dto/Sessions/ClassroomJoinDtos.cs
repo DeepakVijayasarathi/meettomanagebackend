@@ -96,6 +96,9 @@ namespace iucs.meettomanage.application.Dto.Sessions
         /// <summary>Whether a teacher may switch between server and browser recording in class.</summary>
         public bool TeacherCanChooseRecording { get; set; }
 
+        /// <summary>False when the academy's plan records in the teacher's browser only (no recording server).</summary>
+        public bool ServerRecordingAllowed { get; set; } = true;
+
         /// <summary>Whether a class should start with Jitsi's lobby (waiting room) already on, so a
         /// student can't land straight in an unattended room before the teacher's even joined —
         /// admin-configurable (Settings → Integrations) rather than always off, which is what a

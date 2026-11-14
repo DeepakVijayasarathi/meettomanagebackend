@@ -24,6 +24,12 @@ public static class EntitlementKeys
     public const string CustomDomain = "feature_custom_domain";
     public const string PaymentGateway = "feature_payment_gateway";
     public const string Recordings = "feature_recordings";
+    /// <summary>
+    /// Recording on the video server (Jibri), which ties up a recording server for the whole class.
+    /// Unlike other features, a plan that doesn't mention it allows it, so plans made before it keep
+    /// server recording; plans that switch it off record in the teacher's browser only.
+    /// </summary>
+    public const string ServerRecording = "feature_server_recording";
 
     public sealed record Definition(string Key, string Label, EntitlementValueType Type, string Unit);
 
@@ -42,6 +48,7 @@ public static class EntitlementKeys
         new(CustomDomain, "Custom domain", EntitlementValueType.Bool, ""),
         new(PaymentGateway, "Fee collection gateway", EntitlementValueType.Bool, ""),
         new(Recordings, "Session recordings", EntitlementValueType.Bool, ""),
+        new(ServerRecording, "Server recording (otherwise browser only)", EntitlementValueType.Bool, ""),
     ];
 
     // Modules (Bool, 0/1). Unlike features, a plan that does not mention a module includes it,

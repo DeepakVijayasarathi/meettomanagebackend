@@ -18,6 +18,9 @@ public sealed record TenantEntitlements(
     /// <summary>Feature flag; a managed plan must grant it explicitly.</summary>
     public bool Can(string feature) => !Managed || (Values.TryGetValue(feature, out var value) && value != 0);
 
+    /// <summary>Server (Jibri) recording; allowed unless the plan switches it off explicitly.</summary>
+    public bool AllowsServerRecording => !Managed || !Values.TryGetValue(EntitlementKeys.ServerRecording, out var value) || value != 0;
+
     /// <summary>Module switch (a module_* key); a plan includes a module unless it switches it off explicitly.</summary>
     public bool HasModule(string moduleKey) => !Managed || !Values.TryGetValue(moduleKey, out var value) || value != 0;
 
