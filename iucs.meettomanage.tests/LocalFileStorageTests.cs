@@ -38,6 +38,23 @@ namespace iucs.meettomanage.tests
         }
 
         [Fact]
+        public void RefusesToStartWithoutAStrongSigningKey()
+        {
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Storage:LocalPath"] = _root,
+                    ["Jwt:SigningKey"] = "public-fallback",
+                })
+                .Build();
+
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                new LocalFileStorage(new TestEnvironment(), config, new HttpContextAccessor()));
+
+            Assert.Contains("at least 32 bytes", error.Message);
+        }
+
+        [Fact]
         public async Task StoresAndReadsBack_AndRefusesUnsafeFileTypes()
         {
             var stored = await _storage.StoreAsync(new MemoryStream(Encoding.UTF8.GetBytes("worksheet")), "Week 1.pdf");

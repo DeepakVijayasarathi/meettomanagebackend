@@ -14,8 +14,6 @@ namespace iucs.meettomanage.application.Common
     {
         private const char Prefix = 'i';
         private const int SignatureLength = 16;
-        // Only for a deployment with no Jwt:SigningKey (local dev / tests); production always sets one.
-        private const string FallbackSecret = "reader-nest-invoice-pay-link";
 
         public static string Create(Guid invoiceId, string? secret) =>
             Prefix + invoiceId.ToString("N") + Sign(invoiceId, secret);
@@ -38,7 +36,13 @@ namespace iucs.meettomanage.application.Common
 
         private static string Sign(Guid invoiceId, string? secret)
         {
-            var key = Encoding.UTF8.GetBytes(string.IsNullOrWhiteSpace(secret) ? FallbackSecret : secret);
+            if (string.IsNullOrWhiteSpace(secret) || Encoding.UTF8.GetByteCount(secret) < 32)
+            {
+                throw new InvalidOperationException(
+                    "Invoice payment links require Jwt:SigningKey to contain at least 32 bytes.");
+            }
+
+            var key = Encoding.UTF8.GetBytes(secret);
             var hash = HMACSHA256.HashData(key, Encoding.UTF8.GetBytes("invoice-pay:" + invoiceId.ToString("N")));
             return Convert.ToHexString(hash).ToLowerInvariant()[..SignatureLength];
         }

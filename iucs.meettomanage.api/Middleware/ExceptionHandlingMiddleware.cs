@@ -62,6 +62,7 @@ namespace iucs.meettomanage.api.Middleware
                 Status = statusCode,
                 Title = ReasonPhrases(statusCode),
                 Detail = detail,
+                Extensions = { ["correlationId"] = context.Items[CorrelationIdMiddleware.Item]?.ToString() },
             });
         }
 

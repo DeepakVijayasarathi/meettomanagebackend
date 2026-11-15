@@ -61,7 +61,13 @@ namespace iucs.meettomanage.api.Services
             _rootPath = Path.GetFullPath(configuration["Storage:LocalPath"] is { Length: > 0 } configured
                 ? configured
                 : Path.Combine(environment.ContentRootPath, "uploads"));
-            _signingKey = Encoding.UTF8.GetBytes(configuration["Jwt:SigningKey"] is { Length: > 0 } key ? key : "local-storage-dev-key");
+            var signingKey = configuration["Jwt:SigningKey"];
+            if (string.IsNullOrWhiteSpace(signingKey) || Encoding.UTF8.GetByteCount(signingKey) < 32)
+            {
+                throw new InvalidOperationException(
+                    "Local file URLs require Jwt:SigningKey to contain at least 32 bytes.");
+            }
+            _signingKey = Encoding.UTF8.GetBytes(signingKey);
             _configuredBaseUrl = configuration["Api:BaseUrl"]?.TrimEnd('/');
             _httpContext = httpContext;
             if (iucs.meettomanage.application.Common.TenantExecution.Current is { } tenant)

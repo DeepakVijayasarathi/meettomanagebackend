@@ -582,7 +582,7 @@ builder.Services.AddCors(options =>
             .AllowCredentials()
             // Local storage's part-upload endpoint answers each part with its ETag, which the
             // browser's upload code must be able to read (S3 exposes it via the bucket's CORS).
-            .WithExposedHeaders("ETag")
+            .WithExposedHeaders("ETag", CorrelationIdMiddleware.Header)
             // Browsers re-sent a preflight before nearly every API call; let them reuse it.
             .SetPreflightMaxAge(TimeSpan.FromHours(2));
 
@@ -644,6 +644,7 @@ forwardedHeadersOptions.KnownProxies.Clear();
 app.UseForwardedHeaders(forwardedHeadersOptions);
 app.UseResponseCompression();
 
+app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 // A public client URL carries routing metadata. The endpoint's normal bearer,

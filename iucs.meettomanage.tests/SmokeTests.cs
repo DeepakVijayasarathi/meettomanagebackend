@@ -59,6 +59,13 @@ namespace iucs.meettomanage.tests
             _notifications = new NotificationService(_db.UnitOfWork, _emailSender, _emailTemplates, new FakePushSender(), NullLogger<NotificationService>.Instance);
         }
 
+        private static IConfiguration AdmissionConfiguration() => new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Jwt:SigningKey"] = "test-admission-signing-key-that-is-at-least-32-bytes",
+            })
+            .Build();
+
         private AuthService CreateAuthService() =>
             new(_db.UnitOfWork, _hasher, new FakeTokenService(), _auditLog, _notifications, new ConfigurationBuilder().Build(),
                 new AesGcmPinVault(Microsoft.Extensions.Options.Options.Create(new PinVaultOptions { Key = "test-key-test-key-test-key-test-key" })));
@@ -4638,7 +4645,7 @@ namespace iucs.meettomanage.tests
             var billing = CreateBillingService();
             var admission = new ManualAdmissionService(
                 _db.UnitOfWork, demoService, CreateUserService(), CreateEnrollmentService(), billing, CreateBatchService(),
-                _auditLog, new ConfigurationBuilder().Build(), NullLogger<ManualAdmissionService>.Instance);
+                _auditLog, AdmissionConfiguration(), NullLogger<ManualAdmissionService>.Instance);
             var result = await admission.AdmitAsync(demo.Id, new ManualAdmissionRequest
             {
                 ParentName = "Asha Rao", ParentPhone = "9876543210",
@@ -4693,7 +4700,7 @@ namespace iucs.meettomanage.tests
             var demoService = CreateDemoBookingService();
             var admission = new ManualAdmissionService(
                 _db.UnitOfWork, demoService, CreateUserService(), CreateEnrollmentService(), CreateBillingService(), CreateBatchService(),
-                _auditLog, new ConfigurationBuilder().Build(), NullLogger<ManualAdmissionService>.Instance);
+                _auditLog, AdmissionConfiguration(), NullLogger<ManualAdmissionService>.Instance);
 
             var options = await admission.GetOptionsAsync();
             Assert.Contains(options.Courses, c => c.Id == course.Id && c.Price == 9500);
@@ -4744,7 +4751,7 @@ namespace iucs.meettomanage.tests
             });
             var admission = new ManualAdmissionService(
                 _db.UnitOfWork, demoService, CreateUserService(), CreateEnrollmentService(), CreateBillingService(), CreateBatchService(),
-                _auditLog, new ConfigurationBuilder().Build(), NullLogger<ManualAdmissionService>.Instance);
+                _auditLog, AdmissionConfiguration(), NullLogger<ManualAdmissionService>.Instance);
 
             var result = await admission.AdmitAsync(demo.Id, new ManualAdmissionRequest
             {
@@ -4785,7 +4792,7 @@ namespace iucs.meettomanage.tests
             });
             var admission = new ManualAdmissionService(
                 _db.UnitOfWork, demoService, CreateUserService(), CreateEnrollmentService(), CreateBillingService(), CreateBatchService(),
-                _auditLog, new ConfigurationBuilder().Build(), NullLogger<ManualAdmissionService>.Instance);
+                _auditLog, AdmissionConfiguration(), NullLogger<ManualAdmissionService>.Instance);
 
             var result = await admission.AdmitAsync(demo.Id, new ManualAdmissionRequest
             {
@@ -4846,7 +4853,7 @@ namespace iucs.meettomanage.tests
                 TeacherProfileId = teacher.Id, ScheduledStartAtUtc = start, ScheduledEndAtUtc = start.AddMinutes(30),
             });
             var admission = new AdmissionPaymentService(
-                _db.UnitOfWork, demoService, CreateUserService(), CreateBillingService(), _notifications, _auditLog, new ConfigurationBuilder().Build());
+                _db.UnitOfWork, demoService, CreateUserService(), CreateBillingService(), _notifications, _auditLog, AdmissionConfiguration());
             var link = await admission.SendPaymentLinkAsync(demo.Id, new SendAdmissionPaymentLinkRequest { CourseId = course.Id });
             var invoiceId = link.Booking.InvoiceId!.Value;
 
@@ -4896,7 +4903,7 @@ namespace iucs.meettomanage.tests
             Assert.Equal(0m, sibling.PayableAmount);
 
             var admission = new AdmissionPaymentService(
-                _db.UnitOfWork, demoService, CreateUserService(), CreateBillingService(), _notifications, _auditLog, new ConfigurationBuilder().Build());
+                _db.UnitOfWork, demoService, CreateUserService(), CreateBillingService(), _notifications, _auditLog, AdmissionConfiguration());
             var first = await admission.SendPaymentLinkAsync(demo.Id, new SendAdmissionPaymentLinkRequest { CourseId = course.Id });
             var second = await admission.SendPaymentLinkAsync(sibling.Id, new SendAdmissionPaymentLinkRequest { CourseId = course.Id, Amount = 4000 });
 
@@ -4933,7 +4940,7 @@ namespace iucs.meettomanage.tests
             Assert.Equal(ConversionStatus.FollowUpInProgress, lead.ConversionStatus);
 
             var admission = new AdmissionPaymentService(
-                _db.UnitOfWork, demoService, CreateUserService(), CreateBillingService(), _notifications, _auditLog, new ConfigurationBuilder().Build());
+                _db.UnitOfWork, demoService, CreateUserService(), CreateBillingService(), _notifications, _auditLog, AdmissionConfiguration());
             var link = await admission.SendPaymentLinkAsync(lead.Id, new SendAdmissionPaymentLinkRequest { CourseId = course.Id });
 
             Assert.Equal(ConversionStatus.PaymentPending, link.Booking.ConversionStatus);
@@ -5119,7 +5126,7 @@ namespace iucs.meettomanage.tests
                 Amount = 3000, DueDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(7),
             });
             var admission = new AdmissionPaymentService(
-                _db.UnitOfWork, CreateDemoBookingService(), CreateUserService(), billing, _notifications, _auditLog, new ConfigurationBuilder().Build());
+                _db.UnitOfWork, CreateDemoBookingService(), CreateUserService(), billing, _notifications, _auditLog, AdmissionConfiguration());
 
             var link = await admission.TermsFirstPayLinkAsync(invoice.Id);
             Assert.NotNull(link);
@@ -11665,7 +11672,7 @@ namespace iucs.meettomanage.tests
 
             var billing = CreateBillingService();
             var admission = new AdmissionPaymentService(
-                _db.UnitOfWork, demoService, CreateUserService(), billing, _notifications, _auditLog, new ConfigurationBuilder().Build());
+                _db.UnitOfWork, demoService, CreateUserService(), billing, _notifications, _auditLog, AdmissionConfiguration());
 
             // Nothing to verify before a link exists.
             await Assert.ThrowsAsync<DomainValidationException>(() => admission.VerifyAndEnrollAsync(demo.Id));
@@ -11774,7 +11781,7 @@ namespace iucs.meettomanage.tests
             });
             var billing = CreateBillingService();
             var admission = new AdmissionPaymentService(
-                _db.UnitOfWork, demoService, CreateUserService(), billing, _notifications, _auditLog, new ConfigurationBuilder().Build());
+                _db.UnitOfWork, demoService, CreateUserService(), billing, _notifications, _auditLog, AdmissionConfiguration());
 
             var link = await admission.SendPaymentLinkAsync(demo.Id, new SendAdmissionPaymentLinkRequest { CourseId = course.Id });
             Assert.Equal(9000, link.Amount); // no discount typed: the course fee
