@@ -22,8 +22,8 @@ public sealed class StatusPageSettingsService(IDbContextFactory<MasterDbContext>
         Components = [
             new() { Key = "website-api", Name = "Website and API", Type = "Api" },
             new() { Key = "platform-data", Name = "Platform data", Type = "Database" },
-            new() { Key = "live-classrooms", Name = "Live classrooms", Type = "Server", Server = "Jitsi / Video" },
-            new() { Key = "class-recordings", Name = "Class recordings", Type = "Server", Server = "Recording Worker" },
+            new() { Key = "live-classrooms", Name = "Live classrooms", Type = "Server", Server = "Production Server" },
+            new() { Key = "class-recordings", Name = "Class recordings", Type = "Server", Server = "Production Server" },
         ],
     };
 

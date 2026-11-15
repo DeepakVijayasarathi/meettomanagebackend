@@ -4598,7 +4598,7 @@ namespace iucs.meettomanage.tests
             // domain/token baked in at send time -- that's what let a parent's copy of the link
             // go stale (and 404) independently of the teacher's own always-fresh join.
             var email = Assert.Single(_emailSender.Sent, e => e.To == "lead@test.com");
-            Assert.Contains($"https://api.thereadernest.in/api/demo-bookings/{dto.Id}/join", email.Body);
+            Assert.Contains($"https://api.meettomanage.cloud/api/demo-bookings/{dto.Id}/join", email.Body);
         }
 
         [Fact]

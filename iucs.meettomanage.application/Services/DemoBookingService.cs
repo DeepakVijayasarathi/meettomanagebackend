@@ -643,7 +643,7 @@ namespace iucs.meettomanage.application.Services
             {
                 var pin = await _userService.RevealPinAsync(parentUserId, cancellationToken);
                 await _unitOfWork.SaveChangesAsync(cancellationToken);
-                var loginUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in") + "/login";
+                var loginUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "https://meettomanage.cloud") + "/login";
                 var loginId = booking.ParentPhone ?? string.Empty;
                 result.IssuedLogin = new IssuedParentLoginDto
                 {
@@ -706,7 +706,7 @@ namespace iucs.meettomanage.application.Services
             if (ParentLogin.IsDeliverable(email))
             {
                 var pin = await _userService.RevealPinAsync(created.Id, cancellationToken);
-                var portalUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "https://thereadernest.in");
+                var portalUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Frontend:BaseUrl"] ?? "https://meettomanage.cloud");
                 await _notificationService.SendTemplatedEmailAsync(
                     created.Id,
                     email,
@@ -1244,7 +1244,7 @@ namespace iucs.meettomanage.application.Services
         /// </summary>
         private string BuildStableJoinUrl(Guid bookingId, Guid? participantId)
         {
-            var apiBaseUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Api:BaseUrl"] ?? "https://api.thereadernest.in");
+            var apiBaseUrl = iucs.meettomanage.application.Common.TenantExecution.Url(_configuration["Api:BaseUrl"] ?? "https://api.meettomanage.cloud");
             var query = participantId.HasValue ? $"?p={participantId.Value}" : string.Empty;
             return $"{apiBaseUrl}/api/demo-bookings/{bookingId}/join{query}";
         }

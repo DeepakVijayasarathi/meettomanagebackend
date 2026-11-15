@@ -15,7 +15,7 @@ namespace iucs.meettomanage.application.Services
 
         public static MonitoredServerOptions? FindMain(MonitoringOptions options)
         {
-            var main = options.Servers.FirstOrDefault(s => s.Name == "Jitsi / Video");
+            var main = options.Servers.FirstOrDefault(s => s.TracksLiveCalls);
             return main is null || string.IsNullOrWhiteSpace(main.SshHost) || string.IsNullOrWhiteSpace(main.SshPassword)
                 ? null
                 : main;

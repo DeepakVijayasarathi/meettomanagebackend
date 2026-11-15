@@ -33,8 +33,8 @@ public sealed class PlatformMonitoringSettingsService(IDbContextFactory<MasterDb
         var serverRows = rows.Where(x => x.Key.StartsWith(Root + "server.") && !x.Key.EndsWith(".secret", StringComparison.Ordinal)).ToList();
         if (serverRows.Count == 0)
         {
-            return new(fallback.Value.PrometheusBaseUrl, 30, fallback.Value.Servers.Select(s => new PlatformMonitoredServer(Guid.NewGuid(), s.Name, s.Hostname, s.Instance,
-                s.Services, s.TracksLiveCalls, s.IsOnDemand, false, s.SshHost, s.SshPort, s.SshUsername, !string.IsNullOrWhiteSpace(s.SshPassword), s.SshPassword)).ToList());
+            return Normalize(new(fallback.Value.PrometheusBaseUrl, 30, fallback.Value.Servers.Select(s => new PlatformMonitoredServer(Guid.NewGuid(), s.Name, s.Hostname, s.Instance,
+                s.Services, s.TracksLiveCalls, s.IsOnDemand, false, s.SshHost, s.SshPort, s.SshUsername, !string.IsNullOrWhiteSpace(s.SshPassword), s.SshPassword)).ToList()));
         }
         var servers = new List<PlatformMonitoredServer>();
         foreach (var row in serverRows)
@@ -50,11 +50,12 @@ public sealed class PlatformMonitoringSettingsService(IDbContextFactory<MasterDb
             catch (JsonException) { }
         }
         var refresh = int.TryParse(rows.GetValueOrDefault(Root + "refreshSeconds"), out var seconds) ? Math.Clamp(seconds, 15, 300) : 30;
-        return new(rows.GetValueOrDefault(Root + "prometheusBaseUrl") ?? fallback.Value.PrometheusBaseUrl, refresh, servers);
+        return Normalize(new(rows.GetValueOrDefault(Root + "prometheusBaseUrl") ?? fallback.Value.PrometheusBaseUrl, refresh, servers));
     }
 
     public async Task<string?> SaveAsync(PlatformMonitoringSettings input, CancellationToken ct = default)
     {
+        input = Normalize(input);
         if (!Uri.TryCreate(input.PrometheusBaseUrl, UriKind.Absolute, out var prometheus) || prometheus.Scheme is not ("http" or "https")) return "Enter a valid Prometheus HTTP or HTTPS URL.";
         if (input.Servers.Count > 50) return "A maximum of 50 servers can be monitored.";
         if (input.Servers.Select(x => x.Name.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Count() != input.Servers.Count) return "Server names must be unique.";
@@ -112,4 +113,27 @@ public sealed class PlatformMonitoringSettingsService(IDbContextFactory<MasterDb
 
     public static List<MonitoredServerOptions> ToOptions(PlatformMonitoringSettings settings) => settings.Servers.Select(x => new MonitoredServerOptions
     { Name = x.Name, Hostname = x.Hostname, Instance = x.Instance, Services = x.Services, TracksLiveCalls = x.TracksLiveCalls, IsOnDemand = x.IsOnDemand, SshHost = x.SshHost, SshPort = x.SshPort, SshUsername = x.SshUsername, SshPassword = x.SshPassword ?? "" }).ToList();
+
+    private PlatformMonitoringSettings Normalize(PlatformMonitoringSettings settings)
+    {
+        if (!fallback.Value.SingleServerMode || fallback.Value.Servers.Count == 0) return settings;
+
+        var configured = fallback.Value.Servers[0];
+        var saved = settings.Servers.FirstOrDefault(x =>
+            x.SshHost.Equals(configured.SshHost, StringComparison.OrdinalIgnoreCase))
+            ?? settings.Servers.FirstOrDefault(x => x.TracksLiveCalls)
+            ?? settings.Servers.FirstOrDefault();
+        var services = settings.Servers.SelectMany(x => x.Services)
+            .Concat(configured.Services)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var server = new PlatformMonitoredServer(
+            saved?.Id ?? Guid.NewGuid(), configured.Name, configured.Hostname, configured.Instance, services,
+            true, false, saved?.MaintenanceMode ?? false, configured.SshHost, configured.SshPort, configured.SshUsername,
+            saved?.HasSshPassword == true || !string.IsNullOrWhiteSpace(configured.SshPassword),
+            saved?.SshPassword ?? configured.SshPassword,
+            saved?.CpuWarningPercent ?? 80, saved?.MemoryWarningPercent ?? 85, saved?.DiskWarningPercent ?? 85);
+        return settings with { Servers = [server] };
+    }
 }

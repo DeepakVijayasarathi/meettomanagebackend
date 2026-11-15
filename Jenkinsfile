@@ -134,7 +134,6 @@ pipeline {
                   string(credentialsId: 'meettomanage-s3-access-key',        variable: 'S3_ACCESS_KEY'),
                   string(credentialsId: 'meettomanage-s3-secret-key',        variable: 'S3_SECRET_KEY'),
                   string(credentialsId: 'meettomanage-ssh-password-server0', variable: 'SSH_PASS_0'),
-                  string(credentialsId: 'meettomanage-ssh-password-server1', variable: 'SSH_PASS_1'),
                   string(credentialsId: 'meettomanage-platform-admin-hash',  variable: 'PLATFORM_ADMIN_HASH'),
               ] + optionalCredentials) {
                 // Secrets are escaped so the shell (not Groovy) expands them and Jenkins masks them.
@@ -154,7 +153,6 @@ pipeline {
                       -e Storage__S3__SecretKey="\${S3_SECRET_KEY}" \
                       -e Storage__S3__BucketName="${STORAGE_S3_BUCKET_NAME}" \
                       -e Monitoring__Servers__0__SshPassword="\${SSH_PASS_0}" \
-                      -e Monitoring__Servers__1__SshPassword="\${SSH_PASS_1}" \
                       -e HetznerAi__ApiKey="\${HETZNER_AI_API_KEY:-}" \
                       -e Resend__ApiKey="\${RESEND_API_KEY:-}" \
                       -e Outreach__InboundWebhookSecret="\${OUTREACH_WEBHOOK_SECRET:-}" \
@@ -243,7 +241,6 @@ pipeline {
 //   meettomanage-s3-access-key
 //   meettomanage-s3-secret-key
 //   meettomanage-ssh-password-server0  (Monitoring server 0)
-//   meettomanage-ssh-password-server1  (Monitoring server 1)
 //   meettomanage-platform-admin-hash   (BCrypt hash from
 //                                       `dotnet iucs.meettomanage.api.dll platform-password-hash`)
 //   meettomanage-hetzner-ai-api-key    (optional)
