@@ -19,7 +19,7 @@ public class HetznerMitoAssistantTests
         var client = new FakeAiClient();
         var assistant = new HetznerMitoAssistant(client, Options.Create(new HetznerAiOptions
         {
-            ApiKey = "secret", Endpoint = "https://inference.hetzner.com/api/v1", Model = "test-model",
+            Enabled = true, ApiKey = "secret", Endpoint = "https://inference.hetzner.com/v1", Model = "test-model",
         }));
 
         var result = await assistant.ReplyAsync(Student, [new MitoChatTurn { Role = "user", Text = "What is next?" }], "plan");

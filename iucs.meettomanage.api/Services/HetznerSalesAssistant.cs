@@ -159,7 +159,7 @@ namespace iucs.meettomanage.api.Services
 
         public async Task<SalesChatResponse> ReplyAsync(IReadOnlyList<SalesChatTurn> conversation, CancellationToken cancellationToken = default, MarketingLeadAttributionDto? attribution = null)
         {
-            if (string.IsNullOrWhiteSpace(_options.ApiKey))
+            if (!_options.IsConfigured)
             {
                 throw new ExternalServiceException("The chat assistant isn't available right now. Please reach us on WhatsApp or email instead.");
             }
@@ -237,7 +237,7 @@ namespace iucs.meettomanage.api.Services
 
         public async Task<IReadOnlyList<string>> TranslateAsync(IReadOnlyList<string> texts, string targetLanguage, CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrWhiteSpace(_options.ApiKey))
+            if (!_options.IsConfigured)
                 throw new ExternalServiceException("Translation isn't available right now.");
 
             var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -293,7 +293,7 @@ namespace iucs.meettomanage.api.Services
         public async Task<MarketingAiInsightsDto> AnalyzeMarketingAsync(MarketingDashboardDto dashboard, CancellationToken cancellationToken = default)
         {
             var fallback = BuildMarketingFallback(dashboard);
-            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            if (!_options.IsConfigured) return fallback;
             var evidence = JsonSerializer.Serialize(new
             {
                 definitions = new
@@ -370,7 +370,7 @@ namespace iucs.meettomanage.api.Services
                 NextActions = ["Start with the region that has the most qualified new prospects.", "Use a region-specific subject line and customer example.", "Review bounced contacts before the next campaign."],
                 AiPowered = false, GeneratedAtUtc = DateTime.UtcNow
             };
-            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            if (!_options.IsConfigured) return fallback;
             var messages = new JsonArray
             {
                 new JsonObject { ["role"] = "system", ["content"] =
@@ -408,7 +408,7 @@ namespace iucs.meettomanage.api.Services
             var fallback = purpose == "reply"
                 ? "Thanks for getting back to us. I’d be happy to show how Meet to Manage can simplify your classes, attendance, fees, and parent communication. Would a 15-minute demo this week work for you?"
                 : "I came across your academy and thought Meet to Manage could help you manage classes, attendance, fees, and parent updates in one place. Would you be open to a quick 15-minute demo?";
-            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            if (!_options.IsConfigured) return fallback;
             var messages = new JsonArray
             {
                 new JsonObject { ["role"] = "system", ["content"] =
@@ -445,7 +445,7 @@ namespace iucs.meettomanage.api.Services
                     new() { DelayDays = 5, Subject = "Should I close this?", Body = "Hi {{FirstName}},\n\nI don't want to crowd your inbox, so this is my last note. If simplifying classes, fees and parent communication becomes a priority, I would be happy to help.\n\nShould I send a quick overview?\n\nThanks" }
                 ]
             };
-            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            if (!_options.IsConfigured) return fallback;
             var messages = new JsonArray
             {
                 new JsonObject { ["role"] = "system", ["content"] =
@@ -494,7 +494,7 @@ namespace iucs.meettomanage.api.Services
                 SuggestedReply = "Thanks for getting back to us. I’d be happy to answer your questions and show how Meet to Manage can simplify classes, attendance, fees and parent communication. Would a short 15-minute call this week work for you?",
                 AiPowered = false
             };
-            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            if (!_options.IsConfigured) return fallback;
             var messages = new JsonArray
             {
                 new JsonObject { ["role"] = "system", ["content"] =
@@ -548,7 +548,7 @@ namespace iucs.meettomanage.api.Services
         public async Task<MarketingVisitorInsightDto> AnalyzeVisitorAsync(MarketingVisitorDetailDto visitor, CancellationToken cancellationToken = default)
         {
             var fallback = BuildVisitorFallback(visitor);
-            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            if (!_options.IsConfigured) return fallback;
             // Anonymous behaviour only: no names, emails, phones or academy names leave the system.
             var input = JsonSerializer.Serialize(new
             {
@@ -639,7 +639,7 @@ namespace iucs.meettomanage.api.Services
         public async Task<MarketingBlogDraftDto> WriteBlogDraftAsync(MarketingBlogDraftRequest idea, string? styleSample, CancellationToken cancellationToken = default)
         {
             var fallback = BuildDraftFallback(idea);
-            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            if (!_options.IsConfigured) return fallback;
             var input = JsonSerializer.Serialize(new
             {
                 idea.Title, idea.TargetKeyword, idea.Why, outline = idea.Outline,
@@ -720,7 +720,7 @@ namespace iucs.meettomanage.api.Services
             // With a tiny sample, an LLM tends to turn random visits into confident causal stories.
             // Keep the result factual until there is enough traffic to compare behaviour at all.
             if (behaviour.Visitors < 20) return BuildInsufficientDataImprovements(behaviour);
-            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            if (!_options.IsConfigured) return fallback;
             var input = JsonSerializer.Serialize(new
             {
                 site = "meettomanage.cloud — marketing site for Meet to Manage, academy-management SaaS for Indian academies and coaching/tuition centres. Goal: visitors book a free platform demo at /get-started (or via the AI chat). /pricing is the main buying page; /blog posts and /solutions pages educate; /customers has case studies.",
@@ -841,7 +841,7 @@ namespace iucs.meettomanage.api.Services
                 AiPowered = false,
                 GeneratedAtUtc = DateTime.UtcNow,
             };
-            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            if (!_options.IsConfigured) return fallback;
             var messages = new JsonArray
             {
                 new JsonObject { ["role"] = "system", ["content"] =
@@ -872,7 +872,7 @@ namespace iucs.meettomanage.api.Services
         public async Task<MarketingBlogIdeasDto> SuggestBlogPostsAsync(MarketingBlogIdeaEvidence evidence, CancellationToken cancellationToken = default)
         {
             var fallback = BuildBlogIdeasFallback(evidence);
-            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            if (!_options.IsConfigured) return fallback;
             var input = JsonSerializer.Serialize(new
             {
                 audience = "Owners of academies and coaching/tuition centres in India (abacus, phonics, tuition, online classes) evaluating academy-management software: live classes, admissions, fee collection, parent app.",
@@ -1003,7 +1003,7 @@ namespace iucs.meettomanage.api.Services
                 SuggestedMessage = $"Hi {lead.FullName}, thank you for your interest in Meet to Manage. When would be a convenient time for a short platform walkthrough?",
                 AiPowered = false,
             };
-            if (string.IsNullOrWhiteSpace(_options.ApiKey)) return fallback;
+            if (!_options.IsConfigured) return fallback;
             var messages = new JsonArray
             {
                 new JsonObject { ["role"] = "system", ["content"] = "You are a B2B SaaS sales coach. Use only the supplied lead data. Return strict JSON with summary, nextAction, suggestedChannel (WhatsApp, Email, or Call), and suggestedMessage. Keep the message respectful and under 70 words. Do not invent facts." },
@@ -1147,7 +1147,7 @@ namespace iucs.meettomanage.api.Services
             var client = _httpClientFactory.CreateClient(clientName ?? nameof(HetznerSalesAssistant));
             using var request = new HttpRequestMessage(
                 HttpMethod.Post,
-                $"{_options.Endpoint.TrimEnd('/')}/chat/completions");
+                $"{_options.ResolveEndpoint(_options.Endpoint).TrimEnd('/')}/chat/completions");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.ApiKey);
             request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
 

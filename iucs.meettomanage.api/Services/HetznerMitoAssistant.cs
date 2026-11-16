@@ -20,7 +20,7 @@ public class HetznerMitoAssistant : IMitoAssistant
 
     public async Task<MitoChatResponse> ReplyAsync(MitoStudentContext student, IReadOnlyList<MitoChatTurn> conversation, string mode, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(_options.ApiKey))
+        if (!_options.IsConfigured)
             throw new ExternalServiceException("Mito isn't available right now. Please try again later.");
 
         var schedule = student.UpcomingClasses.Count == 0 ? "None listed." : string.Join(" | ", student.UpcomingClasses);

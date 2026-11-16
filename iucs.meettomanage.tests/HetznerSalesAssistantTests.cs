@@ -21,10 +21,10 @@ public class HetznerSalesAssistantTests
     public async Task Uses_hetzner_openai_endpoint_and_bearer_key()
     {
         var handler = new FakeHandler((HttpStatusCode.OK, OkBody));
-        var assistant = Create(handler, new() { ApiKey = "test-key", Endpoint = "https://inference.hetzner.com/api/v1", Model = "primary" });
+        var assistant = Create(handler, new() { Enabled = true, ApiKey = "test-key", Endpoint = "https://inference.hetzner.com/v1", Model = "primary" });
         Assert.Equal("Hello from Hetzner AI.", (await assistant.ReplyAsync(Conversation)).Reply);
         var sent = Assert.Single(handler.Requests);
-        Assert.Equal("https://inference.hetzner.com/api/v1/chat/completions", sent.Url);
+        Assert.Equal("https://inference.hetzner.com/v1/chat/completions", sent.Url);
         Assert.Equal("test-key", sent.ApiKey);
         using var payload = JsonDocument.Parse(sent.Body);
         Assert.Equal("primary", payload.RootElement.GetProperty("model").GetString());
@@ -40,10 +40,41 @@ public class HetznerSalesAssistantTests
     }
 
     [Fact]
+    public async Task Disabled_flag_never_calls_provider_even_with_key()
+    {
+        var handler = new FakeHandler((HttpStatusCode.OK, OkBody));
+        var options = new HetznerAiOptions { Enabled = false, ApiKey = "key", Endpoint = "https://ai.test/v1", Model = "primary" };
+        await Assert.ThrowsAsync<ExternalServiceException>(() => Create(handler, options).ReplyAsync(Conversation));
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Configured_endpoint_rewrite_is_applied()
+    {
+        var handler = new FakeHandler((HttpStatusCode.OK, OkBody));
+        var options = new HetznerAiOptions
+        {
+            Enabled = true, ApiKey = "key", Endpoint = "https://old.test/api/v1", Model = "primary",
+            EndpointRewrite = new() { Enabled = true, From = "https://old.test/api/v1", To = "https://new.test/v1" },
+        };
+        await Create(handler, options).ReplyAsync(Conversation);
+        Assert.Equal("https://new.test/v1/chat/completions", Assert.Single(handler.Requests).Url);
+    }
+
+    [Theory]
+    [InlineData(false, "https://old.test/api/v1")]
+    [InlineData(true, "https://new.test/v1")]
+    public void Endpoint_rewrite_respects_enabled_flag(bool enabled, string expected)
+    {
+        var options = new HetznerAiOptions { EndpointRewrite = new() { Enabled = enabled, From = "https://old.test/api/v1", To = "https://new.test/v1" } };
+        Assert.Equal(expected, options.ResolveEndpoint("https://old.test/api/v1"));
+    }
+
+    [Fact]
     public async Task Retryable_failure_uses_fallback_model()
     {
         var handler = new FakeHandler((HttpStatusCode.ServiceUnavailable, "{}"), (HttpStatusCode.OK, OkBody));
-        await Create(handler, new() { ApiKey = "key", Model = "primary", FallbackModel = "fallback" }).ReplyAsync(Conversation);
+        await Create(handler, new() { Enabled = true, Endpoint = "https://ai.test/v1", ApiKey = "key", Model = "primary", FallbackModel = "fallback" }).ReplyAsync(Conversation);
         using var payload = JsonDocument.Parse(handler.Requests[1].Body);
         Assert.Equal("fallback", payload.RootElement.GetProperty("model").GetString());
     }
@@ -52,7 +83,7 @@ public class HetznerSalesAssistantTests
     public async Task Marketing_analysis_returns_structured_hetzner_recommendations()
     {
         const string body = """{"choices":[{"message":{"content":"{\"summary\":\"Traffic is growing.\",\"observations\":[\"Chat is strong.\"],\"nextActions\":[\"Improve the demo CTA.\"]}"}}]}""";
-        var result = await Create(new FakeHandler((HttpStatusCode.OK, body)), new() { ApiKey = "key", Model = "primary" })
+        var result = await Create(new FakeHandler((HttpStatusCode.OK, body)), new() { Enabled = true, Endpoint = "https://ai.test/v1", ApiKey = "key", Model = "primary" })
             .AnalyzeMarketingAsync(new MarketingDashboardDto { Days = 30, Totals = new() { Visitors = 32, DemoRequests = 3 } });
 
         Assert.True(result.AiPowered);
@@ -75,7 +106,7 @@ public class HetznerSalesAssistantTests
     {
         const string body = """{"choices":[{"message":{"content":"{\"summary\":\"282 visitors arrived.\",\"observations\":[\"Traffic increased.\"],\"nextActions\":[\"Verify tracking.\"]}"}}]}""";
         var handler = new FakeHandler((HttpStatusCode.OK, body));
-        var result = await Create(handler, new() { ApiKey = "key", Model = "primary" })
+        var result = await Create(handler, new() { Enabled = true, Endpoint = "https://ai.test/v1", ApiKey = "key", Model = "primary" })
             .AnalyzeMarketingAsync(new MarketingDashboardDto { Days = 30, Totals = new() { Visitors = 110, PageViews = 282 } });
 
         Assert.False(result.AiPowered);
@@ -133,7 +164,7 @@ public class HetznerSalesAssistantTests
     public async Task Site_improvements_do_not_invent_causes_for_tiny_samples()
     {
         var handler = new FakeHandler((HttpStatusCode.OK, OkBody));
-        var result = await Create(handler, new() { ApiKey = "key", Model = "primary" })
+        var result = await Create(handler, new() { Enabled = true, Endpoint = "https://ai.test/v1", ApiKey = "key", Model = "primary" })
             .SuggestSiteImprovementsAsync(new MarketingSiteBehaviourDto { Visitors = 2, Visits = 2, SinglePageVisits = 2 });
 
         Assert.False(result.AiPowered);

@@ -2,6 +2,8 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using iucs.meettomanage.application.Common.Interfaces;
+using iucs.meettomanage.application.Common.Options;
+using Microsoft.Extensions.Options;
 
 namespace iucs.meettomanage.api.Services
 {
@@ -9,11 +11,17 @@ namespace iucs.meettomanage.api.Services
     public class OllamaChatClient : IAiChatClient
     {
         private readonly IHttpClientFactory _clients;
-        public OllamaChatClient(IHttpClientFactory clients) => _clients = clients;
+        private readonly HetznerAiOptions _options;
+        public OllamaChatClient(IHttpClientFactory clients, IOptions<HetznerAiOptions> options)
+        {
+            _clients = clients;
+            _options = options.Value;
+        }
 
         public async Task<AiChatCompletion> CompleteAsync(string endpoint, string? bearerKey, string model,
             IReadOnlyList<AiChatTurn> messages, int maxTokens, double temperature, CancellationToken cancellationToken = default)
         {
+            endpoint = _options.ResolveEndpoint(endpoint);
             var openAi = IsOpenAi(endpoint);
             var chatUrl = openAi ? Join(endpoint, "chat/completions") : endpoint;
             // Hetzner's current Qwen reasoning models count their hidden reasoning against
@@ -72,7 +80,7 @@ namespace iucs.meettomanage.api.Services
 
         public async Task<IReadOnlyList<string>> ListModelsAsync(string endpoint, string? bearerKey, CancellationToken cancellationToken = default)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, Join(endpoint, "models"));
+            using var request = new HttpRequestMessage(HttpMethod.Get, Join(_options.ResolveEndpoint(endpoint), "models"));
             if (!string.IsNullOrWhiteSpace(bearerKey)) request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerKey);
             using var response = await _clients.CreateClient(nameof(OllamaChatClient)).SendAsync(request, cancellationToken);
             var body = await response.Content.ReadAsStringAsync(cancellationToken);

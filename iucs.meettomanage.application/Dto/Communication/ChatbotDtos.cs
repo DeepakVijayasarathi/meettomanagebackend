@@ -4,7 +4,7 @@ namespace iucs.meettomanage.application.Dto.Communication
     {
         public bool Enabled { get; set; }
         public string Endpoint { get; set; } = string.Empty;
-        public string Model { get; set; } = "Qwen/Qwen3.6-35B-A3B-FP8";
+        public string Model { get; set; } = string.Empty;
         public string SystemPrompt { get; set; } = "Answer in 2-3 short sentences.";
         public int MaxTokens { get; set; } = 500;
         public double Temperature { get; set; } = 0.3;
@@ -19,7 +19,7 @@ namespace iucs.meettomanage.application.Dto.Communication
     {
         public bool Enabled { get; set; }
         public string Endpoint { get; set; } = string.Empty;
-        public string Model { get; set; } = "Qwen/Qwen3.6-35B-A3B-FP8";
+        public string Model { get; set; } = string.Empty;
         public string SystemPrompt { get; set; } = "Answer in 2-3 short sentences.";
         public int MaxTokens { get; set; } = 500;
         public double Temperature { get; set; } = 0.3;

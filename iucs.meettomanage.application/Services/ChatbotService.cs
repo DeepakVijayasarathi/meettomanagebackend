@@ -1,6 +1,7 @@
 using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.application.Common.Interfaces;
+using iucs.meettomanage.application.Common.Options;
 using iucs.meettomanage.application.Dto.Communication;
 using iucs.meettomanage.domain.Entities.Communication;
 using iucs.meettomanage.domain.Entities.Settings;
@@ -13,6 +14,7 @@ using iucs.meettomanage.domain.Entities.Payouts;
 using iucs.meettomanage.domain.Enums;
 using iucs.meettomanage.domain.Repository;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace iucs.meettomanage.application.Services
 {
@@ -21,6 +23,8 @@ namespace iucs.meettomanage.application.Services
         private readonly IUnitOfWork _unitOfWork;
         private readonly IAiChatClient _aiChatClient;
         private readonly IPinVault _secretVault;
+        /// <summary>Config-driven defaults (section HetznerAi) used until an admin saves portal values.</summary>
+        private readonly HetznerAiOptions _aiDefaults;
 
         private const string AiEnabledKey = "ai.chat.enabled";
         private const string AiEndpointKey = "ai.chat.endpoint";
@@ -42,8 +46,9 @@ namespace iucs.meettomanage.application.Services
             "help", "about", "you", "your", "it", "this", "that", "and", "or", "with",
         };
 
-        public ChatbotService(IUnitOfWork unitOfWork, IAiChatClient aiChatClient, IPinVault secretVault)
+        public ChatbotService(IUnitOfWork unitOfWork, IAiChatClient aiChatClient, IPinVault secretVault, IOptions<HetznerAiOptions> aiDefaults)
         {
+            _aiDefaults = aiDefaults.Value;
             _unitOfWork = unitOfWork;
             _aiChatClient = aiChatClient;
             _secretVault = secretVault;
@@ -56,9 +61,9 @@ namespace iucs.meettomanage.application.Services
             return new AiChatConfigurationDto
             {
                 Enabled = Bool(values, AiEnabledKey),
-                Endpoint = Val(values, AiEndpointKey, "https://inference.hetzner.com/api/v1"),
-                Model = Val(values, AiModelKey, "Qwen/Qwen3.6-35B-A3B-FP8"),
-                SystemPrompt = Val(values, AiSystemPromptKey, "Answer in 2-3 short sentences."),
+                Endpoint = Val(values, AiEndpointKey, _aiDefaults.Endpoint),
+                Model = Val(values, AiModelKey, _aiDefaults.Model),
+                SystemPrompt = Val(values, AiSystemPromptKey, _aiDefaults.DefaultSystemPrompt),
                 MaxTokens = Int(values, AiMaxTokensKey, 500, 1, 2000),
                 Temperature = Double(values, AiTemperatureKey, 0.3, 0, 2),
                 InputCostPerMillionTokensUsd = Decimal(values, AiInputPriceKey),
@@ -304,7 +309,7 @@ namespace iucs.meettomanage.application.Services
             {
                 try
                 {
-                    var completion = await _aiChatClient.CompleteAsync(Val(values, AiEndpointKey), key, Val(values, AiModelKey, "Qwen/Qwen3.6-35B-A3B-FP8"), turns, Int(values, AiMaxTokensKey, 500, 1, 2000), Double(values, AiTemperatureKey, 0.3, 0, 2), cancellationToken);
+                    var completion = await _aiChatClient.CompleteAsync(Val(values, AiEndpointKey), key, Val(values, AiModelKey, _aiDefaults.Model), turns, Int(values, AiMaxTokensKey, 500, 1, 2000), Double(values, AiTemperatureKey, 0.3, 0, 2), cancellationToken);
                     answer = completion.Content;
                     aiPowered = true;
                     await RecordAiUsageAsync(completion, succeeded: true, cancellationToken);
@@ -450,14 +455,14 @@ namespace iucs.meettomanage.application.Services
         {
             var values = await AiSettingsAsync(cancellationToken);
             if ((requireEnabled && !Bool(values, AiEnabledKey)) || string.IsNullOrWhiteSpace(Val(values, AiEndpointKey))) return null;
-            var turns = new List<AiChatTurn> { new("system", Val(values, AiSystemPromptKey, "Answer in 2-3 short sentences.")) };
+            var turns = new List<AiChatTurn> { new("system", Val(values, AiSystemPromptKey, _aiDefaults.DefaultSystemPrompt)) };
             turns.AddRange(history.Select(m => new AiChatTurn(m.Sender == ChatMessageSender.User ? "user" : "assistant", m.Text)));
             turns.Add(new AiChatTurn("user", question));
             string? key = null;
             if (values.TryGetValue(AiApiKeyKey, out var encrypted) && !string.IsNullOrWhiteSpace(encrypted)) key = _secretVault.TryReveal(encrypted);
             try
             {
-                var completion = await _aiChatClient.CompleteAsync(Val(values, AiEndpointKey), key, Val(values, AiModelKey, "Qwen/Qwen3.6-35B-A3B-FP8"), turns,
+                var completion = await _aiChatClient.CompleteAsync(Val(values, AiEndpointKey), key, Val(values, AiModelKey, _aiDefaults.Model), turns,
                     Int(values, AiMaxTokensKey, 500, 1, 2000), Double(values, AiTemperatureKey, 0.3, 0, 2), cancellationToken);
                 await RecordAiUsageAsync(completion, succeeded: true, cancellationToken);
                 return completion.Content;
