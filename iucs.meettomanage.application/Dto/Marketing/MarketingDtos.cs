@@ -82,6 +82,15 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public string? LostReason { get; set; }
         public string? TenantCode { get; set; }
         public DateTime? HighIntentAtUtc { get; set; }
+
+        public string? Region { get; set; }
+        public string? City { get; set; }
+        public string? Segment { get; set; }
+        public string? Website { get; set; }
+        public int? StudentCount { get; set; }
+        public string? ExpectedPlan { get; set; }
+        public decimal? ExpectedMonthlyValue { get; set; }
+        public DateTime? ExpectedCloseAtUtc { get; set; }
     }
 
     public class SetLeadStageRequest
@@ -141,6 +150,11 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public LeadStage? Stage { get; set; }
         public string? Source { get; set; }
         public Guid? AssignedToUserId { get; set; }
+        public bool UnassignedOnly { get; set; }
+        [MaxLength(100)] public string? Region { get; set; }
+        [MaxLength(100)] public string? Segment { get; set; }
+        /// <summary>Set by the server for sales reps (their own and unassigned leads only); ignored from the client.</summary>
+        public Guid? VisibleToUserId { get; set; }
         public bool OverdueOnly { get; set; }
         public bool ArchivedOnly { get; set; }
     }

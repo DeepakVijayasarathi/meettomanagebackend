@@ -228,6 +228,7 @@ namespace iucs.meettomanage.api.Controllers
     /// <summary>Admin follow-up queue for public platform-demo requests.</summary>
     [ApiController]
     [Route("api/marketing/demo-requests")]
+    [ServiceFilter(typeof(iucs.meettomanage.api.Marketing.CrmLeadAccessFilter))]
     public class PlatformDemoRequestsAdminController : ControllerBase
     {
         private readonly IPlatformDemoRequestService _platformDemoRequestService;

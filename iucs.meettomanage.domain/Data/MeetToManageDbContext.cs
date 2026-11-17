@@ -102,6 +102,9 @@ namespace iucs.meettomanage.domain.Data
         public DbSet<BlogPost> BlogPosts => Set<BlogPost>();
         public DbSet<MarketingEvent> MarketingEvents => Set<MarketingEvent>();
         public DbSet<MarketingLeadActivity> MarketingLeadActivities => Set<MarketingLeadActivity>();
+        public DbSet<CrmTeamMember> CrmTeamMembers => Set<CrmTeamMember>();
+        public DbSet<CrmTask> CrmTasks => Set<CrmTask>();
+        public DbSet<CrmCustomerNote> CrmCustomerNotes => Set<CrmCustomerNote>();
         public DbSet<MarketingCampaignBudget> MarketingCampaignBudgets => Set<MarketingCampaignBudget>();
         public DbSet<MarketingReportSetting> MarketingReportSettings => Set<MarketingReportSetting>();
         public DbSet<MarketingChatConversation> MarketingChatConversations => Set<MarketingChatConversation>();

@@ -66,6 +66,19 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         [MaxLength(50)] public string? TenantCode { get; set; }
         /// <summary>When repeated pricing visits after a demo or during a trial flagged this lead as ready to buy.</summary>
         public DateTime? HighIntentAtUtc { get; set; }
+
+        // ---- CRM: where they are and what the deal is worth
+        [MaxLength(100)] public string? Region { get; set; }
+        [MaxLength(100)] public string? City { get; set; }
+        /// <summary>What they teach, e.g. Phonics, Abacus, Tuition.</summary>
+        [MaxLength(100)] public string? Segment { get; set; }
+        [MaxLength(300)] public string? Website { get; set; }
+        public int? StudentCount { get; set; }
+        /// <summary>Plan code the lead is likely to buy (basic, pro, growth, own-brand).</summary>
+        [MaxLength(50)] public string? ExpectedPlan { get; set; }
+        /// <summary>Expected monthly revenue in INR once they pay.</summary>
+        public decimal? ExpectedMonthlyValue { get; set; }
+        public DateTime? ExpectedCloseAtUtc { get; set; }
         [NotMapped] public bool IsDuplicate { get; set; }
         [NotMapped] public int EngagementScoreBoost { get; set; }
         /// <summary>Plain-language reasons behind <see cref="EngagementScoreBoost"/>, from the visitor's website journey.</summary>

@@ -8,7 +8,7 @@ namespace iucs.meettomanage.api.Controllers;
 
 /// <summary>The marketing console's Lead automation page: funnel, what ran, and the on/off switches.</summary>
 [ApiController, Route("api/marketing/lead-automation"), Authorize(Roles = nameof(UserRole.Marketing))]
-public sealed class LeadAutomationController(LeadAutomationService automation) : ControllerBase
+public sealed class LeadAutomationController(LeadAutomationService automation, CrmAccess access) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<LeadAutomationOverview>> Overview([FromQuery] int days = 90, CancellationToken ct = default) =>
@@ -17,6 +17,7 @@ public sealed class LeadAutomationController(LeadAutomationService automation) :
     [HttpPut("settings")]
     public async Task<ActionResult<Dictionary<string, string>>> SaveSettings(Dictionary<string, string> values, CancellationToken ct)
     {
+        await access.RequireManagerAsync(ct);
         await automation.SaveSettingsAsync(values, ct);
         return Ok(await automation.SettingsAsync(ct));
     }
@@ -25,6 +26,7 @@ public sealed class LeadAutomationController(LeadAutomationService automation) :
     [HttpPost("run"), EnableRateLimiting("login")]
     public async Task<IActionResult> RunNow(CancellationToken ct)
     {
+        await access.RequireWriteAsync(ct);
         await automation.RunAsync(DateTime.UtcNow, ct);
         return NoContent();
     }

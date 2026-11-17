@@ -297,6 +297,10 @@ namespace iucs.meettomanage.application.Services
             query = request.ArchivedOnly ? query.Where(x => x.ArchivedAtUtc != null) : query.Where(x => x.ArchivedAtUtc == null);
             if (request.Status.HasValue) query = query.Where(x => x.Status == request.Status);
             if (request.Stage.HasValue) query = query.Where(x => x.Stage == request.Stage);
+            if (request.VisibleToUserId is { } me) query = query.Where(x => x.AssignedToUserId == null || x.AssignedToUserId == me);
+            if (request.UnassignedOnly) query = query.Where(x => x.AssignedToUserId == null);
+            if (!string.IsNullOrWhiteSpace(request.Region)) query = query.Where(x => x.Region == request.Region.Trim());
+            if (!string.IsNullOrWhiteSpace(request.Segment)) query = query.Where(x => x.Segment == request.Segment.Trim());
             if (!string.IsNullOrWhiteSpace(request.Source)) query = query.Where(x => x.Source == request.Source);
             if (request.AssignedToUserId.HasValue) query = query.Where(x => x.AssignedToUserId == request.AssignedToUserId);
             if (request.OverdueOnly) query = query.Where(x => x.NextFollowUpAtUtc < DateTime.UtcNow && x.Status != StoreInquiryStatus.Converted && x.Status != StoreInquiryStatus.Closed);

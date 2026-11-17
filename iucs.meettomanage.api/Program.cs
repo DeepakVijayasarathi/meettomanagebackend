@@ -202,6 +202,10 @@ builder.Services.AddSingleton<iucs.meettomanage.api.Saas.PlatformMonitoringSetti
 builder.Services.AddScoped<iucs.meettomanage.api.Saas.PlatformInfrastructureMonitor>();
 // Lead lifecycle automation: demo reminders, lead-to-account matching and high-intent alerts.
 builder.Services.AddScoped<iucs.meettomanage.api.Marketing.LeadAutomationService>();
+// CRM: roles, tasks, lead import, reports and customers in the marketing console.
+builder.Services.AddScoped<iucs.meettomanage.api.Marketing.CrmAccess>();
+builder.Services.AddScoped<iucs.meettomanage.api.Marketing.CrmLeadAccessFilter>();
+builder.Services.AddScoped<iucs.meettomanage.api.Marketing.CrmService>();
 builder.Services.AddTenantWorker<iucs.meettomanage.api.Marketing.LeadAutomationBackgroundService>(tenantMode);
 // CRM integration: lead webhooks, no-op until Integrations:CrmWebhookUrl is set
 builder.Services.AddHttpClient();
