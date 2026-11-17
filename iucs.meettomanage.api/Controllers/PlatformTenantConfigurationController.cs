@@ -80,6 +80,28 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
         });
     }
 
+    /// <summary>
+    /// Read-only directory of the selected tenant's login users (name, email, role, status) plus a per-role
+    /// count. Credentials are never selected. The Marketing role belongs to the platform owner, not the
+    /// academy, so it is excluded just as the tenant's own portals exclude it.
+    /// </summary>
+    [HttpGet("users")]
+    public async Task<IActionResult> Users(Guid tenantId, CancellationToken ct) =>
+        Ok(await InTenant(tenantId, async sp =>
+        {
+            var db = sp.GetRequiredService<MeetToManageDbContext>();
+            var rows = await db.Users.AsNoTracking().Where(x => x.Role != domain.Enums.UserRole.Marketing)
+                .OrderBy(x => x.FirstName).ThenBy(x => x.LastName).Take(5000)
+                .Select(x => new { x.Id, x.FirstName, x.LastName, x.Email, Role = x.Role.ToString(), Status = x.Status.ToString() })
+                .ToListAsync(ct);
+            return new
+            {
+                roles = Enum.GetValues<domain.Enums.UserRole>().Where(r => r != domain.Enums.UserRole.Marketing)
+                    .Select(r => new { role = r.ToString(), count = rows.Count(u => u.Role == r.ToString()) }),
+                users = rows.Select(x => new { x.Id, username = $"{x.FirstName} {x.LastName}".Trim(), x.Email, x.Role, x.Status }),
+            };
+        }, ct));
+
     [HttpPut("configuration")]
     public async Task<IActionResult> SaveConfiguration(Guid tenantId, List<UpdateSettingRequest> updates, CancellationToken ct) =>
         Ok(await InTenant(tenantId, sp => sp.GetRequiredService<ISettingsService>().UpsertAsync(updates, ct), ct));
