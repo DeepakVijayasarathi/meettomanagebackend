@@ -94,11 +94,22 @@ namespace iucs.meettomanage.tests
 
         private ClassSessionEventLogService CreateEventLogService() => new(_db.UnitOfWork);
 
+        // Who is "in the classroom" for the join gate: a parent only gets a join token once the teacher is in.
+        private readonly ClassroomPresenceTracker _presence = new();
+
+        private void TeacherIsInClassroom(params Guid[] sessionIds)
+        {
+            foreach (var id in sessionIds)
+            {
+                _presence.UserJoined(id.ToString(), $"test-{id}", Guid.NewGuid(), "Teacher", "teacher");
+            }
+        }
+
         private SessionService CreateSessionService() =>
-            new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, new FakeJitsiTokenService(), CreateEventLogService(), new FakeTokenService());
+            new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, new FakeJitsiTokenService(), CreateEventLogService(), new FakeTokenService(), _presence);
 
         private SessionService CreateSessionService(FakeJitsiTokenService jitsiTokens) =>
-            new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, jitsiTokens, CreateEventLogService(), new FakeTokenService());
+            new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, jitsiTokens, CreateEventLogService(), new FakeTokenService(), _presence);
 
         private BillingService CreateBillingService() =>
             new(_db.UnitOfWork, _auditLog, new FakePaymentGateway(), _notifications, _db.CurrentUser, _bulkFileReader, _invoicePdfGenerator);
@@ -1731,8 +1742,25 @@ namespace iucs.meettomanage.tests
             _db.Context.ParentProfiles.Add(new ParentProfile { UserId = parentUser.Id });
             await _db.Context.SaveChangesAsync();
 
+            TeacherIsInClassroom(session.Id);
             var join = await CreateSessionService().GetJitsiJoinAsync(session.Id, parentUser.Id);
             Assert.Equal("demo-room", join.Room);
+        }
+
+        [Fact]
+        public async Task GetJitsiJoin_ParentBeforeTheTeacherIsInTheClassroom_IsToldToWait()
+        {
+            var parentEmail = $"lead-{Guid.NewGuid():N}@test.com";
+            var (session, _) = await SeedDemoSessionAsync(parentEmail, startAtUtc: DateTime.UtcNow.AddMinutes(5));
+            session.MeetingRoomId = "gate-room";
+            var parentUser = await _db.SeedUserAsync(parentEmail, "x", UserRole.Parent);
+            _db.Context.ParentProfiles.Add(new ParentProfile { UserId = parentUser.Id });
+            await _db.Context.SaveChangesAsync();
+
+            await Assert.ThrowsAsync<ConflictException>(() => CreateSessionService().GetJitsiJoinAsync(session.Id, parentUser.Id));
+
+            TeacherIsInClassroom(session.Id);
+            Assert.Equal("gate-room", (await CreateSessionService().GetJitsiJoinAsync(session.Id, parentUser.Id)).Room);
         }
 
         [Fact]
@@ -1971,7 +1999,7 @@ namespace iucs.meettomanage.tests
         }
 
         private SessionService CreateSessionService(IDirectUploadStorage uploads) =>
-            new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, new FakeJitsiTokenService(), CreateEventLogService(), new FakeTokenService(), uploads);
+            new(_db.UnitOfWork, _auditLog, CreatePayoutService(), _notifications, _db.CurrentUser, new FakeJitsiTokenService(), CreateEventLogService(), new FakeTokenService(), _presence, uploads);
 
         [Fact]
         public async Task BrowserRecording_UploadsTracksAndSavesOnce()
@@ -7697,7 +7725,7 @@ namespace iucs.meettomanage.tests
             var userService2 = new UserService(
                 uow2, _hasher, notifications2, emailTemplates2, auditLog2, _emailSender, _whatsAppSender, _smsSender, _bulkFileReader, new AesGcmPinVault(Microsoft.Extensions.Options.Options.Create(new PinVaultOptions { Key = "test-key-test-key-test-key-test-key" })), NullLogger<UserService>.Instance);
             var sessionService2 = new SessionService(
-                uow2, auditLog2, CreatePayoutService(), notifications2, _db.CurrentUser, new FakeJitsiTokenService(), new ClassSessionEventLogService(uow2), new FakeTokenService());
+                uow2, auditLog2, CreatePayoutService(), notifications2, _db.CurrentUser, new FakeJitsiTokenService(), new ClassSessionEventLogService(uow2), new FakeTokenService(), _presence);
             var service1 = CreateStoreService();
             var service2 = new StoreService(
                 uow2, auditLog2,
@@ -11446,6 +11474,7 @@ namespace iucs.meettomanage.tests
 
             // The parent's own portal tab still only knows the ORIGINAL id -- it was open
             // before the edit and never reloaded. That's the whole scenario.
+            TeacherIsInClassroom(replacement.Id);
             var join = await CreateSessionService().GetJitsiJoinAsync(original.Id, parentUser.Id);
 
             Assert.Equal(replacement.Id, join.SessionId);

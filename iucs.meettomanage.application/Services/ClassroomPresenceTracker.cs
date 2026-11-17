@@ -20,7 +20,11 @@ namespace iucs.meettomanage.application.Services
         {
             if (_rooms.TryGetValue(Prefix + sessionId, out var room))
             {
-                room.TryRemove(connectionId, out _);
+                if (room.TryRemove(connectionId, out var left))
+                {
+                    _lastLeftUtc[Prefix + sessionId + "|" + left.Role] = DateTime.UtcNow;
+                    PruneLastLeft();
+                }
                 if (room.IsEmpty)
                 {
                     _rooms.TryRemove(Prefix + sessionId, out _);
@@ -43,5 +47,37 @@ namespace iucs.meettomanage.application.Services
             TenantRooms.SelectMany(room => room.Values).Where(IsRealPerson).ToList();
 
         private static bool IsRealPerson(LivePresenceEntry entry) => entry.Role != "observer";
+
+        // When each role was last connected to each session (tenant-prefixed key) -- see IsPresentOrRecentlyLeft.
+        private readonly ConcurrentDictionary<string, DateTime> _lastLeftUtc = new();
+
+        // Only the last few minutes ever matter; drop entries older than a day so this in-memory map
+        // can't keep growing (a few entries per class) for as long as the API runs.
+        private void PruneLastLeft()
+        {
+            if (_lastLeftUtc.Count < 500)
+            {
+                return;
+            }
+
+            var cutoff = DateTime.UtcNow.AddDays(-1);
+            foreach (var entry in _lastLeftUtc)
+            {
+                if (entry.Value < cutoff)
+                {
+                    _lastLeftUtc.TryRemove(entry.Key, out _);
+                }
+            }
+        }
+
+        public bool IsPresentOrRecentlyLeft(string sessionId, string role, TimeSpan grace)
+        {
+            if (_rooms.TryGetValue(Prefix + sessionId, out var room) && room.Values.Any(e => e.Role == role))
+            {
+                return true;
+            }
+
+            return _lastLeftUtc.TryGetValue(Prefix + sessionId + "|" + role, out var leftAt) && DateTime.UtcNow - leftAt <= grace;
+        }
     }
 }

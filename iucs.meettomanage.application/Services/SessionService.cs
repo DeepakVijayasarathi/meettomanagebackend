@@ -52,6 +52,7 @@ namespace iucs.meettomanage.application.Services
         private readonly IClassSessionEventLogService _eventLog;
         private readonly ITokenService _tokenService;
         private readonly IDirectUploadStorage? _directUploads;
+        private readonly IClassroomPresenceTracker _presenceTracker;
 
         public SessionService(
             IUnitOfWork unitOfWork,
@@ -62,6 +63,7 @@ namespace iucs.meettomanage.application.Services
             IJitsiTokenService jitsiTokenService,
             IClassSessionEventLogService eventLog,
             ITokenService tokenService,
+            IClassroomPresenceTracker presenceTracker,
             IDirectUploadStorage? directUploads = null)
         {
             _directUploads = directUploads;
@@ -73,6 +75,7 @@ namespace iucs.meettomanage.application.Services
             _jitsiTokenService = jitsiTokenService;
             _eventLog = eventLog;
             _tokenService = tokenService;
+            _presenceTracker = presenceTracker;
         }
 
         public async Task<IReadOnlyList<ClassSessionDto>> ListAsync(
@@ -2354,6 +2357,15 @@ namespace iucs.meettomanage.application.Services
                 throw new DomainValidationException("This class has already ended.");
             }
 
+            // Only the teacher admits students: Jitsi hands the host role to whoever is first into an
+            // empty room, so a child arriving before the teacher became the moderator and could let
+            // others in. A parent/student therefore gets no join token until the teacher is in the
+            // class; the classroom screen keeps asking (409) until she arrives.
+            if (user.Role == UserRole.Parent && !IsTeacherInClassroom(session.Id))
+            {
+                throw new ConflictException("Waiting for the teacher to start the class. You'll be let in once the teacher is in the room.");
+            }
+
             var jitsiConfigJson = await _unitOfWork.Repository<Integration>().Query()
                 .Where(i => i.Key == "jitsi")
                 .Select(i => i.ConfigJson)
@@ -2422,6 +2434,14 @@ namespace iucs.meettomanage.application.Services
                 StaffNames = staffNames,
             };
         }
+
+        /// <summary>True while the session's own teacher (or an admin hosting it) is connected to the
+        /// classroom -- or was, within the last few minutes (a blink in her connection must not lock
+        /// children out for the whole class).</summary>
+        private bool IsTeacherInClassroom(Guid sessionId) =>
+            _presenceTracker.IsPresentOrRecentlyLeft(sessionId.ToString(), "teacher", TeacherPresenceGrace);
+
+        private static readonly TimeSpan TeacherPresenceGrace = TimeSpan.FromMinutes(5);
 
         public async Task<IReadOnlyList<GuestLinkStudentDto>> GetGuestLinkStudentsAsync(Guid sessionId, CancellationToken cancellationToken = default)
         {
@@ -2626,6 +2646,7 @@ namespace iucs.meettomanage.application.Services
                 Token = jitsiToken,
                 DisplayName = displayName,
                 SkipPrejoin = childId is not null || isNamedGuest,
+                IsDemoGuest = isNamedGuest,
                 HubToken = hubToken.AccessToken,
             };
         }
