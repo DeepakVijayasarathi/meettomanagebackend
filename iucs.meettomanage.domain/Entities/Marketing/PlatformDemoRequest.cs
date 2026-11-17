@@ -15,6 +15,8 @@ namespace iucs.meettomanage.domain.Entities.Marketing
     [Index(nameof(ArchivedAtUtc))]
     [Index(nameof(AssignedToUserId))]
     [Index(nameof(NextFollowUpAtUtc))]
+    [Index(nameof(Stage))]
+    [Index(nameof(DemoAtUtc))]
     public class PlatformDemoRequest : AuditEntity
     {
         [MaxLength(150)]
@@ -46,6 +48,24 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         public Guid? AssignedToUserId { get; set; }
         public DateTime? ArchivedAtUtc { get; set; }
         public DateTime? LastReminderSentAtUtc { get; set; }
+
+        // ---- Lifecycle automation
+        public LeadStage Stage { get; set; } = LeadStage.New;
+        public DateTime? StageChangedAtUtc { get; set; }
+        /// <summary>When the team first marked the lead contacted; with CreatedAtUtc this gives the response time.</summary>
+        public DateTime? FirstContactedAtUtc { get; set; }
+        /// <summary>When the automatic "we got your request" e-mail went to the lead.</summary>
+        public DateTime? AcknowledgedAtUtc { get; set; }
+        public DateTime? DemoAtUtc { get; set; }
+        public DateTime? DemoReminderDaySentAtUtc { get; set; }
+        public DateTime? DemoReminderHourSentAtUtc { get; set; }
+        public DateTime? DemoRecapSentAtUtc { get; set; }
+        [MaxLength(200)] public string? LostReason { get; set; }
+        /// <summary>The academy account this lead became, matched by e-mail (multi-tenant mode only).</summary>
+        public Guid? TenantId { get; set; }
+        [MaxLength(50)] public string? TenantCode { get; set; }
+        /// <summary>When repeated pricing visits after a demo or during a trial flagged this lead as ready to buy.</summary>
+        public DateTime? HighIntentAtUtc { get; set; }
         [NotMapped] public bool IsDuplicate { get; set; }
         [NotMapped] public int EngagementScoreBoost { get; set; }
         /// <summary>Plain-language reasons behind <see cref="EngagementScoreBoost"/>, from the visitor's website journey.</summary>

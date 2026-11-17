@@ -249,6 +249,31 @@ public sealed class SaasRulesTests
     }
 
     [Fact]
+    public void InactiveTrialGetsSetupHelpAfterTwoDays_ActiveOneDoesNot()
+    {
+        var trial = Sub(SaasSubscriptionStatus.Trialing, s => { s.CreatedAtUtc = Now.AddDays(-3); s.TrialEndsAtUtc = Now.AddDays(11); });
+        Assert.Equal("trial_setup_help", Assert.Single(SaasRules.LifecycleNudges(trial, null, Now)).RuleKey);
+        Assert.Equal("trial_setup_help", Assert.Single(SaasRules.LifecycleNudges(trial, new TenantUsageSnapshot { ActiveStudents = 5, SessionsMonth = 0 }, Now)).RuleKey);
+        Assert.Empty(SaasRules.LifecycleNudges(trial, new TenantUsageSnapshot { ActiveStudents = 5, SessionsMonth = 2 }, Now));
+        Assert.Empty(SaasRules.LifecycleNudges(trial, null, Now.AddDays(-2)));                  // too early
+        trial.TrialEndsAtUtc = Now.AddHours(12);
+        Assert.Empty(SaasRules.LifecycleNudges(trial, null, Now));                              // the ending reminders take over
+    }
+
+    [Fact]
+    public void ReviewRequestOnlyForAPaidAcademyUsingItAfterSixtyDays()
+    {
+        var busy = new TenantUsageSnapshot { ActiveStudents = 40, SessionsMonth = 12 };
+        var paid = Sub(SaasSubscriptionStatus.Active, s => { s.CreatedAtUtc = Now.AddDays(-61); s.PlanPrice = new PlanPrice { Amount = 2499 }; });
+        var due = Assert.Single(SaasRules.LifecycleNudges(paid, busy, Now));
+        Assert.Equal(("review_request", "once"), (due.RuleKey, due.CycleKey));
+        Assert.Empty(SaasRules.LifecycleNudges(paid, new TenantUsageSnapshot(), Now));            // not using it
+        Assert.Empty(SaasRules.LifecycleNudges(paid, busy, Now.AddDays(-5)));                     // too soon
+        var free = Sub(SaasSubscriptionStatus.Active, s => { s.CreatedAtUtc = Now.AddDays(-90); s.PlanPrice = new PlanPrice { Amount = 0 }; });
+        Assert.Empty(SaasRules.LifecycleNudges(free, busy, Now));
+    }
+
+    [Fact]
     public void NoTrialReminderMoreThanSevenDaysOut() => Assert.Empty(
         SaasRules.TimeBasedReminders(Sub(SaasSubscriptionStatus.Trialing, s => s.TrialEndsAtUtc = Now.AddDays(10)), Now));
 

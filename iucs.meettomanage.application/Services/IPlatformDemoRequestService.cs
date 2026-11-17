@@ -22,6 +22,8 @@ namespace iucs.meettomanage.application.Services
         Task<MarketingLeadDetailDto> GetAsync(Guid id, CancellationToken cancellationToken = default);
         Task BulkUpdateAsync(BulkMarketingLeadRequest request, CancellationToken cancellationToken = default);
         Task RestoreAsync(Guid id, CancellationToken cancellationToken = default);
+        /// <summary>Moves a lead through the lifecycle and sends that stage's e-mail (demo confirmation, recap).</summary>
+        Task<PlatformDemoRequestDto> SetStageAsync(Guid id, SetLeadStageRequest request, CancellationToken cancellationToken = default);
         Task<MarketingLeadActivityDto> AddActivityAsync(Guid id, CreateMarketingLeadActivityRequest request, CancellationToken cancellationToken = default);
     }
 }

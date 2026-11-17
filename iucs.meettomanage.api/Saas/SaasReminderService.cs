@@ -89,6 +89,29 @@ public sealed partial class SaasReminderService(IDbContextFactory<MasterDbContex
         foreach (var sub in subscriptions)
             foreach (var due in SaasRules.TimeBasedReminders(sub, now))
                 await NotifyAsync(sub.TenantId, due.RuleKey, due.CycleKey, ct: ct);
+        await RunLifecycleNudgesAsync(now, ct);
+    }
+
+    /// <summary>
+    /// Usage-based nudges: setup help for a trial that hasn't got going, and a review request for an academy that
+    /// has used a paid plan well for two months. Each is sent at most once per subscription.
+    /// </summary>
+    private async Task RunLifecycleNudgesAsync(DateTime now, CancellationToken ct)
+    {
+        List<TenantSubscription> subscriptions;
+        Dictionary<Guid, TenantUsageSnapshot> usage;
+        var recent = DateOnly.FromDateTime(now.AddDays(-3));
+        await using (var db = await factory.CreateDbContextAsync(ct))
+        {
+            subscriptions = await db.TenantSubscriptions.AsNoTracking().Include(x => x.PlanPrice)
+                .Where(x => x.Status == SaasSubscriptionStatus.Trialing || x.Status == SaasSubscriptionStatus.Active).ToListAsync(ct);
+            var ids = subscriptions.Select(x => x.TenantId).ToList();
+            usage = (await db.TenantUsageSnapshots.AsNoTracking().Where(x => ids.Contains(x.TenantId) && x.SnapshotDate >= recent).ToListAsync(ct))
+                .GroupBy(x => x.TenantId).ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.SnapshotDate).First());
+        }
+        foreach (var sub in subscriptions)
+            foreach (var due in SaasRules.LifecycleNudges(sub, usage.GetValueOrDefault(sub.TenantId), now))
+                await NotifyAsync(sub.TenantId, due.RuleKey, due.CycleKey, ct: ct);
     }
 
     /// <summary>Inserts the log row, or reclaims a failed one that still has attempts left. Null means "already handled".</summary>
@@ -166,6 +189,8 @@ public sealed partial class SaasReminderService(IDbContextFactory<MasterDbContex
             ["period_end_date"] = Date(sub.CurrentPeriodEndUtc),
             ["grace_end_date"] = Date(sub.GraceEndsAtUtc),
             ["portal_url"] = frontend.Length == 0 ? "" : $"{frontend}/t/{tenant.Code}/admin/subscription",
+            ["admin_url"] = frontend.Length == 0 ? "" : $"{frontend}/t/{tenant.Code}/admin",
+            ["whatsapp_url"] = "https://wa.me/919344773231",
             ["invoice_number"] = invoice?.InvoiceNumber ?? "",
             ["amount"] = invoice is null ? "" : $"{invoice.Currency} {invoice.Total.ToString("N2", culture)}",
             ["due_date"] = Date(invoice?.DueAtUtc),

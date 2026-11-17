@@ -73,6 +73,28 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public List<string> ScoreReasons { get; set; } = new();
         public Guid? AssignedToUserId { get; set; }
         public DateTime? ArchivedAtUtc { get; set; }
+
+        public LeadStage Stage { get; set; }
+        public DateTime? StageChangedAtUtc { get; set; }
+        public DateTime? FirstContactedAtUtc { get; set; }
+        public DateTime? AcknowledgedAtUtc { get; set; }
+        public DateTime? DemoAtUtc { get; set; }
+        public string? LostReason { get; set; }
+        public string? TenantCode { get; set; }
+        public DateTime? HighIntentAtUtc { get; set; }
+    }
+
+    public class SetLeadStageRequest
+    {
+        [Required] public LeadStage Stage { get; set; }
+        /// <summary>Required for DemoBooked.</summary>
+        public DateTime? DemoAtUtc { get; set; }
+        /// <summary>Required for Lost.</summary>
+        [MaxLength(200)] public string? LostReason { get; set; }
+        /// <summary>Kept on the lead's timeline, e.g. needs and objections heard on the demo.</summary>
+        [MaxLength(1000)] public string? Note { get; set; }
+        /// <summary>For DemoDone: one line quoted in the recap e-mail to the lead.</summary>
+        [MaxLength(400)] public string? RecapNote { get; set; }
     }
 
     public class UpdatePlatformDemoRequestStatusRequest
@@ -116,6 +138,7 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int PageSize { get; set; } = 25;
         public string? Search { get; set; }
         public StoreInquiryStatus? Status { get; set; }
+        public LeadStage? Stage { get; set; }
         public string? Source { get; set; }
         public Guid? AssignedToUserId { get; set; }
         public bool OverdueOnly { get; set; }
@@ -496,40 +519,6 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public DateTime GeneratedAtUtc { get; set; }
     }
 
-    public class OutreachAiInsightsDto
-    {
-        public string Summary { get; set; } = "";
-        public List<string> Observations { get; set; } = new();
-        public List<string> NextActions { get; set; } = new();
-        public bool AiPowered { get; set; }
-        public DateTime GeneratedAtUtc { get; set; }
-    }
-
-    public class OutreachCampaignDraftDto
-    {
-        public string Name { get; set; } = "";
-        public List<OutreachCampaignDraftStepDto> Steps { get; set; } = new();
-        public string Strategy { get; set; } = "";
-        public bool AiPowered { get; set; }
-    }
-
-    public class OutreachCampaignDraftStepDto
-    {
-        public int DelayDays { get; set; }
-        public string Subject { get; set; } = "";
-        public string Body { get; set; } = "";
-    }
-
-    public class OutreachReplyAnalysisDto
-    {
-        public string Intent { get; set; } = "Question";
-        public string Sentiment { get; set; } = "Neutral";
-        public string Urgency { get; set; } = "Normal";
-        public string Summary { get; set; } = "";
-        public string NextAction { get; set; } = "Reply within one business day.";
-        public string SuggestedReply { get; set; } = "";
-        public bool AiPowered { get; set; }
-    }
 
     /// <summary>One website chat conversation, for the marketing console's list.</summary>
     public class MarketingChatConversationDto

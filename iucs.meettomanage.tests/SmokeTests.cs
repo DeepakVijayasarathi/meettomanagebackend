@@ -12412,8 +12412,11 @@ namespace iucs.meettomanage.tests
                 FullName = "Priya <b>", WorkEmail = "priya@x.com", Phone = "9000000003", AcademyName = "Sunrise Abacus", Message = "200 students", Campaign = "launch",
             });
 
-            // Every listed address gets its own copy; a repeated address only one.
-            Assert.Equal(["marketing@meettomanage.cloud", "sales@meettomanage.cloud"], mail.Sent.Select(m => m.To).ToArray());
+            // Every listed address gets its own copy; a repeated address only one. The lead gets the acknowledgement.
+            Assert.Equal(["marketing@meettomanage.cloud", "sales@meettomanage.cloud"], mail.Sent.Select(m => m.To).Where(t => t.EndsWith("@meettomanage.cloud")).ToArray());
+            var ack = Assert.Single(mail.Sent, m => m.To == "priya@x.com");
+            Assert.Contains("We got your Meet to Manage demo request", ack.Subject);
+            Assert.Contains("Hi Priya,", ack.Body);
             var (_, subject, body) = mail.Sent[0];
             Assert.Contains("Sunrise Abacus", subject);
             Assert.Contains("200 students", body);
@@ -12424,6 +12427,63 @@ namespace iucs.meettomanage.tests
             var failing = new PlatformDemoRequestService(_db.UnitOfWork, _auditLog, new ThrowingEmailSender(), config);
             var saved = await failing.CreateAsync(new CreatePlatformDemoRequestRequest { FullName = "Ravi", WorkEmail = "ravi@x.com", Phone = "9000000004", AcademyName = "Ravi Tuition" });
             Assert.NotNull(await _db.UnitOfWork.Repository<iucs.meettomanage.domain.Entities.Marketing.PlatformDemoRequest>().FirstOrDefaultAsync(r => r.Id == saved.Id));
+        }
+
+        [Fact]
+        public async Task LeadLifecycle_BookDemo_Recap_AndLost_SendTheRightEmails()
+        {
+            var mail = new FakeEmailSender();
+            var demos = new PlatformDemoRequestService(_db.UnitOfWork, _auditLog, mail);
+            var lead = await demos.CreateAsync(new CreatePlatformDemoRequestRequest { FullName = "Kavya Rao", WorkEmail = "kavya@lifecycle.test", Phone = "9000000101", AcademyName = "Kavya Coding Club" });
+            Assert.Equal(LeadStage.New, lead.Stage);
+            Assert.Contains(mail.Sent, m => m.To == "kavya@lifecycle.test" && m.Subject.Contains("demo request"));
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => demos.SetStageAsync(lead.Id, new SetLeadStageRequest { Stage = LeadStage.DemoBooked }));
+            var at = DateTime.UtcNow.AddDays(2);
+            var booked = await demos.SetStageAsync(lead.Id, new SetLeadStageRequest { Stage = LeadStage.DemoBooked, DemoAtUtc = at, Note = "Wants fee reminders" });
+            Assert.Equal(LeadStage.DemoBooked, booked.Stage);
+            Assert.Equal(StoreInquiryStatus.Contacted, booked.Status);
+            Assert.NotNull(booked.FirstContactedAtUtc);
+            Assert.Contains(mail.Sent, m => m.To == "kavya@lifecycle.test" && m.Subject.StartsWith("Your Meet to Manage demo:"));
+
+            mail.Sent.Clear();
+            await demos.SetStageAsync(lead.Id, new SetLeadStageRequest { Stage = LeadStage.DemoDone, RecapNote = "You run 6 coding batches" });
+            var recap = Assert.Single(mail.Sent);
+            Assert.Contains("/signup?plan=trial", recap.Body);
+            Assert.Contains("6 coding batches", recap.Body);
+            // Marking the demo done again never sends a second recap.
+            await demos.SetStageAsync(lead.Id, new SetLeadStageRequest { Stage = LeadStage.Contacted });
+            await demos.SetStageAsync(lead.Id, new SetLeadStageRequest { Stage = LeadStage.DemoDone });
+            Assert.Single(mail.Sent);
+
+            await Assert.ThrowsAsync<DomainValidationException>(() => demos.SetStageAsync(lead.Id, new SetLeadStageRequest { Stage = LeadStage.Lost }));
+            var lost = await demos.SetStageAsync(lead.Id, new SetLeadStageRequest { Stage = LeadStage.Lost, LostReason = "Chose another tool" });
+            Assert.Equal(StoreInquiryStatus.Closed, lost.Status);
+            Assert.Equal("Chose another tool", lost.LostReason);
+
+            // The older status control keeps the stage in step.
+            var reopened = await demos.UpdateStatusAsync(lead.Id, new UpdatePlatformDemoRequestStatusRequest { Status = StoreInquiryStatus.Converted });
+            Assert.Equal(LeadStage.Customer, reopened.Stage);
+        }
+
+        [Fact]
+        public async Task LeadLifecycle_AutomationsCanBeSwitchedOff()
+        {
+            var settings = _db.UnitOfWork.Repository<iucs.meettomanage.domain.Entities.Settings.AppSetting>();
+            await settings.AddAsync(new() { Id = Guid.NewGuid(), Key = LeadLifecycle.AutoAcknowledge, Value = "false", Category = SettingCategory.General });
+            await _db.UnitOfWork.SaveChangesAsync();
+            try
+            {
+                var mail = new FakeEmailSender();
+                await new PlatformDemoRequestService(_db.UnitOfWork, _auditLog, mail).CreateAsync(new CreatePlatformDemoRequestRequest { FullName = "Off Switch", WorkEmail = "off@lifecycle.test", Phone = "9000000102", AcademyName = "Quiet Academy" });
+                Assert.DoesNotContain(mail.Sent, m => m.To == "off@lifecycle.test");
+            }
+            finally
+            {
+                var row = await settings.TrackedQuery().FirstAsync(x => x.Key == LeadLifecycle.AutoAcknowledge);
+                settings.Remove(row);
+                await _db.UnitOfWork.SaveChangesAsync();
+            }
         }
 
         [Fact]
@@ -12487,6 +12547,34 @@ namespace iucs.meettomanage.tests
             // Under 20 visitors the assistant refuses to rank page changes and asks for more traffic first.
             Assert.Contains(tips.Improvements, t => t.Page == "Analytics" && t.Impact == "Low");
             Assert.DoesNotContain(tips.Improvements, t => t.Impact == "High");
+        }
+
+        [Fact]
+        public void SalesAssistant_QuotesTheLivePlans_NotPerStudentPricing()
+        {
+            var basic = new iucs.meettomanage.domain.Entities.Saas.Plan { Code = "basic", Name = "Basic" };
+            basic.Prices.Add(new() { BillingInterval = iucs.meettomanage.domain.Entities.Saas.BillingInterval.Month, Amount = 999m });
+            basic.Prices.Add(new() { BillingInterval = iucs.meettomanage.domain.Entities.Saas.BillingInterval.Year, Amount = 9_990m });
+            basic.Prices.Add(new() { BillingInterval = iucs.meettomanage.domain.Entities.Saas.BillingInterval.Year, Amount = 7_999m, IsActive = false });
+            basic.Entitlements.Add(new() { Key = "max_students", Value = 75 });
+            basic.Entitlements.Add(new() { Key = "recording_retention_days", Value = 7 });
+            basic.Entitlements.Add(new() { Key = "feature_whatsapp", Value = 0 });
+            basic.Entitlements.Add(new() { Key = "feature_payment_gateway", Value = 1 });
+            basic.Entitlements.Add(new() { Key = "module_Admission", Value = 0 });
+            var free = new iucs.meettomanage.domain.Entities.Saas.Plan { Code = "free", Name = "Free" };
+            free.Prices.Add(new() { BillingInterval = iucs.meettomanage.domain.Entities.Saas.BillingInterval.Month, Amount = 0m });
+            var unpriced = new iucs.meettomanage.domain.Entities.Saas.Plan { Code = "x", Name = "Hidden" };
+
+            var text = iucs.meettomanage.api.Services.HetznerSalesAssistant.DescribePlans([free, basic, unpriced])!;
+
+            Assert.Contains("- Free: free forever.", text);
+            Assert.Contains("- Basic: ₹999/month or ₹9,990/year. Up to 75 active students, recordings kept 7 days. Includes online fee collection. Not included: admissions.", text);
+            Assert.DoesNotContain("7,999", text);           // retired price
+            Assert.DoesNotContain("WhatsApp", text);        // switched-off feature
+            Assert.DoesNotContain("Hidden", text);          // a plan without prices is not quoted
+            Assert.Contains("not per student", text);
+            Assert.Null(iucs.meettomanage.api.Services.HetznerSalesAssistant.DescribePlans([unpriced]));
+            Assert.DoesNotContain("Pay As You Grow", iucs.meettomanage.api.Services.HetznerSalesAssistant.FallbackPricing);
         }
 
         [Fact]

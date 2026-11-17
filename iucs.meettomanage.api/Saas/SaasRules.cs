@@ -102,6 +102,29 @@ public static class SaasRules
         return due;
     }
 
+    /// <summary>Days into a trial before an academy that hasn't added students and held a class gets the setup-help e-mail.</summary>
+    public const int TrialSetupHelpAfterDays = 2;
+    /// <summary>Days on a subscription, actively used on a paid plan, before the review / referral request.</summary>
+    public const int ReviewRequestAfterDays = 60;
+
+    /// <summary>
+    /// Usage-based nudges, each sent once per subscription (cycle "once"). A trial counts as active when the latest
+    /// usage snapshot shows students and at least one live class this month; no snapshot means not active yet.
+    /// </summary>
+    public static IReadOnlyList<ReminderDue> LifecycleNudges(TenantSubscription sub, TenantUsageSnapshot? usage, DateTime now)
+    {
+        var active = usage is { ActiveStudents: > 0, SessionsMonth: > 0 };
+        var due = new List<ReminderDue>();
+        if (sub.Status == SaasSubscriptionStatus.Trialing && !active
+            && now >= sub.CreatedAtUtc.AddDays(TrialSetupHelpAfterDays)
+            && sub.TrialEndsAtUtc is { } trialEnd && trialEnd > now.AddDays(1))
+            due.Add(new("trial_setup_help", "once"));
+        if (sub.Status == SaasSubscriptionStatus.Active && (sub.PlanPrice?.Amount ?? 0) > 0 && active
+            && now >= sub.CreatedAtUtc.AddDays(ReviewRequestAfterDays))
+            due.Add(new("review_request", "once"));
+        return due;
+    }
+
     /// <summary>
     /// The plan (and its ₹0 price) an unpaid trial moves to when it ends: the configured code, only if that
     /// plan is active and costs nothing. Null means the trial pauses the workspace as before.

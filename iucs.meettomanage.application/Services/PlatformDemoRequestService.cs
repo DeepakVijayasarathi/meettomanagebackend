@@ -5,6 +5,8 @@ using iucs.meettomanage.application.Dto.Marketing;
 using iucs.meettomanage.application.Dto.Common;
 using iucs.meettomanage.application.Mappings;
 using iucs.meettomanage.domain.Entities.Marketing;
+using iucs.meettomanage.domain.Entities.Settings;
+using iucs.meettomanage.domain.Entities.Users;
 using iucs.meettomanage.domain.Enums;
 using iucs.meettomanage.domain.Repository;
 using Microsoft.EntityFrameworkCore;
@@ -50,13 +52,140 @@ namespace iucs.meettomanage.application.Services
                 VisitorId = Clean(request.VisitorId), Source = NormalizeSource(request.Source), Medium = NormalizeToken(request.Medium),
                 Campaign = NormalizeToken(request.Campaign), LandingPath = Clean(request.LandingPath),
             };
+            var ownerEmail = await IsOnAsync(LeadLifecycle.AutoAssign, cancellationToken) ? await AssignOwnerAsync(demoRequest, cancellationToken) : null;
             await _unitOfWork.Repository<PlatformDemoRequest>().AddAsync(demoRequest, cancellationToken);
             await AddActivity(demoRequest.Id, "Created", "Lead submitted.", cancellationToken);
+            if (demoRequest.AssignedTo is not null)
+                await AddActivity(demoRequest.Id, LeadLifecycle.AutomationActivity, $"Assigned to {demoRequest.AssignedTo}.", cancellationToken);
             await _auditLog.StageAsync(AuditAction.Create, nameof(PlatformDemoRequest), demoRequest.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-            await SendLeadAlertAsync(demoRequest, cancellationToken);
+            await SendLeadAlertAsync(demoRequest, ownerEmail, cancellationToken);
+            await AcknowledgeAsync(demoRequest, cancellationToken);
             return demoRequest.ToDto();
+        }
+
+        /// <summary>An automation is on unless the team switched it off in the console (stored as "false").</summary>
+        private async Task<bool> IsOnAsync(string key, CancellationToken cancellationToken)
+        {
+            var value = await _unitOfWork.Repository<AppSetting>().Query().Where(x => x.Key == key).Select(x => x.Value).FirstOrDefaultAsync(cancellationToken);
+            return !string.Equals(value?.Trim(), "false", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private string SiteUrl => (_configuration?["Marketing:SiteUrl"] ?? "https://meettomanage.cloud").TrimEnd('/');
+
+        /// <summary>
+        /// Round-robin by load: a returning person keeps the owner of their open lead; otherwise the active marketing
+        /// user with the fewest open leads gets it. Returns that owner's e-mail for the alert, or null when nobody can own it.
+        /// </summary>
+        private async Task<string?> AssignOwnerAsync(PlatformDemoRequest lead, CancellationToken cancellationToken)
+        {
+            var team = await _unitOfWork.Repository<User>().Query()
+                .Where(x => x.Role == UserRole.Marketing && x.Status == UserStatus.Active)
+                .Select(x => new { x.Id, x.FirstName, x.LastName, x.Email }).ToListAsync(cancellationToken);
+            if (team.Count == 0) return null;
+            var teamIds = team.Select(x => x.Id).ToList();
+            var open = _unitOfWork.Repository<PlatformDemoRequest>().Query()
+                .Where(x => x.ArchivedAtUtc == null && x.Stage != LeadStage.Customer && x.Stage != LeadStage.Lost && x.AssignedToUserId != null && teamIds.Contains(x.AssignedToUserId!.Value));
+
+            Guid? ownerId = null;
+            if (!string.IsNullOrWhiteSpace(lead.WorkEmail) || !string.IsNullOrWhiteSpace(lead.Phone))
+                ownerId = await open.Where(x => (lead.WorkEmail != "" && x.WorkEmail == lead.WorkEmail) || (lead.Phone != "" && x.Phone == lead.Phone))
+                    .OrderByDescending(x => x.CreatedAtUtc).Select(x => x.AssignedToUserId).FirstOrDefaultAsync(cancellationToken);
+            if (ownerId is null)
+            {
+                var load = await open.GroupBy(x => x.AssignedToUserId!.Value).Select(g => new { g.Key, Count = g.Count() }).ToListAsync(cancellationToken);
+                ownerId = team.OrderBy(u => load.FirstOrDefault(l => l.Key == u.Id)?.Count ?? 0).ThenBy(u => u.FirstName).First().Id;
+            }
+            var owner = team.First(x => x.Id == ownerId);
+            lead.AssignedToUserId = owner.Id;
+            lead.AssignedTo = $"{owner.FirstName} {owner.LastName}".Trim();
+            return owner.Email;
+        }
+
+        /// <summary>Best effort "we got your request" e-mail; the lead is already saved, so a failure is only logged.</summary>
+        private async Task AcknowledgeAsync(PlatformDemoRequest lead, CancellationToken cancellationToken)
+        {
+            if (_email is null || !LooksLikeEmail(lead.WorkEmail) || !await IsOnAsync(LeadLifecycle.AutoAcknowledge, cancellationToken)) return;
+            try
+            {
+                var bookingUrl = await _unitOfWork.Repository<AppSetting>().Query().Where(x => x.Key == LeadLifecycle.BookingUrl).Select(x => x.Value).FirstOrDefaultAsync(cancellationToken);
+                var mail = LeadEmails.Acknowledgement(lead, SiteUrl, lead.AssignedTo?.Split(' ')[0], Uri.TryCreate(bookingUrl, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps ? bookingUrl : null);
+                await _email.SendAsync(lead.WorkEmail, mail.Subject, mail.Html, cancellationToken);
+                var tracked = await _unitOfWork.Repository<PlatformDemoRequest>().TrackedQuery().FirstAsync(x => x.Id == lead.Id, cancellationToken);
+                tracked.AcknowledgedAtUtc = DateTime.UtcNow;
+                await AddActivity(lead.Id, LeadLifecycle.AutomationActivity, "Acknowledgement e-mail sent.", cancellationToken);
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger?.LogWarning(ex, "Couldn't send the acknowledgement e-mail for demo request {Id}", lead.Id);
+            }
+        }
+
+        public static bool LooksLikeEmail(string? value) =>
+            !string.IsNullOrWhiteSpace(value) && value.Length <= 256 && System.Text.RegularExpressions.Regex.IsMatch(value.Trim(), @"^[^@\s]+@[^@\s]+\.[^@\s]+$");
+
+        public async Task<PlatformDemoRequestDto> SetStageAsync(Guid id, SetLeadStageRequest request, CancellationToken cancellationToken = default)
+        {
+            var lead = await _unitOfWork.Repository<PlatformDemoRequest>().TrackedQuery().FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
+                ?? throw new NotFoundException(nameof(PlatformDemoRequest), id);
+            var now = DateTime.UtcNow;
+            var note = Clean(request.Note);
+            if (request.Stage == LeadStage.DemoBooked)
+            {
+                if (request.DemoAtUtc is not { } at) throw new DomainValidationException("Choose the demo date and time.");
+                if (at < now.AddMinutes(-5)) throw new DomainValidationException("The demo time is in the past.");
+                var rescheduled = lead.Stage == LeadStage.DemoBooked && lead.DemoAtUtc != at;
+                lead.DemoAtUtc = DateTime.SpecifyKind(at, DateTimeKind.Utc);
+                lead.DemoReminderDaySentAtUtc = lead.DemoReminderHourSentAtUtc = null;
+                LeadLifecycle.Apply(lead, LeadStage.DemoBooked, now);
+                lead.StageChangedAtUtc = now; // also restarts the reminder clock on a reschedule
+                var when = LeadEmails.FormatDemoTime(lead.DemoAtUtc.Value, TimeZoneId);
+                await AddActivity(id, "Stage", $"{(rescheduled ? "Demo moved to" : "Demo booked for")} {when}.", cancellationToken);
+                if (await IsOnAsync(LeadLifecycle.DemoReminders, cancellationToken))
+                    await SendToLeadAsync(lead, LeadEmails.DemoConfirmation(lead, when), "Demo confirmation e-mail sent.", cancellationToken);
+            }
+            else if (request.Stage == LeadStage.Lost)
+            {
+                var reason = Clean(request.LostReason) ?? throw new DomainValidationException("Say why the lead was lost.");
+                LeadLifecycle.Apply(lead, LeadStage.Lost, now);
+                lead.LostReason = reason[..Math.Min(reason.Length, 200)];
+                await AddActivity(id, "Stage", $"Marked lost: {lead.LostReason}", cancellationToken);
+            }
+            else
+            {
+                LeadLifecycle.Apply(lead, request.Stage, now);
+                await AddActivity(id, "Stage", $"Moved to {LeadLifecycle.Label(request.Stage)}.", cancellationToken);
+                if (request.Stage == LeadStage.DemoDone && lead.DemoRecapSentAtUtc is null && await IsOnAsync(LeadLifecycle.DemoRecap, cancellationToken))
+                {
+                    if (await SendToLeadAsync(lead, LeadEmails.DemoRecap(lead, SiteUrl, request.RecapNote), "Demo recap e-mail sent with the trial link.", cancellationToken))
+                        lead.DemoRecapSentAtUtc = now;
+                }
+            }
+            if (note is not null) await AddActivity(id, "Note", note[..Math.Min(note.Length, 1000)], cancellationToken);
+            await _auditLog.StageAsync(AuditAction.Update, nameof(PlatformDemoRequest), id.ToString(), cancellationToken: cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            return lead.ToDto();
+        }
+
+        private string TimeZoneId => _configuration?["Marketing:TimeZone"] ?? "Asia/Kolkata";
+
+        /// <summary>Sends one lifecycle e-mail to the lead and records it. False when there's no address or sending failed.</summary>
+        private async Task<bool> SendToLeadAsync(PlatformDemoRequest lead, LeadEmails.Email mail, string activity, CancellationToken cancellationToken)
+        {
+            if (_email is null || !LooksLikeEmail(lead.WorkEmail)) return false;
+            try
+            {
+                await _email.SendAsync(lead.WorkEmail, mail.Subject, mail.Html, cancellationToken);
+                await AddActivity(lead.Id, LeadLifecycle.AutomationActivity, activity, cancellationToken);
+                return true;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger?.LogWarning(ex, "Couldn't send a lifecycle e-mail for demo request {Id}", lead.Id);
+                return false;
+            }
         }
 
         /// <summary>
@@ -64,10 +193,12 @@ namespace iucs.meettomanage.application.Services
         /// addresses separated by commas or semicolons (blank = off); each gets its own email.
         /// Best effort: the lead is already saved, so a mail failure is only logged.
         /// </summary>
-        private async Task SendLeadAlertAsync(PlatformDemoRequest lead, CancellationToken cancellationToken)
+        private async Task SendLeadAlertAsync(PlatformDemoRequest lead, string? ownerEmail, CancellationToken cancellationToken)
         {
+            // The assigned owner hears about their new lead too, alongside the configured team inbox.
             var recipients = (_configuration?["Marketing:LeadAlertEmail"] ?? "")
                 .Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Append(ownerEmail ?? "").Where(LooksLikeEmail)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             if (_email is null || recipients.Count == 0) return;
@@ -121,8 +252,7 @@ namespace iucs.meettomanage.application.Services
             var demoRequest = await _unitOfWork.Repository<PlatformDemoRequest>().FirstOrDefaultAsync(r => r.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(PlatformDemoRequest), id);
 
-            demoRequest.Status = request.Status;
-            if (request.Status == StoreInquiryStatus.Contacted) demoRequest.LastContactedAtUtc = DateTime.UtcNow;
+            SyncStatus(demoRequest, request.Status);
             await AddActivity(id, "Status", $"Status changed to {request.Status}.", cancellationToken);
             await _auditLog.StageAsync(AuditAction.Update, nameof(PlatformDemoRequest), demoRequest.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -134,7 +264,7 @@ namespace iucs.meettomanage.application.Services
         {
             var lead = await _unitOfWork.Repository<PlatformDemoRequest>().FirstOrDefaultAsync(x => x.Id == id, cancellationToken)
                 ?? throw new NotFoundException(nameof(PlatformDemoRequest), id);
-            if (request.Status.HasValue) { lead.Status = request.Status.Value; if (request.Status == StoreInquiryStatus.Contacted) lead.LastContactedAtUtc = DateTime.UtcNow; }
+            if (request.Status.HasValue) SyncStatus(lead, request.Status.Value);
             // This endpoint is patch-like: omitted fields must not erase existing lead data.
             if (request.AssignedTo is not null) lead.AssignedTo = Clean(request.AssignedTo);
             if (request.NextFollowUpAtUtc.HasValue) lead.NextFollowUpAtUtc = request.NextFollowUpAtUtc;
@@ -144,6 +274,16 @@ namespace iucs.meettomanage.application.Services
             await _auditLog.StageAsync(AuditAction.Update, nameof(PlatformDemoRequest), id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
             return lead.ToDto();
+        }
+
+        /// <summary>The older status screens still set Status directly; keep the lifecycle stage and response time in step.</summary>
+        private static void SyncStatus(PlatformDemoRequest lead, StoreInquiryStatus status)
+        {
+            var now = DateTime.UtcNow;
+            var stage = LeadLifecycle.StageForStatus(status, lead.Stage);
+            if (stage != lead.Stage) LeadLifecycle.Apply(lead, stage, now);
+            lead.Status = status;
+            if (status == StoreInquiryStatus.Contacted) { lead.LastContactedAtUtc = now; lead.FirstContactedAtUtc ??= now; }
         }
 
         private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
@@ -156,6 +296,7 @@ namespace iucs.meettomanage.application.Services
             var query = _unitOfWork.Repository<PlatformDemoRequest>().Query();
             query = request.ArchivedOnly ? query.Where(x => x.ArchivedAtUtc != null) : query.Where(x => x.ArchivedAtUtc == null);
             if (request.Status.HasValue) query = query.Where(x => x.Status == request.Status);
+            if (request.Stage.HasValue) query = query.Where(x => x.Stage == request.Stage);
             if (!string.IsNullOrWhiteSpace(request.Source)) query = query.Where(x => x.Source == request.Source);
             if (request.AssignedToUserId.HasValue) query = query.Where(x => x.AssignedToUserId == request.AssignedToUserId);
             if (request.OverdueOnly) query = query.Where(x => x.NextFollowUpAtUtc < DateTime.UtcNow && x.Status != StoreInquiryStatus.Converted && x.Status != StoreInquiryStatus.Closed);
@@ -184,7 +325,7 @@ namespace iucs.meettomanage.application.Services
             var rows = await _unitOfWork.Repository<PlatformDemoRequest>().TrackedQuery().Where(x => request.Ids.Contains(x.Id)).ToListAsync(cancellationToken);
             foreach (var lead in rows)
             {
-                if (request.Status.HasValue) lead.Status = request.Status.Value;
+                if (request.Status.HasValue) SyncStatus(lead, request.Status.Value);
                 if (request.AssignedToUserId.HasValue) lead.AssignedToUserId = request.AssignedToUserId;
                 if (request.NextFollowUpAtUtc.HasValue) lead.NextFollowUpAtUtc = request.NextFollowUpAtUtc;
                 if (request.Archive) lead.ArchivedAtUtc = DateTime.UtcNow;

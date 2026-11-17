@@ -278,6 +278,12 @@ namespace iucs.meettomanage.api.Controllers
             return Ok(await _platformDemoRequestService.UpdateStatusAsync(id, request, cancellationToken));
         }
 
+        /// <summary>Moves the lead through the lifecycle (book a demo, mark it done, lost, ...) and sends that stage's e-mail.</summary>
+        [HttpPut("{id:guid}/stage")]
+        [Authorize(Roles = nameof(UserRole.Marketing))]
+        public async Task<ActionResult<PlatformDemoRequestDto>> SetStage(Guid id, SetLeadStageRequest request, CancellationToken cancellationToken) =>
+            Ok(await _platformDemoRequestService.SetStageAsync(id, request, cancellationToken));
+
         [HttpDelete("{id:guid}")]
         [Authorize(Roles = nameof(UserRole.Marketing))]
         public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)

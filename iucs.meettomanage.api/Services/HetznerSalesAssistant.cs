@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -8,7 +9,11 @@ using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Common.Options;
 using iucs.meettomanage.application.Dto.Marketing;
 using iucs.meettomanage.application.Services;
+using iucs.meettomanage.api.Saas;
+using iucs.meettomanage.domain.Data;
+using iucs.meettomanage.domain.Entities.Saas;
 using iucs.meettomanage.domain.Enums;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace iucs.meettomanage.api.Services
@@ -21,8 +26,8 @@ namespace iucs.meettomanage.api.Services
     /// </summary>
     public class HetznerSalesAssistant : ISalesAssistant
     {
-        // Everything the assistant may state as fact. Prices mirror the public /pricing page
-        // (meettomanage/src/features/marketing/Pricing.tsx) — change both together.
+        // Everything the assistant may state as fact. {{PRICING}} is filled from the live plans table (the same
+        // source as billing and the /pricing page); add-on prices mirror Pricing.tsx, so change both together.
         private const string SystemPrompt = """
             You are the friendly sales assistant on the Meet to Manage website (meettomanage.cloud).
             Meet to Manage is an all-in-one learning-management and virtual-classroom platform for
@@ -46,7 +51,7 @@ namespace iucs.meettomanage.api.Services
             - Notifications: email, SMS and WhatsApp reminders, booking confirmations, payment alerts.
             - One login with 8 role-based portals: Admin, Teacher, Parent, Parent Relationship Manager,
               Admission Team, Academic Coordinator, Management Dashboard, Student.
-            - Class recordings are available to families for 15 days after each session.
+            - Class recordings: families can rewatch them for as long as the academy's plan keeps them (see Pricing).
             - Security: permission-gated portals; a deactivated account loses access on its next request.
               There are no formal compliance certifications (ISO, SOC 2 etc.) — say so honestly if asked.
 
@@ -54,31 +59,35 @@ namespace iucs.meettomanage.api.Services
             features listed above are real):
             - Academies (phonics, maths, coding, languages, music and other skill academies): demo bookings flow
               into the Admissions CRM, batches and 1:1 classes are scheduled without clashes, fees are invoiced
-              and collected automatically, and parents follow everything in their own portal. Plan: Pay As You Grow.
+              and collected automatically, and parents follow everything in their own portal. Plan: Pro for most
+              growing academies; Basic for a small academy that mainly needs online fees and its own branding.
             - Schools teaching online or hybrid (remedial, after-school or full online classes): live classes with
-              recordings parents can rewatch for 15 days, attendance tracking, parent and student portals,
-              notifications by email/SMS/WhatsApp, and fee invoices. Plan: Pay As You Grow, or Own Brand, Own
+              recordings parents can rewatch, attendance tracking, parent and student portals,
+              notifications by email/SMS/WhatsApp, and fee invoices. Plan: Pro or Growth, or Own Brand, Own
               Software for running it under the school's own brand and domain. It is not a full school ERP: for
               exams/report cards, transport, hostel, or timetabling of physical classrooms, say the team can
               confirm what fits on a demo.
             - Coaching centres and institutes, including multi-batch and multi-branch ones: many batches and
               teachers coordinated from one place, fee collection and attendance visible together, teacher
               performance and business KPIs on the Management Dashboard, and an Academic Coordinator portal.
-              Plan: Pay As You Grow (lower per-student price above 200 students).
+              Plan: Pro, or Growth for larger teams and more students.
             - Independent tutors and small teaching teams: one tool for live classes, scheduling, reminders and
-              billing instead of WhatsApp groups and spreadsheets. Plan: Solo for one person, Pay As You Grow
-              once there's a team.
-            - Personal-brand coaches and online counselors: live sessions, bookings, reminders and billing. Plan: Solo.
+              billing instead of WhatsApp groups and spreadsheets. Plan: Free to start, Basic once they collect
+              fees online.
+            - Personal-brand coaches and online counselors: live sessions, bookings, reminders and billing.
+              Plan: Free to start, Basic once they collect fees online.
 
-            Pricing (as shown on https://meettomanage.cloud/pricing; annual billing = 2 months free):
-            - Solo (solo coaches, counselors, independent tutors): ₹999 / $29 / AED 220 per month flat,
-              first 30 active clients included, then ₹15 / $0.50 / AED 3.5 per extra client. No setup fee.
-            - Pay As You Grow (academies): ₹100 / $3.50 / AED 26 per active student per month; first 10 students free;
-              ₹85 per student for 201–500 students, ₹70 for 501+. Every feature included, no setup fee.
-            - Own Brand, Own Software: from ₹2,50,000 / $8,000 / AED 58,000 one-time license plus an Annual
-              Maintenance Contract; runs under the academy's own brand and domain; custom quote above 500 students.
-            - Add-ons: recording retention extended to 60 days ₹499 / $15 / AED 110 per month;
-              1,000 extra WhatsApp/SMS credits ₹299 / $9 / AED 66.
+            {{PRICING}}
+            - Every paid plan can be tried free for its trial period with every module unlocked, then the academy
+              moves to Free unless it upgrades. No card needed.
+            - Own Brand, Own Software: custom quote (one-time licence plus annual maintenance) for multi-branch
+              institutes that want the platform under their own brand and domain, hosted where they choose.
+            - Add-ons (ask on WhatsApp): 50 more students ₹399/month; 50 GB more storage ₹299/month; keep
+              recordings 180 days ₹499/month; custom domain on Pro ₹499/month; WhatsApp messages by prepaid credit.
+            - At a student, staff or live-class-hours limit, new additions are paused until the academy adds an
+              add-on or moves up a plan; nothing already in the account is removed.
+            - Prices are in INR for India and USD elsewhere and exclude taxes such as GST. Never quote per-student
+              pricing: plans are one price per academy.
 
             Parents looking for a class for their child: they can book a free demo class at
             https://meettomanage.cloud/demo.
@@ -140,21 +149,124 @@ namespace iucs.meettomanage.api.Services
             }}]
             """)!;
 
+        // Used only when the plans table can't be read. Matches the seeded plans and the fallback in Pricing.tsx.
+        internal const string FallbackPricing = """
+            Pricing (from https://meettomanage.cloud/pricing; one price per academy, not per student; yearly billing = 2 months free):
+            - Free: free forever. Up to 25 active students, 3 teachers & staff. Live classes, students, content and parent communication. Not included: admissions, fees & finance, teacher payouts, reports, leave & class logs.
+            - Basic: ₹999/month or ₹9,990/year. Up to 75 active students, 5 teachers & staff, recordings kept 7 days. Online fee collection, your academy's branding. Not included: admissions, reports, teacher payouts.
+            - Pro: ₹2,499/month or ₹24,990/year. Up to 250 active students, 15 teachers & staff, recordings kept 30 days. Every module, online fee collection, your branding, WhatsApp notifications.
+            - Growth: ₹5,999/month or ₹59,990/year. Up to 750 active students, 50 teachers & staff, recordings kept 90 days. Every module, server recording, WhatsApp notifications, API access.
+            """;
+
+        private static readonly Dictionary<string, string> ModuleNames = new(StringComparer.Ordinal)
+        {
+            ["Admission"] = "admissions",
+            ["BillingFinance"] = "fees & finance",
+            ["Payouts"] = "teacher payouts",
+            ["ReportsAnalytics"] = "reports",
+            ["LeaveManagement"] = "leave management",
+            ["ClassSessionLogs"] = "class logs",
+            ["Communication"] = "parent communication",
+            ["ContentAccessManagement"] = "content",
+        };
+
+        private static readonly Dictionary<string, string> FeatureNames = new(StringComparer.Ordinal)
+        {
+            [EntitlementKeys.PaymentGateway] = "online fee collection",
+            [EntitlementKeys.WhiteLabel] = "your academy's branding",
+            [EntitlementKeys.Whatsapp] = "WhatsApp notifications",
+            [EntitlementKeys.ServerRecording] = "server recording",
+            [EntitlementKeys.CustomDomain] = "custom domain",
+            [EntitlementKeys.ApiAccess] = "API access",
+        };
+
+        private static readonly TimeSpan PricingCacheFor = TimeSpan.FromMinutes(10);
+        private static (string Text, DateTime BuiltAtUtc)? _pricingCache;
+
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly IPlatformDemoRequestService _demoRequests;
         private readonly HetznerAiOptions _options;
         private readonly ILogger<HetznerSalesAssistant> _logger;
+        private readonly MasterDbContext? _master;
 
         public HetznerSalesAssistant(
             IHttpClientFactory httpClientFactory,
             IPlatformDemoRequestService demoRequests,
             IOptions<HetznerAiOptions> options,
-            ILogger<HetznerSalesAssistant> logger)
+            ILogger<HetznerSalesAssistant> logger,
+            MasterDbContext? master = null)
         {
             _httpClientFactory = httpClientFactory;
             _demoRequests = demoRequests;
             _options = options.Value;
             _logger = logger;
+            _master = master;
+        }
+
+        /// <summary>
+        /// The pricing the assistant may quote, read from the same plans table that billing and the /pricing
+        /// page use, so the chat can never quote a different price model from the site.
+        /// </summary>
+        private async Task<string> PricingFactsAsync(CancellationToken ct)
+        {
+            if (_pricingCache is { } cached && DateTime.UtcNow - cached.BuiltAtUtc < PricingCacheFor) return cached.Text;
+            if (_master is null) return FallbackPricing;
+            try
+            {
+                var plans = await _master.Plans.AsNoTracking().Include(x => x.Prices).Include(x => x.Entitlements)
+                    .Where(x => x.IsPublic && x.IsActive).OrderBy(x => x.SortOrder).ToListAsync(ct);
+                var text = DescribePlans(plans);
+                if (text is null) return FallbackPricing;
+                _pricingCache = (text, DateTime.UtcNow);
+                return text;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Plans could not be read for the sales assistant; using the fallback pricing.");
+                return FallbackPricing;
+            }
+        }
+
+        internal static string? DescribePlans(IReadOnlyList<Plan> plans)
+        {
+            var inr = CultureInfo.GetCultureInfo("en-IN");
+            var lines = new List<string>();
+            foreach (var plan in plans)
+            {
+                var prices = plan.Prices.Where(p => p.IsActive).ToList();
+                if (prices.Count == 0) continue;
+                long? Limit(string key) => plan.Entitlements.FirstOrDefault(e => e.Key == key)?.Value;
+                string Count(long v) => v == EntitlementKeys.Unlimited ? "unlimited" : v.ToString("N0", inr);
+
+                var price = prices.All(p => p.Amount == 0)
+                    ? "free forever"
+                    : string.Join(" or ", prices.Where(p => p.Currency == "INR").OrderBy(p => p.BillingInterval)
+                        .Select(p => $"₹{p.Amount.ToString("N0", inr)}/{(p.BillingInterval == BillingInterval.Year ? "year" : "month")}"));
+                var usd = prices.Where(p => p.Currency == "USD" && p.Amount > 0).OrderBy(p => p.BillingInterval)
+                    .Select(p => $"${p.Amount:0.##}/{(p.BillingInterval == BillingInterval.Year ? "year" : "month")}").ToList();
+                if (usd.Count > 0) price += $" (outside India {string.Join(" or ", usd)})";
+
+                var facts = new List<string>();
+                if (Limit(EntitlementKeys.MaxStudents) is { } students) facts.Add($"up to {Count(students)} active students");
+                if (Limit(EntitlementKeys.MaxStaff) is { } staff) facts.Add($"up to {Count(staff)} teachers & staff");
+                if (Limit(EntitlementKeys.RecordingRetentionDays) is { } days && days != 0)
+                    facts.Add(days == EntitlementKeys.Unlimited ? "recordings kept indefinitely" : $"recordings kept {days} days");
+                var features = FeatureNames.Where(f => Limit(f.Key) is >= 1).Select(f => f.Value).ToList();
+                var missing = plan.Entitlements
+                    .Where(e => EntitlementKeys.IsModuleKey(e.Key) && e.Value == 0)
+                    .Select(e => ModuleNames.GetValueOrDefault(e.Key[EntitlementKeys.ModulePrefix.Length..]))
+                    .OfType<string>().Distinct().ToList();
+
+                var limits = string.Join(", ", facts);
+                var line = $"- {plan.Name}: {price}.";
+                if (limits.Length > 0) line += $" {char.ToUpperInvariant(limits[0])}{limits[1..]}.";
+                if (features.Count > 0) line += $" Includes {string.Join(", ", features)}.";
+                line += missing.Count > 0 ? $" Not included: {string.Join(", ", missing)}." : " Every module included.";
+                lines.Add(line);
+            }
+            if (lines.Count == 0) return null;
+            return "Pricing (live from https://meettomanage.cloud/pricing; one price per academy, not per student; yearly billing shown where offered):\n"
+                + string.Join("\n", lines);
         }
 
         public async Task<SalesChatResponse> ReplyAsync(IReadOnlyList<SalesChatTurn> conversation, CancellationToken cancellationToken = default, MarketingLeadAttributionDto? attribution = null)
@@ -166,7 +278,7 @@ namespace iucs.meettomanage.api.Services
 
             var messages = new JsonArray
             {
-                new JsonObject { ["role"] = "system", ["content"] = SystemPrompt },
+                new JsonObject { ["role"] = "system", ["content"] = SystemPrompt.Replace("{{PRICING}}", await PricingFactsAsync(cancellationToken)) },
             };
             foreach (var turn in conversation)
             {
@@ -357,182 +469,6 @@ namespace iucs.meettomanage.api.Services
             catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException)
             {
                 _logger.LogWarning(ex, "Hetzner marketing analysis unavailable; using measured-data fallback.");
-            }
-            return fallback;
-        }
-
-        public async Task<OutreachAiInsightsDto> AnalyzeOutreachAsync(object evidence, CancellationToken cancellationToken = default)
-        {
-            var fallback = new OutreachAiInsightsDto
-            {
-                Summary = "Regional outreach data is ready for review.",
-                Observations = ["Compare reply and interest rates only after each region has received enough outreach.", "Prioritize complete, verified contacts before increasing send volume."],
-                NextActions = ["Start with the region that has the most qualified new prospects.", "Use a region-specific subject line and customer example.", "Review bounced contacts before the next campaign."],
-                AiPowered = false, GeneratedAtUtc = DateTime.UtcNow
-            };
-            if (!_options.IsConfigured) return fallback;
-            var messages = new JsonArray
-            {
-                new JsonObject { ["role"] = "system", ["content"] =
-                    "You are a B2B outreach analyst for Meet to Manage, an academy-management SaaS. Analyze only the supplied aggregate evidence (regions, sources, segments, pipeline, or campaign totals). " +
-                    "Never invent revenue, intent, demographics, or conversion causes. Never recommend contacting unsubscribed or bounced people. Small samples require caution. " +
-                    "When asked for a plan, prioritize positive replies, demos, complete qualified leads, deliverability, and measured source performance. Every send must remain human-reviewed. " +
-                    "Return strict JSON with summary, observations (2-4), and nextActions (3-5). No markdown." },
-                new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(evidence) }
-            };
-            try
-            {
-                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
-                {
-                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.2, ["max_tokens"] = 900, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
-                    var (status, body) = await SendAsync(model, payload, cancellationToken);
-                    if (status != 200) continue;
-                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
-                    var parsed = string.IsNullOrWhiteSpace(content) ? null : JsonNode.Parse(content) as JsonObject;
-                    var summary = parsed?["summary"]?.GetValue<string>()?.Trim();
-                    var observations = ReadStringArray(parsed?["observations"]);
-                    var actions = ReadStringArray(parsed?["nextActions"] ?? parsed?["next_actions"]);
-                    if (!string.IsNullOrWhiteSpace(summary) && observations.Count > 0 && actions.Count > 0)
-                        return new OutreachAiInsightsDto { Summary = summary[..Math.Min(summary.Length, 800)], Observations = observations.Take(4).ToList(), NextActions = actions.Take(5).ToList(), AiPowered = true, GeneratedAtUtc = DateTime.UtcNow };
-                }
-            }
-            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException)
-            {
-                _logger.LogWarning(ex, "Hetzner outreach analysis unavailable; using measured-data fallback.");
-            }
-            return fallback;
-        }
-
-        public async Task<string> DraftOutreachMessageAsync(object evidence, string purpose, CancellationToken cancellationToken = default)
-        {
-            var fallback = purpose == "reply"
-                ? "Thanks for getting back to us. I’d be happy to show how Meet to Manage can simplify your classes, attendance, fees, and parent communication. Would a 15-minute demo this week work for you?"
-                : "I came across your academy and thought Meet to Manage could help you manage classes, attendance, fees, and parent updates in one place. Would you be open to a quick 15-minute demo?";
-            if (!_options.IsConfigured) return fallback;
-            var messages = new JsonArray
-            {
-                new JsonObject { ["role"] = "system", ["content"] =
-                    "You are a concise B2B sales writer for Meet to Manage, an academy-management SaaS. Use only supplied facts. Never invent achievements, student counts, or problems. " +
-                    "Write a warm, specific message under 110 words with one clear call to action. Plain text only. Do not include a subject line or markdown." },
-                new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(new { purpose, evidence }) }
-            };
-            try
-            {
-                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
-                {
-                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.35, ["max_tokens"] = 350, ["stream"] = false, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
-                    var (status, body) = await SendAsync(model, payload, cancellationToken);
-                    if (status != 200) continue;
-                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>()?.Trim();
-                    if (!string.IsNullOrWhiteSpace(content)) return content[..Math.Min(content.Length, 1200)];
-                }
-            }
-            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException) { _logger.LogWarning(ex, "AI outreach draft unavailable; using fallback."); }
-            return fallback;
-        }
-
-        public async Task<OutreachCampaignDraftDto> DraftOutreachCampaignAsync(object brief, CancellationToken cancellationToken = default)
-        {
-            var fallback = new OutreachCampaignDraftDto
-            {
-                Name = "Academy growth campaign",
-                Strategy = "A short, helpful introduction followed by two low-pressure reminders.",
-                AiPowered = false,
-                Steps =
-                [
-                    new() { DelayDays = 0, Subject = "Quick question about {{AcademyName}}", Body = "Hi {{FirstName}},\n\nI came across {{AcademyName}} and wanted to ask how you currently manage live classes, attendance, fees and parent updates.\n\nMeet to Manage brings these into one simple platform for academies. Would a short 15-minute walkthrough be useful?\n\nThanks,\nThe Meet to Manage team" },
-                    new() { DelayDays = 3, Subject = "Re: Quick question about {{AcademyName}}", Body = "Hi {{FirstName}},\n\nJust following up in case my note was missed. I can show how Meet to Manage would work for {{AcademyName}} using your current class setup.\n\nWould this week suit a short demo?\n\nThanks" },
-                    new() { DelayDays = 5, Subject = "Should I close this?", Body = "Hi {{FirstName}},\n\nI don't want to crowd your inbox, so this is my last note. If simplifying classes, fees and parent communication becomes a priority, I would be happy to help.\n\nShould I send a quick overview?\n\nThanks" }
-                ]
-            };
-            if (!_options.IsConfigured) return fallback;
-            var messages = new JsonArray
-            {
-                new JsonObject { ["role"] = "system", ["content"] =
-                    "You write ethical cold-email campaigns for Meet to Manage, an academy-management SaaS for Indian academies, tutoring, phonics, storytelling and enrichment businesses. " +
-                    "Use only the supplied brief. Never invent customer results, student counts, pain points or discounts. Produce exactly 3 concise plain-text emails, each under 120 words, with one low-pressure CTA. " +
-                    "Use only these personalization tokens when useful: {{FirstName}}, {{AcademyName}}, {{City}}. Do not add an unsubscribe line; the platform adds it. " +
-                    "Return strict JSON: {name:string,strategy:string,steps:[{delayDays:number,subject:string,body:string}]}. First delay is 0; later delays must be 2-7 days. No markdown." },
-                new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(brief) }
-            };
-            try
-            {
-                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
-                {
-                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.35, ["max_tokens"] = 1400, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
-                    var (status, body) = await SendAsync(model, payload, cancellationToken);
-                    if (status != 200) continue;
-                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
-                    if (string.IsNullOrWhiteSpace(content) || JsonNode.Parse(content) is not JsonObject parsed || parsed["steps"] is not JsonArray rawSteps) continue;
-                    var steps = rawSteps.Take(3).Select((node, index) => new OutreachCampaignDraftStepDto
-                    {
-                        DelayDays = index == 0 ? 0 : Math.Clamp(node?["delayDays"]?.GetValue<int>() ?? (index == 1 ? 3 : 5), 2, 7),
-                        Subject = (node?["subject"]?.GetValue<string>() ?? "").Trim(),
-                        Body = (node?["body"]?.GetValue<string>() ?? "").Trim()
-                    }).Where(x => x.Subject.Length > 0 && x.Body.Length > 0).ToList();
-                    if (steps.Count != 3) continue;
-                    return new OutreachCampaignDraftDto
-                    {
-                        Name = (parsed["name"]?.GetValue<string>() ?? fallback.Name).Trim()[..Math.Min((parsed["name"]?.GetValue<string>() ?? fallback.Name).Trim().Length, 150)],
-                        Strategy = (parsed["strategy"]?.GetValue<string>() ?? fallback.Strategy).Trim(), Steps = steps, AiPowered = true
-                    };
-                }
-            }
-            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException or InvalidOperationException)
-            {
-                _logger.LogWarning(ex, "AI campaign draft unavailable; using safe fallback.");
-            }
-            return fallback;
-        }
-
-        public async Task<OutreachReplyAnalysisDto> AnalyzeOutreachReplyAsync(object evidence, CancellationToken cancellationToken = default)
-        {
-            var fallback = new OutreachReplyAnalysisDto
-            {
-                Summary = "A prospect replied and needs a human-reviewed response.",
-                NextAction = "Review their message and reply within one business day.",
-                SuggestedReply = "Thanks for getting back to us. I’d be happy to answer your questions and show how Meet to Manage can simplify classes, attendance, fees and parent communication. Would a short 15-minute call this week work for you?",
-                AiPowered = false
-            };
-            if (!_options.IsConfigured) return fallback;
-            var messages = new JsonArray
-            {
-                new JsonObject { ["role"] = "system", ["content"] =
-                    "You analyze inbound B2B replies for Meet to Manage, an academy-management SaaS. Use only supplied facts. Never invent needs, budget, authority or commitments. " +
-                    "Classify intent as Interested, Pricing, DemoRequest, Question, Objection, NotInterested, Unsubscribe, or AutoReply. Sentiment must be Positive, Neutral, or Negative. Urgency must be High, Normal, or Low. " +
-                    "Write a concise summary, one concrete next action, and a warm plain-text suggestedReply under 120 words with one CTA. Respect rejection and unsubscribe requests; for those, acknowledge briefly without selling. " +
-                    "Return strict JSON: {intent,sentiment,urgency,summary,nextAction,suggestedReply}. No markdown." },
-                new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(evidence) }
-            };
-            try
-            {
-                foreach (var model in new[] { _options.Model, _options.FallbackModel }.Where(m => !string.IsNullOrWhiteSpace(m)).Distinct())
-                {
-                    var payload = new JsonObject { ["model"] = model, ["messages"] = messages.DeepClone(), ["temperature"] = 0.2, ["max_tokens"] = 700, ["stream"] = false, ["response_format"] = new JsonObject { ["type"] = "json_object" }, ["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false } }.ToJsonString();
-                    var (status, body) = await SendAsync(model, payload, cancellationToken);
-                    if (status != 200) continue;
-                    var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
-                    if (string.IsNullOrWhiteSpace(content) || JsonNode.Parse(content) is not JsonObject parsed) continue;
-                    var reply = parsed["suggestedReply"]?.GetValue<string>()?.Trim();
-                    var summary = parsed["summary"]?.GetValue<string>()?.Trim();
-                    if (string.IsNullOrWhiteSpace(reply) || string.IsNullOrWhiteSpace(summary)) continue;
-                    var intent = parsed["intent"]?.GetValue<string>()?.Trim();
-                    var sentiment = parsed["sentiment"]?.GetValue<string>()?.Trim();
-                    var urgency = parsed["urgency"]?.GetValue<string>()?.Trim();
-                    return new OutreachReplyAnalysisDto
-                    {
-                        Intent = new[] { "Interested", "Pricing", "DemoRequest", "Question", "Objection", "NotInterested", "Unsubscribe", "AutoReply" }.Contains(intent) ? intent! : "Question",
-                        Sentiment = new[] { "Positive", "Neutral", "Negative" }.Contains(sentiment) ? sentiment! : "Neutral",
-                        Urgency = new[] { "High", "Normal", "Low" }.Contains(urgency) ? urgency! : "Normal",
-                        Summary = summary[..Math.Min(summary.Length, 600)],
-                        NextAction = (parsed["nextAction"]?.GetValue<string>() ?? fallback.NextAction).Trim(),
-                        SuggestedReply = reply[..Math.Min(reply.Length, 1500)], AiPowered = true
-                    };
-                }
-            }
-            catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException or InvalidOperationException)
-            {
-                _logger.LogWarning(ex, "AI reply analysis unavailable; using safe fallback.");
             }
             return fallback;
         }

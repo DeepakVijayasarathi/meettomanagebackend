@@ -5083,6 +5083,10 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(150)")
                         .HasColumnName("academy_name");
 
+                    b.Property<DateTime?>("AcknowledgedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("acknowledged_at_utc");
+
                     b.Property<DateTime?>("ArchivedAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("archived_at_utc");
@@ -5113,11 +5117,35 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at_utc");
 
+                    b.Property<DateTime?>("DemoAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("demo_at_utc");
+
+                    b.Property<DateTime?>("DemoRecapSentAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("demo_recap_sent_at_utc");
+
+                    b.Property<DateTime?>("DemoReminderDaySentAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("demo_reminder_day_sent_at_utc");
+
+                    b.Property<DateTime?>("DemoReminderHourSentAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("demo_reminder_hour_sent_at_utc");
+
+                    b.Property<DateTime?>("FirstContactedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("first_contacted_at_utc");
+
                     b.Property<string>("FullName")
                         .IsRequired()
                         .HasMaxLength(150)
                         .HasColumnType("character varying(150)")
                         .HasColumnName("full_name");
+
+                    b.Property<DateTime?>("HighIntentAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("high_intent_at_utc");
 
                     b.Property<string>("InternalNotes")
                         .HasMaxLength(1000)
@@ -5140,6 +5168,11 @@ namespace iucs.meettomanage.domain.Migrations
                     b.Property<DateTime?>("LastReminderSentAtUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("last_reminder_sent_at_utc");
+
+                    b.Property<string>("LostReason")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("lost_reason");
 
                     b.Property<string>("Medium")
                         .HasMaxLength(100)
@@ -5166,11 +5199,30 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(100)")
                         .HasColumnName("source");
 
+                    b.Property<string>("Stage")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("stage");
+
+                    b.Property<DateTime?>("StageChangedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("stage_changed_at_utc");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)")
                         .HasColumnName("status");
+
+                    b.Property<string>("TenantCode")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("tenant_code");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
 
                     b.Property<DateTime?>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone")
@@ -5200,8 +5252,14 @@ namespace iucs.meettomanage.domain.Migrations
                     b.HasIndex("AssignedToUserId")
                         .HasDatabaseName("ix_platform_demo_requests_assigned_to_user_id");
 
+                    b.HasIndex("DemoAtUtc")
+                        .HasDatabaseName("ix_platform_demo_requests_demo_at_utc");
+
                     b.HasIndex("NextFollowUpAtUtc")
                         .HasDatabaseName("ix_platform_demo_requests_next_follow_up_at_utc");
+
+                    b.HasIndex("Stage")
+                        .HasDatabaseName("ix_platform_demo_requests_stage");
 
                     b.ToTable("platform_demo_requests");
                 });
