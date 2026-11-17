@@ -174,7 +174,7 @@ public sealed class PlatformController(IConfiguration configuration, IPasswordHa
     {
         var tenant = await master.Tenants.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Tenant", id);
         if (!string.Equals(request.ConfirmCode.Trim(), tenant.Code, StringComparison.Ordinal))
-            throw new DomainValidationException("Type the client code exactly to confirm the deletion.");
+            throw new DomainValidationException("Type the tenant code exactly to confirm the deletion.");
         await eraser.EraseAsync(id, ct);
         return NoContent();
     }

@@ -76,6 +76,8 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
                 firstUser = business.users > 0,
                 firstCourse = business.courses > 0,
                 firstBatch = business.batches > 0,
+                integration = business.hasIntegrations,
+                customDomain = tenant.CustomDomainVerifiedAtUtc is not null,
             }
         });
     }
