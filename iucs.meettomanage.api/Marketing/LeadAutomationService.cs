@@ -62,6 +62,28 @@ public sealed class LeadAutomationService(MeetToManageDbContext db, IEmailSender
         if (On(settings, LeadLifecycle.DemoReminders)) await Guarded("demo reminders", () => SendDemoRemindersAsync(now, ct));
         if (On(settings, LeadLifecycle.TrialSync)) await Guarded("trial sync", () => SyncAccountsAsync(now, ct));
         if (On(settings, LeadLifecycle.HighIntentAlerts)) await Guarded("high-intent alerts", () => FlagHighIntentAsync(now, ct));
+        await Guarded("follow-up plans", () => StopFinishedPlansAsync(now, ct));
+    }
+
+    /// <summary>
+    /// Closes the open steps of a follow-up plan once its lead reaches one of the plan's stop stages (a demo
+    /// booked, a sale, a loss), so nobody keeps chasing a lead that has already moved on.
+    /// </summary>
+    internal async Task<int> StopFinishedPlansAsync(DateTime now, CancellationToken ct)
+    {
+        var open = await db.CrmTasks.Where(x => x.PlanKey != null && x.CompletedAtUtc == null && x.LeadId != null)
+            .Join(db.PlatformDemoRequests, t => t.LeadId, l => l.Id, (t, l) => new { Task = t, l.Stage })
+            .ToListAsync(ct);
+        var closed = 0;
+        foreach (var row in open)
+        {
+            if (CrmRules.Plan(row.Task.PlanKey) is not { } plan || !plan.StopAt.Contains(row.Stage)) continue;
+            row.Task.CompletedAtUtc = now;
+            row.Task.Outcome = $"Stopped automatically: lead is now {LeadLifecycle.Label(row.Stage).ToLowerInvariant()}";
+            closed++;
+        }
+        if (closed > 0) await db.SaveChangesAsync(ct);
+        return closed;
     }
 
     private async Task Guarded(string name, Func<Task> work)
@@ -200,12 +222,18 @@ public sealed class LeadAutomationService(MeetToManageDbContext db, IEmailSender
 
     // ------------------------------------------------------------------ console report
 
-    public async Task<LeadAutomationOverview> OverviewAsync(int days, CancellationToken ct)
+    /// <summary>Leads a sales rep may see (their own and unassigned); everything when <paramref name="visibleTo"/> is null.</summary>
+    private IQueryable<PlatformDemoRequest> Visible(Guid? visibleTo) =>
+        visibleTo is { } me
+            ? db.PlatformDemoRequests.AsNoTracking().Where(x => x.AssignedToUserId == null || x.AssignedToUserId == me)
+            : db.PlatformDemoRequests.AsNoTracking();
+
+    public async Task<LeadAutomationOverview> OverviewAsync(int days, CancellationToken ct, Guid? visibleTo = null)
     {
         var now = DateTime.UtcNow;
         days = Math.Clamp(days, 7, 365);
         var since = now.AddDays(-days);
-        var leads = await db.PlatformDemoRequests.AsNoTracking().Where(x => x.CreatedAtUtc >= since)
+        var leads = await Visible(visibleTo).Where(x => x.CreatedAtUtc >= since)
             .Select(x => new { x.Id, x.Stage, x.Source, x.CreatedAtUtc, x.FirstContactedAtUtc, x.AcknowledgedAtUtc, x.WorkEmail, x.LostReason }).ToListAsync(ct);
 
         static int Rank(LeadStage s) => s switch { LeadStage.New => 0, LeadStage.Contacted => 1, LeadStage.DemoBooked => 2, LeadStage.DemoDone => 3, LeadStage.Trial => 4, LeadStage.ActiveTrial => 5, LeadStage.Customer => 6, _ => -1 };
@@ -223,14 +251,15 @@ public sealed class LeadAutomationService(MeetToManageDbContext db, IEmailSender
             .Select(g => new CountRow(g.Key, g.Count())).OrderByDescending(x => x.Count).Take(8).ToList();
 
         var weekAhead = now.AddDays(7);
-        var upcoming = await db.PlatformDemoRequests.AsNoTracking().Where(x => x.ArchivedAtUtc == null && x.Stage == LeadStage.DemoBooked && x.DemoAtUtc >= now.AddHours(-2) && x.DemoAtUtc <= weekAhead)
+        var upcoming = await Visible(visibleTo).Where(x => x.ArchivedAtUtc == null && x.Stage == LeadStage.DemoBooked && x.DemoAtUtc >= now.AddHours(-2) && x.DemoAtUtc <= weekAhead)
             .OrderBy(x => x.DemoAtUtc).Take(20).Select(x => new LeadRow(x.Id, x.FullName, x.AcademyName, x.AssignedTo, x.DemoAtUtc, x.Stage)).ToListAsync(ct);
-        var hot = await db.PlatformDemoRequests.AsNoTracking().Where(x => x.ArchivedAtUtc == null && x.HighIntentAtUtc >= now.AddDays(-14) && x.Stage != LeadStage.Customer && x.Stage != LeadStage.Lost)
+        var hot = await Visible(visibleTo).Where(x => x.ArchivedAtUtc == null && x.HighIntentAtUtc >= now.AddDays(-14) && x.Stage != LeadStage.Customer && x.Stage != LeadStage.Lost)
             .OrderByDescending(x => x.HighIntentAtUtc).Take(20).Select(x => new LeadRow(x.Id, x.FullName, x.AcademyName, x.AssignedTo, x.HighIntentAtUtc, x.Stage)).ToListAsync(ct);
-        var stale = await db.PlatformDemoRequests.AsNoTracking().CountAsync(x => x.ArchivedAtUtc == null && x.Stage == LeadStage.New && x.CreatedAtUtc < now.AddHours(-24), ct);
+        var stale = await Visible(visibleTo).CountAsync(x => x.ArchivedAtUtc == null && x.Stage == LeadStage.New && x.CreatedAtUtc < now.AddHours(-24), ct);
         var activity = await db.MarketingLeadActivities.AsNoTracking().Where(x => x.Type == LeadLifecycle.AutomationActivity)
+            .Join(Visible(visibleTo), a => a.PlatformDemoRequestId, l => l.Id, (a, l) => new { l.Id, l.FullName, a.Detail, a.CreatedAtUtc })
             .OrderByDescending(x => x.CreatedAtUtc).Take(25)
-            .Join(db.PlatformDemoRequests.AsNoTracking(), a => a.PlatformDemoRequestId, l => l.Id, (a, l) => new ActivityRow(l.Id, l.FullName, a.Detail, a.CreatedAtUtc))
+            .Select(x => new ActivityRow(x.Id, x.FullName, x.Detail, x.CreatedAtUtc))
             .ToListAsync(ct);
 
         return new LeadAutomationOverview(days, leads.Count, funnel, leads.Count(l => l.Stage == LeadStage.Lost), median,

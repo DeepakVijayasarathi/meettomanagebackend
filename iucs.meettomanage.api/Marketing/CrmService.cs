@@ -23,6 +23,8 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
     private IDbContextFactory<MasterDbContext>? Master => services.GetService<IDbContextFactory<MasterDbContext>>();
     private Guid? CurrentTenantId => services.GetService<TenantContext>()?.TenantId;
 
+    private static string? NullIfEmpty(string? v) => string.IsNullOrWhiteSpace(v) ? null : v;
+
     private static string Name(User u) => $"{u.FirstName} {u.LastName}".Trim();
     private static string? Clean(string? v, int max) => string.IsNullOrWhiteSpace(v) ? null : v.Trim()[..Math.Min(v.Trim().Length, max)];
 
@@ -97,8 +99,8 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
         }
         if (request.ReassignTo is { } to)
         {
-            if (!await db.Users.AnyAsync(x => x.Id == to && x.Role == UserRole.Marketing && x.Status == UserStatus.Active, ct))
-                throw new DomainValidationException("Reassign to an active team member.");
+            if (to == userId) throw new DomainValidationException("Hand the work to someone else.");
+            await access.EnsureCanOwnAsync(to, ct);
             var newName = Name(await db.Users.AsNoTracking().FirstAsync(x => x.Id == to, ct));
             var leads = await db.PlatformDemoRequests.Where(x => x.AssignedToUserId == userId && x.Stage != LeadStage.Customer && x.Stage != LeadStage.Lost).ToListAsync(ct);
             foreach (var lead in leads) { lead.AssignedToUserId = to; lead.AssignedTo = newName; Log(lead.Id, "Updated", $"Reassigned to {newName}."); }
@@ -135,7 +137,7 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
     {
         var names = await TeamNamesAsync(ct);
         var leadIds = tasks.Where(x => x.LeadId != null).Select(x => x.LeadId!.Value).Distinct().ToList();
-        var leads = await db.PlatformDemoRequests.AsNoTracking().Where(x => leadIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => new { x.FullName, x.AcademyName }, ct);
+        var leads = await db.PlatformDemoRequests.AsNoTracking().Where(x => leadIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => new { x.FullName, x.AcademyName, x.Phone, x.WorkEmail }, ct);
         var tenantIds = tasks.Where(x => x.TenantId != null).Select(x => x.TenantId!.Value).Distinct().ToList();
         var tenants = new Dictionary<Guid, string>();
         if (tenantIds.Count > 0 && Master is { } factory)
@@ -146,7 +148,9 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
         return tasks.Select(t => new CrmTaskDto(t.Id, t.Title, t.Type, t.DueAtUtc, t.AssignedToUserId,
             t.AssignedToUserId is { } a ? names.GetValueOrDefault(a) : null, t.LeadId,
             t.LeadId is { } l && leads.TryGetValue(l, out var lead) ? $"{lead.AcademyName} ({lead.FullName})" : null,
-            t.TenantId, t.TenantId is { } tid ? tenants.GetValueOrDefault(tid) : null, t.Notes, t.CompletedAtUtc, t.Outcome)).ToList();
+            t.TenantId, t.TenantId is { } tid ? tenants.GetValueOrDefault(tid) : null, t.Notes, t.CompletedAtUtc, t.Outcome,
+            t.LeadId is { } pl && leads.TryGetValue(pl, out var contact) ? NullIfEmpty(contact.Phone) : null,
+            t.LeadId is { } el && leads.TryGetValue(el, out var mail) ? NullIfEmpty(mail.WorkEmail) : null, t.PlanKey)).ToList();
     }
 
     public async Task<CrmTaskDto> SaveTaskAsync(Guid? id, SaveCrmTaskRequest request, CancellationToken ct)
@@ -158,8 +162,14 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
             await access.EnsureCanSeeLeadAsync(leadId, ct);
             if (!await db.PlatformDemoRequests.AnyAsync(x => x.Id == leadId, ct)) throw new NotFoundException("Lead", leadId);
         }
-        var assignee = request.AssignedToUserId ?? (request.LeadId is { } lid
-            ? await db.PlatformDemoRequests.Where(x => x.Id == lid).Select(x => x.AssignedToUserId).FirstOrDefaultAsync(ct) : null) ?? access.UserId;
+        // An explicit owner must be able to own work; otherwise the lead's owner, unless they've left, then me.
+        var assignee = request.AssignedToUserId;
+        if (assignee is { } chosen) await access.EnsureCanOwnAsync(chosen, ct);
+        else
+        {
+            var leadOwner = request.LeadId is { } lid ? await db.PlatformDemoRequests.Where(x => x.Id == lid).Select(x => x.AssignedToUserId).FirstOrDefaultAsync(ct) : null;
+            assignee = leadOwner is { } lo && await access.CanOwnAsync(lo, ct) ? lo : access.UserId;
+        }
         if (role == CrmRole.Sales && assignee != access.UserId) throw new ForbiddenException("Sales reps can only give tasks to themselves.");
 
         CrmTask task;
@@ -167,6 +177,7 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
         {
             task = await db.CrmTasks.FirstOrDefaultAsync(x => x.Id == existing, ct) ?? throw new NotFoundException("Task", existing);
             if (role == CrmRole.Sales && task.AssignedToUserId is { } owner && owner != access.UserId) throw new ForbiddenException("This task belongs to someone else.");
+            if (task.LeadId is { } taskLead) await access.EnsureCanSeeLeadAsync(taskLead, ct);
         }
         else
         {
@@ -261,14 +272,17 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
         if (request.Rows.Count == 0) throw new DomainValidationException("There are no rows to import.");
         if (request.Rows.Count > 2000) throw new DomainValidationException("Import up to 2,000 rows at a time.");
         var role = await access.RoleAsync(ct);
-        var ownerId = role == CrmRole.Sales ? access.UserId : request.AssignedToUserId;
-        string? ownerName = null;
-        if (ownerId is { } oid)
+        // Owners: a sales rep's imports are theirs; a manager picks one owner, several (split evenly in turn) or none.
+        var ownerIds = role == CrmRole.Sales ? [access.UserId!.Value]
+            : request.OwnerUserIds.Count > 0 ? request.OwnerUserIds.Distinct().ToList()
+            : request.AssignedToUserId is { } one ? [one] : new List<Guid>();
+        var owners = new List<(Guid Id, string Name)>();
+        foreach (var oid in ownerIds)
         {
-            var owner = await db.Users.AsNoTracking().FirstOrDefaultAsync(x => x.Id == oid && x.Role == UserRole.Marketing && x.Status == UserStatus.Active, ct)
-                ?? throw new DomainValidationException("Choose an active team member as the owner.");
-            ownerName = Name(owner);
+            await access.EnsureCanOwnAsync(oid, ct);
+            owners.Add((oid, Name(await db.Users.AsNoTracking().FirstAsync(x => x.Id == oid, ct))));
         }
+        var plan = request.FollowUpPlan is { Length: > 0 } key ? CrmRules.Plan(key) ?? throw new DomainValidationException("Unknown follow-up plan.") : null;
 
         var existing = await db.PlatformDemoRequests.AsNoTracking().Select(x => new { x.WorkEmail, x.Phone }).ToListAsync(ct);
         var emails = existing.Where(x => !string.IsNullOrWhiteSpace(x.WorkEmail)).Select(x => x.WorkEmail.ToLowerInvariant()).ToHashSet();
@@ -301,13 +315,20 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
                 Id = Guid.NewGuid(), FullName = name, WorkEmail = email, Phone = phone, AcademyName = academy ?? "Not provided",
                 Source = Clean(row.Source, 100) ?? source, Region = Clean(row.Region, 100), City = Clean(row.City, 100),
                 Segment = Clean(row.Segment, 100), Website = website, StudentCount = row.StudentCount is > 0 and < 1_000_000 ? row.StudentCount : null,
-                InternalNotes = notes, AssignedToUserId = ownerId, AssignedTo = ownerName, Stage = LeadStage.New, StageChangedAtUtc = now,
+                InternalNotes = notes, Stage = LeadStage.New, StageChangedAtUtc = now,
             };
+            if (owners.Count > 0)
+            {
+                var (ownerId, ownerName) = owners[created.Count % owners.Count];
+                lead.AssignedToUserId = ownerId;
+                lead.AssignedTo = ownerName;
+            }
             db.PlatformDemoRequests.Add(lead);
-            Log(lead.Id, "Created", single ? $"Added by hand{(ownerName is null ? "" : $", owner {ownerName}")}." : $"Imported from a list ({source}).");
+            Log(lead.Id, "Created", single ? $"Added by hand{(lead.AssignedTo is null ? "" : $", owner {lead.AssignedTo}")}." : $"Imported from a list ({source}){(lead.AssignedTo is null ? "" : $", owner {lead.AssignedTo}")}.");
             created.Add(lead.Id);
         }
         await db.SaveChangesAsync(ct);
+        if (plan is not null && created.Count > 0) await StartPlanAsync(created, plan.Key, ct);
         return new CrmImportResult(created.Count, created, skipped);
     }
 
@@ -346,13 +367,90 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
             db.CrmTasks.Add(new CrmTask
             {
                 Id = Guid.NewGuid(), LeadId = id, Title = next, Type = CrmTaskType.FollowUp,
-                DueAtUtc = DateTime.SpecifyKind(due, DateTimeKind.Utc), AssignedToUserId = lead.AssignedToUserId ?? access.UserId,
+                DueAtUtc = DateTime.SpecifyKind(due, DateTimeKind.Utc), AssignedToUserId = lead.AssignedToUserId is { } leadOwner && await access.CanOwnAsync(leadOwner, ct) ? leadOwner : access.UserId,
             });
             lead.NextFollowUpAtUtc = DateTime.SpecifyKind(due, DateTimeKind.Utc);
             Log(id, "Task", $"Next step: {next} (due {due:dd MMM})");
         }
         await db.SaveChangesAsync(ct);
         return lead;
+    }
+
+    // ================================================================== follow-up plans and bulk work
+
+    /// <summary>
+    /// Creates the plan's tasks on each lead, owned by the lead's owner (or whoever starts it if the lead has no
+    /// owner who can work it). Skips closed leads and leads already running the same plan.
+    /// </summary>
+    public async Task<CrmBulkResult> StartPlanAsync(IReadOnlyCollection<Guid> leadIds, string planKey, CancellationToken ct)
+    {
+        await access.RequireWriteAsync(ct);
+        var plan = CrmRules.Plan(planKey) ?? throw new DomainValidationException("Unknown follow-up plan.");
+        var visible = await access.VisibleToAsync(ct);
+        var leads = await db.PlatformDemoRequests.Where(x => leadIds.Contains(x.Id)).ToListAsync(ct);
+        var running = (await db.CrmTasks.AsNoTracking().Where(x => x.LeadId != null && leadIds.Contains(x.LeadId!.Value) && x.PlanKey == plan.Key && x.CompletedAtUtc == null)
+            .Select(x => x.LeadId!.Value).ToListAsync(ct)).ToHashSet();
+        var now = DateTime.UtcNow;
+        var started = 0;
+        var skipped = new List<string>();
+        foreach (var lead in leads)
+        {
+            if (!CrmAccess.CanSee(visible, lead.AssignedToUserId)) { skipped.Add($"{lead.AcademyName}: belongs to someone else"); continue; }
+            if (plan.StopAt.Contains(lead.Stage)) { skipped.Add($"{lead.AcademyName}: already {LeadLifecycle.Label(lead.Stage).ToLowerInvariant()}"); continue; }
+            if (running.Contains(lead.Id)) { skipped.Add($"{lead.AcademyName}: plan already running"); continue; }
+            var owner = lead.AssignedToUserId is { } o && await access.CanOwnAsync(o, ct) ? o : access.UserId;
+            foreach (var step in plan.Steps)
+                db.CrmTasks.Add(new CrmTask
+                {
+                    Id = Guid.NewGuid(), LeadId = lead.Id, Title = step.Title, Type = step.Type,
+                    DueAtUtc = CrmRules.StepDueUtc(now, step.Day), AssignedToUserId = owner, PlanKey = plan.Key,
+                });
+            var first = CrmRules.StepDueUtc(now, plan.Steps[0].Day);
+            if (lead.NextFollowUpAtUtc is null || lead.NextFollowUpAtUtc < now || lead.NextFollowUpAtUtc > first) lead.NextFollowUpAtUtc = first;
+            Log(lead.Id, "Task", $"Follow-up plan started: {plan.Name} ({plan.Steps.Length} steps).");
+            started++;
+        }
+        await db.SaveChangesAsync(ct);
+        return new CrmBulkResult(started, skipped);
+    }
+
+    /// <summary>Assigns selected leads (split evenly between the chosen people) and/or starts a plan on them.</summary>
+    public async Task<CrmBulkResult> BulkAsync(BulkCrmLeadsRequest request, CancellationToken ct)
+    {
+        await access.RequireWriteAsync(ct);
+        if (request.LeadIds.Count == 0) throw new DomainValidationException("Select some leads first.");
+        var done = 0;
+        var skipped = new List<string>();
+        if (request.OwnerUserIds.Count > 0)
+        {
+            await access.RequireManagerAsync(ct);
+            var owners = new List<(Guid Id, string Name)>();
+            foreach (var oid in request.OwnerUserIds.Distinct())
+            {
+                await access.EnsureCanOwnAsync(oid, ct);
+                owners.Add((oid, Name(await db.Users.AsNoTracking().FirstAsync(x => x.Id == oid, ct))));
+            }
+            var leads = await db.PlatformDemoRequests.Where(x => request.LeadIds.Contains(x.Id)).OrderBy(x => x.CreatedAtUtc).ToListAsync(ct);
+            for (var i = 0; i < leads.Count; i++)
+            {
+                var (id, name) = owners[i % owners.Count];
+                if (leads[i].AssignedToUserId == id) continue;
+                leads[i].AssignedToUserId = id;
+                leads[i].AssignedTo = name;
+                Log(leads[i].Id, "Updated", $"Assigned to {name}.");
+                // Open tasks follow the lead to its new owner.
+                await db.CrmTasks.Where(x => x.LeadId == leads[i].Id && x.CompletedAtUtc == null).ExecuteUpdateAsync(u => u.SetProperty(x => x.AssignedToUserId, id), ct);
+            }
+            await db.SaveChangesAsync(ct);
+            done = leads.Count;
+        }
+        if (request.FollowUpPlan is { Length: > 0 } plan)
+        {
+            var result = await StartPlanAsync(request.LeadIds, plan, ct);
+            done = Math.Max(done, result.Done);
+            skipped.AddRange(result.Skipped);
+        }
+        return new CrmBulkResult(done, skipped);
     }
 
     // ================================================================== reports
@@ -438,7 +536,7 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
             var sub = subs.GetValueOrDefault(t.Id);
             var use = usage.GetValueOrDefault(t.Id);
             var (h, reasons) = CrmRules.Health(t, sub, use, now);
-            var monthly = sub?.PlanPrice is { Amount: > 0 } price ? (price.BillingInterval == BillingInterval.Year ? Math.Round(price.Amount / 12, 0) : price.Amount) : 0;
+            var monthly = sub?.PlanPrice is { Amount: > 0 } price ? (price.BillingInterval == BillingInterval.Year ? Math.Round(price.Amount / 12, 0, MidpointRounding.AwayFromZero) : price.Amount) : 0;
             return new CrmCustomerRow(t.Id, t.Name, t.Code, sub?.Plan?.Name, sub?.Status.ToString(), monthly, use?.ActiveStudents, use?.SessionsMonth,
                 sub?.TrialEndsAtUtc, sub?.CurrentPeriodEndUtc, h, reasons, profiles.GetValueOrDefault(t.Id)?.BillingEmail,
                 owners.FirstOrDefault(o => o.TenantId == t.Id && o.AssignedTo != null)?.AssignedTo, openTasks.GetValueOrDefault(t.Id), t.CreatedAtUtc);
@@ -506,7 +604,8 @@ public sealed class UpdateCrmMemberRequest
 }
 
 public sealed record CrmTaskDto(Guid Id, string Title, CrmTaskType Type, DateTime DueAtUtc, Guid? AssignedToUserId, string? AssignedTo,
-    Guid? LeadId, string? LeadLabel, Guid? TenantId, string? CustomerName, string? Notes, DateTime? CompletedAtUtc, string? Outcome);
+    Guid? LeadId, string? LeadLabel, Guid? TenantId, string? CustomerName, string? Notes, DateTime? CompletedAtUtc, string? Outcome,
+    string? LeadPhone = null, string? LeadEmail = null, string? PlanKey = null);
 
 public sealed class SaveCrmTaskRequest
 {
@@ -555,12 +654,30 @@ public sealed class CreateCrmLeadRequest : CrmLeadRow
 
 public sealed class ImportCrmLeadsRequest
 {
+    /// <summary>Split the leads evenly between these people, in turn (managers only).</summary>
+    public List<Guid> OwnerUserIds { get; set; } = [];
+    /// <summary>Start this follow-up plan on every lead added.</summary>
+    [MaxLength(40)] public string? FollowUpPlan { get; set; }
     public List<CrmLeadRow> Rows { get; set; } = [];
     public Guid? AssignedToUserId { get; set; }
     [MaxLength(100)] public string? Source { get; set; }
 }
 
 public sealed record CrmImportSkip(int Row, string Reason);
+public sealed record CrmBulkResult(int Done, List<string> Skipped);
+
+public sealed class BulkCrmLeadsRequest
+{
+    [Required, MaxLength(500)] public List<Guid> LeadIds { get; set; } = [];
+    /// <summary>Assign the leads, split evenly between these people (managers only).</summary>
+    public List<Guid> OwnerUserIds { get; set; } = [];
+    [MaxLength(40)] public string? FollowUpPlan { get; set; }
+}
+
+public sealed class StartPlanRequest
+{
+    [Required, MaxLength(40)] public string Plan { get; set; } = "";
+}
 public sealed record CrmImportResult(int Created, List<Guid> CreatedIds, List<CrmImportSkip> Skipped);
 
 public sealed class UpdateCrmDealRequest

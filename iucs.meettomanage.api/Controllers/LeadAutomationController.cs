@@ -12,7 +12,7 @@ public sealed class LeadAutomationController(LeadAutomationService automation, C
 {
     [HttpGet]
     public async Task<ActionResult<LeadAutomationOverview>> Overview([FromQuery] int days = 90, CancellationToken ct = default) =>
-        Ok(await automation.OverviewAsync(days, ct));
+        Ok(await automation.OverviewAsync(days, ct, await access.VisibleToAsync(ct)));
 
     [HttpPut("settings")]
     public async Task<ActionResult<Dictionary<string, string>>> SaveSettings(Dictionary<string, string> values, CancellationToken ct)

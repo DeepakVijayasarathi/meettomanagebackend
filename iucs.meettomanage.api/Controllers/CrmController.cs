@@ -62,6 +62,15 @@ public sealed class CrmController(CrmService crm) : ControllerBase
     [HttpPost("leads/import")]
     public async Task<ActionResult<CrmImportResult>> Import(ImportCrmLeadsRequest request, CancellationToken ct) => Ok(await crm.ImportLeadsAsync(request, ct));
 
+    [HttpGet("followup-plans")]
+    public ActionResult<IReadOnlyList<FollowUpPlan>> Plans() => Ok(CrmRules.Plans);
+
+    [HttpPost("leads/{id:guid}/plan")]
+    public async Task<ActionResult<CrmBulkResult>> StartPlan(Guid id, StartPlanRequest request, CancellationToken ct) => Ok(await crm.StartPlanAsync([id], request.Plan, ct));
+
+    [HttpPost("leads/bulk")]
+    public async Task<ActionResult<CrmBulkResult>> Bulk(BulkCrmLeadsRequest request, CancellationToken ct) => Ok(await crm.BulkAsync(request, ct));
+
     [HttpPut("leads/{id:guid}/deal")]
     public async Task<ActionResult<PlatformDemoRequestDto>> Deal(Guid id, UpdateCrmDealRequest request, CancellationToken ct) => Ok((await crm.UpdateDealAsync(id, request, ct)).ToDto());
 

@@ -15,7 +15,7 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         Viewer,
     }
 
-    public enum CrmTaskType { FollowUp, Call, Meeting, DemoPrep, Quote, Onboarding, Other }
+    public enum CrmTaskType { FollowUp, Call, Meeting, DemoPrep, Quote, Onboarding, Other, WhatsApp }
 
     /// <summary>
     /// A marketing-console user's CRM role. A marketing user with no row is treated as a Manager, so the
@@ -44,6 +44,8 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         [MaxLength(1000)] public string? Notes { get; set; }
         public DateTime? CompletedAtUtc { get; set; }
         [MaxLength(1000)] public string? Outcome { get; set; }
+        /// <summary>The follow-up plan that created this task (see CrmRules.Plans); its open steps stop when the lead moves on.</summary>
+        [MaxLength(40)] public string? PlanKey { get; set; }
     }
 
     /// <summary>A note the team keeps about a customer academy.</summary>

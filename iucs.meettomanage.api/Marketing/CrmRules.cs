@@ -1,5 +1,6 @@
 using iucs.meettomanage.domain.Entities.Saas;
 using iucs.meettomanage.domain.Entities.Tenancy;
+using iucs.meettomanage.domain.Entities.Marketing;
 using iucs.meettomanage.domain.Enums;
 
 namespace iucs.meettomanage.api.Marketing;
@@ -54,6 +55,51 @@ public static class CrmRules
         return (CustomerHealth.Healthy, active ? ["Active this month"] : []);
     }
 
+    /// <summary>
+    /// Ready-made follow-up sequences. Starting one creates a task per step on the lead's owner; open steps close
+    /// on their own once the lead reaches a stop stage (a demo is booked, they buy, or they're lost).
+    /// </summary>
+    public static readonly IReadOnlyList<FollowUpPlan> Plans =
+    [
+        new("new-lead", "New enquiry (2 weeks)", "For a lead who asked about the platform: reach them fast, then keep trying for two weeks.",
+            [new(0, CrmTaskType.Call, "Call: thank them, ask how they run classes and fees today, offer a demo"),
+             new(1, CrmTaskType.WhatsApp, "WhatsApp: short intro and a demo link if the call didn't connect"),
+             new(3, CrmTaskType.Call, "Call again: book the demo"),
+             new(7, CrmTaskType.WhatsApp, "WhatsApp: share a customer story and ask for a 30-minute slot"),
+             new(14, CrmTaskType.Call, "Last call: still interested? If not, mark lost with the reason")],
+            [LeadStage.DemoBooked, LeadStage.DemoDone, LeadStage.Trial, LeadStage.ActiveTrial, LeadStage.Customer, LeadStage.Lost]),
+        new("imported", "Imported list (1 week)", "For academies from a list who haven't asked yet: a light, friendly first touch.",
+            [new(0, CrmTaskType.WhatsApp, "WhatsApp: introduce yourself and ask who handles admissions and fees"),
+             new(2, CrmTaskType.Call, "Call: ask how they manage classes, fees and parent updates today"),
+             new(6, CrmTaskType.WhatsApp, "WhatsApp: offer the free plan or a short demo, then stop if no reply")],
+            [LeadStage.DemoBooked, LeadStage.DemoDone, LeadStage.Trial, LeadStage.ActiveTrial, LeadStage.Customer, LeadStage.Lost]),
+        new("after-demo", "After the demo (1 week)", "Turn a finished demo into a trial and a decision.",
+            [new(1, CrmTaskType.Call, "Call: answer questions from the demo, help them start the free trial"),
+             new(3, CrmTaskType.WhatsApp, "WhatsApp: check the trial is set up; offer to import their students"),
+             new(7, CrmTaskType.Call, "Call: ask for the decision, send the plan quote")],
+            [LeadStage.ActiveTrial, LeadStage.Customer, LeadStage.Lost]),
+        new("trial", "Trial check-ins", "Help a trial academy get going so they buy before it ends.",
+            [new(1, CrmTaskType.Call, "Call: help add the first batch and students"),
+             new(4, CrmTaskType.WhatsApp, "WhatsApp: tips for running the first live class and fee reminders"),
+             new(10, CrmTaskType.Call, "Call: recommend a plan before the trial ends")],
+            [LeadStage.Customer, LeadStage.Lost]),
+    ];
+
+    public static FollowUpPlan? Plan(string? key) => Plans.FirstOrDefault(p => p.Key == key);
+
+    private static readonly TimeSpan Ist = TimeSpan.FromHours(5.5);
+
+    /// <summary>
+    /// When a plan step falls due: 10:00 India time, the given number of days after the start. A day-0 step that
+    /// would already be past is due in 15 minutes instead, so it shows up today.
+    /// </summary>
+    public static DateTime StepDueUtc(DateTime startUtc, int day)
+    {
+        var localDay = (startUtc + Ist).Date.AddDays(day);
+        var due = DateTime.SpecifyKind(localDay.AddHours(10) - Ist, DateTimeKind.Utc);
+        return due < startUtc ? startUtc.AddMinutes(15) : due;
+    }
+
     /// <summary>Digits only, last ten (Indian numbers with or without +91), for duplicate checks.</summary>
     public static string PhoneKey(string? phone)
     {
@@ -61,3 +107,6 @@ public static class CrmRules
         return digits.Length > 10 ? digits[^10..] : digits;
     }
 }
+
+public sealed record FollowUpStep(int Day, iucs.meettomanage.domain.Entities.Marketing.CrmTaskType Type, string Title);
+public sealed record FollowUpPlan(string Key, string Name, string Description, FollowUpStep[] Steps, LeadStage[] StopAt);

@@ -4140,6 +4140,11 @@ namespace iucs.meettomanage.domain.Migrations
                         .HasColumnType("character varying(1000)")
                         .HasColumnName("outcome");
 
+                    b.Property<string>("PlanKey")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("plan_key");
+
                     b.Property<Guid?>("TenantId")
                         .HasColumnType("uuid")
                         .HasColumnName("tenant_id");

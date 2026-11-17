@@ -80,8 +80,10 @@ namespace iucs.meettomanage.application.Services
         /// </summary>
         private async Task<string?> AssignOwnerAsync(PlatformDemoRequest lead, CancellationToken cancellationToken)
         {
+            // Viewers are read-only in the CRM, so they never own leads.
+            var viewers = _unitOfWork.Repository<CrmTeamMember>().Query().Where(x => x.Role == CrmRole.Viewer).Select(x => x.UserId);
             var team = await _unitOfWork.Repository<User>().Query()
-                .Where(x => x.Role == UserRole.Marketing && x.Status == UserStatus.Active)
+                .Where(x => x.Role == UserRole.Marketing && x.Status == UserStatus.Active && !viewers.Contains(x.Id))
                 .Select(x => new { x.Id, x.FirstName, x.LastName, x.Email }).ToListAsync(cancellationToken);
             if (team.Count == 0) return null;
             var teamIds = team.Select(x => x.Id).ToList();

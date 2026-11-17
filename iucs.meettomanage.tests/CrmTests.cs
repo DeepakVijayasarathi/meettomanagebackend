@@ -127,6 +127,271 @@ public sealed class CrmTests : IDisposable
         Assert.Equal(3, report.Owners.Single(o => o.OwnerId is null).OpenLeads);
     }
 
+    /// <summary>Runs the lead-endpoint role filter for one action and reports whether the action itself was reached.</summary>
+    private async Task<bool> Through(string action, string method, Dictionary<string, object?> args)
+    {
+        var http = new Microsoft.AspNetCore.Http.DefaultHttpContext();
+        http.Request.Method = method;
+        var descriptor = new Microsoft.AspNetCore.Mvc.Controllers.ControllerActionDescriptor { ActionName = action };
+        var actionContext = new Microsoft.AspNetCore.Mvc.ActionContext(http, new Microsoft.AspNetCore.Routing.RouteData(), descriptor);
+        var context = new Microsoft.AspNetCore.Mvc.Filters.ActionExecutingContext(actionContext, [], args, controller: new object());
+        var reached = false;
+        await new CrmLeadAccessFilter(new CrmAccess(_db.Context, _me)).OnActionExecutionAsync(context, () =>
+        {
+            reached = true;
+            return Task.FromResult(new Microsoft.AspNetCore.Mvc.Filters.ActionExecutedContext(actionContext, [], new object()));
+        });
+        return reached;
+    }
+
+    [Fact]
+    public async Task LeadEndpoints_FollowCrmRoles()
+    {
+        var rep = await MarketingUser("Rep", CrmRole.Sales);
+        var other = await MarketingUser("Other", CrmRole.Sales);
+        var viewer = await MarketingUser("View", CrmRole.Viewer);
+        var mgr = await MarketingUser("Mgr", CrmRole.Manager);
+        var theirs = new PlatformDemoRequest { Id = Guid.NewGuid(), FullName = "T", WorkEmail = "t@a.in", Phone = "2", AcademyName = "B", AssignedToUserId = other.Id };
+        var mine = new PlatformDemoRequest { Id = Guid.NewGuid(), FullName = "M", WorkEmail = "m@a.in", Phone = "3", AcademyName = "C", AssignedToUserId = rep.Id };
+        _db.Context.PlatformDemoRequests.AddRange(theirs, mine);
+        await _db.Context.SaveChangesAsync();
+
+        // Sales rep: the list is narrowed server-side, even if the client sends someone else's id.
+        _me.UserId = rep.Id;
+        var query = new application.Dto.Marketing.MarketingLeadQuery { VisibleToUserId = other.Id };
+        Assert.True(await Through("ListPaged", "GET", new() { ["query"] = query }));
+        Assert.Equal(rep.Id, query.VisibleToUserId);
+        Assert.True(await Through("Get", "GET", new() { ["id"] = mine.Id }));
+        await Assert.ThrowsAsync<ForbiddenException>(() => Through("Get", "GET", new() { ["id"] = theirs.Id }));
+        await Assert.ThrowsAsync<ForbiddenException>(() => Through("SetStage", "PUT", new() { ["id"] = theirs.Id }));
+        await Assert.ThrowsAsync<ForbiddenException>(() => Through("List", "GET", new()));
+        await Assert.ThrowsAsync<ForbiddenException>(() => Through("Delete", "DELETE", new() { ["id"] = mine.Id }));
+        await Assert.ThrowsAsync<ForbiddenException>(() => Through("SaveSettings", "PUT", new()));
+        await Assert.ThrowsAsync<ForbiddenException>(() => Through("Update", "PUT", new() { ["id"] = mine.Id, ["request"] = new application.Dto.Marketing.UpdatePlatformDemoRequestRequest { AssignedToUserId = other.Id } }));
+        Assert.True(await Through("Update", "PUT", new() { ["id"] = mine.Id, ["request"] = new application.Dto.Marketing.UpdatePlatformDemoRequestRequest { AssignedToUserId = rep.Id } }));
+        await Assert.ThrowsAsync<ForbiddenException>(() => Through("Bulk", "POST", new() { ["request"] = new application.Dto.Marketing.BulkMarketingLeadRequest { Ids = [mine.Id, theirs.Id] } }));
+
+        // Viewer: reads everything, changes nothing; the query is not narrowed.
+        _me.UserId = viewer.Id;
+        var viewerQuery = new application.Dto.Marketing.MarketingLeadQuery { VisibleToUserId = rep.Id };
+        Assert.True(await Through("ListPaged", "GET", new() { ["query"] = viewerQuery }));
+        Assert.Null(viewerQuery.VisibleToUserId);
+        Assert.True(await Through("Get", "GET", new() { ["id"] = theirs.Id }));
+        await Assert.ThrowsAsync<ForbiddenException>(() => Through("UpdateStatus", "PUT", new() { ["id"] = theirs.Id }));
+
+        // Manager: everything.
+        _me.UserId = mgr.Id;
+        Assert.True(await Through("Delete", "DELETE", new() { ["id"] = theirs.Id }));
+        Assert.True(await Through("List", "GET", new()));
+    }
+
+    [Fact]
+    public async Task NewWebsiteLeads_AreNeverAutoAssignedToAViewer()
+    {
+        var viewer = await MarketingUser("Aaron", CrmRole.Viewer);   // alphabetically first, no open leads
+        var rep = await MarketingUser("Zara", CrmRole.Sales);
+        var demos = new application.Services.PlatformDemoRequestService(_db.UnitOfWork, new application.Services.AuditLogService(_db.UnitOfWork, _db.CurrentUser));
+        var lead = await demos.CreateAsync(new application.Dto.Marketing.CreatePlatformDemoRequestRequest { FullName = "Web", WorkEmail = "web@a.in", Phone = "9000000500", AcademyName = "Web Academy" });
+        Assert.Equal(rep.Id, lead.AssignedToUserId);
+        Assert.NotEqual(viewer.Id, lead.AssignedToUserId);
+    }
+
+    [Fact]
+    public async Task TaskOnALeadWhoseOwnerLeft_GoesToWhoeverAddsIt()
+    {
+        var gone = await MarketingUser("Gone", CrmRole.Sales);
+        var mgr = await MarketingUser("Mgr", CrmRole.Manager);
+        var lead = new PlatformDemoRequest { Id = Guid.NewGuid(), FullName = "L", WorkEmail = "l@a.in", Phone = "7", AcademyName = "L", AssignedToUserId = gone.Id };
+        _db.Context.PlatformDemoRequests.Add(lead);
+        (await _db.Context.Users.FirstAsync(x => x.Id == gone.Id)).Status = UserStatus.Inactive;
+        await _db.Context.SaveChangesAsync();
+        _me.UserId = mgr.Id;
+        var task = await Crm().SaveTaskAsync(null, new SaveCrmTaskRequest { Title = "Pick up", DueAtUtc = DateTime.UtcNow, LeadId = lead.Id }, default);
+        Assert.Equal(mgr.Id, task.AssignedToUserId);
+        await Assert.ThrowsAsync<DomainValidationException>(() => Crm().SaveTaskAsync(null, new SaveCrmTaskRequest { Title = "x", DueAtUtc = DateTime.UtcNow, AssignedToUserId = gone.Id }, default));
+    }
+
+    [Fact]
+    public async Task AutomationOverview_ShowsASalesRepOnlyTheirLeads()
+    {
+        var rep = await MarketingUser("Rep", CrmRole.Sales);
+        var other = await MarketingUser("Other", CrmRole.Sales);
+        var soon = DateTime.UtcNow.AddDays(1);
+        _db.Context.PlatformDemoRequests.AddRange(
+            new PlatformDemoRequest { Id = Guid.NewGuid(), FullName = "Mine", WorkEmail = "", Phone = "1", AcademyName = "Mine", AssignedToUserId = rep.Id, Stage = LeadStage.DemoBooked, DemoAtUtc = soon },
+            new PlatformDemoRequest { Id = Guid.NewGuid(), FullName = "Theirs", WorkEmail = "", Phone = "2", AcademyName = "Theirs", AssignedToUserId = other.Id, Stage = LeadStage.DemoBooked, DemoAtUtc = soon });
+        await _db.Context.SaveChangesAsync();
+        var automation = new LeadAutomationService(_db.Context, new FakeEmailSender(), new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(),
+            new ServiceCollection().BuildServiceProvider(), Microsoft.Extensions.Logging.Abstractions.NullLogger<LeadAutomationService>.Instance);
+        Assert.Equal(["Mine"], (await automation.OverviewAsync(30, default, rep.Id)).UpcomingDemos.Select(x => x.AcademyName).ToArray());
+        Assert.Equal(2, (await automation.OverviewAsync(30, default)).UpcomingDemos.Count);
+    }
+
+    private sealed class MasterFactory(DbContextOptions<domain.Data.MasterDbContext> options) : IDbContextFactory<domain.Data.MasterDbContext>
+    {
+        public domain.Data.MasterDbContext CreateDbContext() => new(options);
+    }
+
+    [Fact]
+    public async Task Customers_ReadFromTheMasterDatabase_WithHealthInvoicesAndNotes()
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        var options = new DbContextOptionsBuilder<domain.Data.MasterDbContext>().UseSqlite(connection).Options;
+        var paidId = Guid.NewGuid();
+        var trialId = Guid.NewGuid();
+        await using (var master = new domain.Data.MasterDbContext(options))
+        {
+            await master.Database.EnsureCreatedAsync();
+            var plan = new Plan { Code = "pro", Name = "Pro" };
+            var price = new PlanPrice { Plan = plan, BillingInterval = BillingInterval.Year, Amount = 24_990 };
+            master.Plans.Add(plan);
+            master.Tenants.AddRange(
+                new Tenant { Id = paidId, Code = "bright", Name = "Bright Abacus", DatabaseName = "mt_a", Status = TenantStatus.Active, CreatedAtUtc = DateTime.UtcNow.AddDays(-200) },
+                new Tenant { Id = trialId, Code = "newbie", Name = "Newbie Phonics", DatabaseName = "mt_b", Status = TenantStatus.Active, CreatedAtUtc = DateTime.UtcNow.AddDays(-5) });
+            master.TenantSubscriptions.AddRange(
+                new TenantSubscription { TenantId = paidId, Plan = plan, PlanPrice = price, Status = SaasSubscriptionStatus.PastDue, CreatedAtUtc = DateTime.UtcNow.AddDays(-200) },
+                new TenantSubscription { TenantId = trialId, Plan = plan, Status = SaasSubscriptionStatus.Trialing, CreatedAtUtc = DateTime.UtcNow.AddDays(-5), TrialEndsAtUtc = DateTime.UtcNow.AddDays(9) });
+            master.TenantUsageSnapshots.Add(new TenantUsageSnapshot { TenantId = paidId, SnapshotDate = DateOnly.FromDateTime(DateTime.UtcNow), ActiveStudents = 80, SessionsMonth = 12 });
+            master.TenantBillingProfiles.Add(new TenantBillingProfile { TenantId = paidId, BillingEmail = "owner@bright.in", BillingPhone = "900" });
+            master.PlatformInvoices.Add(new PlatformInvoice { TenantId = paidId, InvoiceNumber = "INV-1", Total = 24_990, Status = PlatformInvoiceStatus.Open, DueAtUtc = DateTime.UtcNow.AddDays(-3) });
+            await master.SaveChangesAsync();
+        }
+
+        _me.UserId = (await MarketingUser("Mgr", CrmRole.Manager)).Id;
+        var services = new ServiceCollection().AddSingleton<IDbContextFactory<domain.Data.MasterDbContext>>(new MasterFactory(options)).BuildServiceProvider();
+        var crm = new CrmService(_db.Context, new CrmAccess(_db.Context, _me), new BcryptPasswordHasher(), services);
+
+        var all = await crm.CustomersAsync(null, null, default);
+        Assert.Equal(["Bright Abacus", "Newbie Phonics"], all.Select(c => c.Name).ToArray());   // at risk first
+        var bright = all[0];
+        Assert.Equal((CustomerHealth.AtRisk, 2083m, 80), (bright.Health, bright.MonthlyValue, bright.Students!.Value));
+        Assert.Contains("Payment overdue", bright.HealthReasons);
+        Assert.Single(await crm.CustomersAsync("newbie", null, default));
+        // The 5-day-old trial has no students or classes yet, so it's at risk rather than a plain trial.
+        Assert.Equal(2, (await crm.CustomersAsync(null, CustomerHealth.AtRisk, default)).Count);
+        Assert.Contains("Trial not set up: no students or classes yet", all[1].HealthReasons);
+
+        await crm.AddCustomerNoteAsync(paidId, "Asked about a second branch", default);
+        await crm.SaveTaskAsync(null, new SaveCrmTaskRequest { Title = "Chase invoice", DueAtUtc = DateTime.UtcNow.AddDays(1), TenantId = paidId }, default);
+        var detail = await crm.CustomerAsync(paidId, default);
+        Assert.Equal("INV-1", Assert.Single(detail.Invoices).Number);
+        Assert.Equal("Asked about a second branch", Assert.Single(detail.Notes).Text);
+        var task = Assert.Single(detail.Tasks);
+        Assert.Equal("Bright Abacus", task.CustomerName);
+        Assert.Equal("900", detail.Phone);
+    }
+
+    [Fact]
+    public async Task MyDay_SplitsTasksAndFindsDemosAndWaitingLeads()
+    {
+        var rep = await MarketingUser("Rep", CrmRole.Sales);
+        _me.UserId = rep.Id;
+        var now = DateTime.UtcNow;
+        _db.Context.PlatformDemoRequests.AddRange(
+            new PlatformDemoRequest { Id = Guid.NewGuid(), FullName = "Demo", WorkEmail = "", Phone = "1", AcademyName = "Demo Today", AssignedToUserId = rep.Id, Stage = LeadStage.DemoBooked, DemoAtUtc = now.AddMinutes(30) },
+            new PlatformDemoRequest { Id = Guid.NewGuid(), FullName = "New", WorkEmail = "", Phone = "2", AcademyName = "Waiting", Stage = LeadStage.New });
+        _db.Context.CrmTasks.AddRange(
+            new CrmTask { Id = Guid.NewGuid(), Title = "Late", DueAtUtc = now.AddDays(-2), AssignedToUserId = rep.Id },
+            new CrmTask { Id = Guid.NewGuid(), Title = "Next week", DueAtUtc = now.AddDays(3), AssignedToUserId = rep.Id },
+            new CrmTask { Id = Guid.NewGuid(), Title = "Done", DueAtUtc = now.AddDays(-1), AssignedToUserId = rep.Id, CompletedAtUtc = now });
+        await _db.Context.SaveChangesAsync();
+
+        var day = await Crm().TodayAsync(0, default);
+        Assert.Equal(["Late"], day.Overdue.Select(t => t.Title).ToArray());
+        Assert.Equal(["Next week"], day.Upcoming.Select(t => t.Title).ToArray());
+        Assert.Contains(day.WaitingForReply, l => l.AcademyName == "Waiting");
+        if (now.AddMinutes(30).Date == now.Date) Assert.Equal("Demo Today", Assert.Single(day.DemosToday).AcademyName);
+    }
+
+    [Fact]
+    public async Task Import_SplitsEvenlyBetweenOwners_AndStartsTheFollowUpPlan()
+    {
+        _me.UserId = (await MarketingUser("Mgr", CrmRole.Manager)).Id;
+        var asha = await MarketingUser("Asha", CrmRole.Sales);
+        var ravi = await MarketingUser("Ravi", CrmRole.Sales);
+        var rows = Enumerable.Range(1, 5).Select(i => new CrmLeadRow { AcademyName = $"Academy {i}", Phone = $"98000000{i:D2}" }).ToList();
+
+        var result = await Crm().ImportLeadsAsync(new ImportCrmLeadsRequest { Rows = rows, OwnerUserIds = [asha.Id, ravi.Id], FollowUpPlan = "imported" }, default);
+
+        Assert.Equal(5, result.Created);
+        var leads = await _db.Context.PlatformDemoRequests.Where(x => result.CreatedIds.Contains(x.Id)).ToListAsync();
+        Assert.Equal(3, leads.Count(x => x.AssignedToUserId == asha.Id));
+        Assert.Equal(2, leads.Count(x => x.AssignedToUserId == ravi.Id));
+        var tasks = await _db.Context.CrmTasks.Where(x => x.PlanKey == "imported").ToListAsync();
+        Assert.Equal(5 * CrmRules.Plan("imported")!.Steps.Length, tasks.Count);
+        Assert.All(tasks, t => Assert.Equal(leads.Single(l => l.Id == t.LeadId).AssignedToUserId, t.AssignedToUserId));
+        Assert.All(leads, l => Assert.NotNull(l.NextFollowUpAtUtc));
+        await Assert.ThrowsAsync<DomainValidationException>(() => Crm().ImportLeadsAsync(new ImportCrmLeadsRequest { Rows = [new() { AcademyName = "X", Phone = "9111111111" }], FollowUpPlan = "nope" }, default));
+    }
+
+    [Fact]
+    public async Task FollowUpPlan_SkipsDuplicatesAndClosedLeads_AndStopsWhenTheLeadMovesOn()
+    {
+        var rep = await MarketingUser("Rep", CrmRole.Sales);
+        _me.UserId = rep.Id;
+        var open = new PlatformDemoRequest { Id = Guid.NewGuid(), FullName = "Open", WorkEmail = "", Phone = "1", AcademyName = "Open", AssignedToUserId = rep.Id };
+        var won = new PlatformDemoRequest { Id = Guid.NewGuid(), FullName = "Won", WorkEmail = "", Phone = "2", AcademyName = "Won", AssignedToUserId = rep.Id, Stage = LeadStage.Customer };
+        _db.Context.PlatformDemoRequests.AddRange(open, won);
+        await _db.Context.SaveChangesAsync();
+
+        var first = await Crm().StartPlanAsync([open.Id, won.Id], "new-lead", default);
+        Assert.Equal(1, first.Done);
+        Assert.Contains(first.Skipped, s => s.StartsWith("Won"));
+        var again = await Crm().StartPlanAsync([open.Id], "new-lead", default);
+        Assert.Equal(0, again.Done);   // already running
+
+        var steps = await _db.Context.CrmTasks.Where(x => x.LeadId == open.Id).OrderBy(x => x.DueAtUtc).ToListAsync();
+        Assert.Equal(CrmRules.Plan("new-lead")!.Steps.Select(s => s.Type), steps.Select(s => s.Type));
+
+        // Booking the demo ends the chase: the open steps close with the reason.
+        (await _db.Context.PlatformDemoRequests.FirstAsync(x => x.Id == open.Id)).Stage = LeadStage.DemoBooked;
+        await _db.Context.SaveChangesAsync();
+        var automation = new LeadAutomationService(_db.Context, new FakeEmailSender(), new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(),
+            new ServiceCollection().BuildServiceProvider(), Microsoft.Extensions.Logging.Abstractions.NullLogger<LeadAutomationService>.Instance);
+        Assert.Equal(steps.Count, await automation.StopFinishedPlansAsync(DateTime.UtcNow, default));
+        Assert.All(await _db.Context.CrmTasks.Where(x => x.LeadId == open.Id).ToListAsync(), t =>
+        {
+            Assert.NotNull(t.CompletedAtUtc);
+            Assert.StartsWith("Stopped automatically", t.Outcome);
+        });
+    }
+
+    [Fact]
+    public async Task BulkAssign_IsForManagers_AndMovesOpenTasksWithTheLead()
+    {
+        var mgr = await MarketingUser("Mgr", CrmRole.Manager);
+        var asha = await MarketingUser("Asha", CrmRole.Sales);
+        var lead = new PlatformDemoRequest { Id = Guid.NewGuid(), FullName = "L", WorkEmail = "", Phone = "1", AcademyName = "L" };
+        _db.Context.PlatformDemoRequests.Add(lead);
+        _db.Context.CrmTasks.Add(new CrmTask { Id = Guid.NewGuid(), LeadId = lead.Id, Title = "Call", DueAtUtc = DateTime.UtcNow, AssignedToUserId = mgr.Id });
+        await _db.Context.SaveChangesAsync();
+
+        _me.UserId = asha.Id;
+        await Assert.ThrowsAsync<ForbiddenException>(() => Crm().BulkAsync(new BulkCrmLeadsRequest { LeadIds = [lead.Id], OwnerUserIds = [asha.Id] }, default));
+
+        _me.UserId = mgr.Id;
+        await Crm().BulkAsync(new BulkCrmLeadsRequest { LeadIds = [lead.Id], OwnerUserIds = [asha.Id] }, default);
+        _db.Context.ChangeTracker.Clear();
+        Assert.Equal(asha.Id, (await _db.Context.PlatformDemoRequests.FirstAsync(x => x.Id == lead.Id)).AssignedToUserId);
+        Assert.Equal(asha.Id, (await _db.Context.CrmTasks.FirstAsync(x => x.LeadId == lead.Id)).AssignedToUserId);
+    }
+
+    [Theory]
+    [InlineData("2026-11-17T02:00:00Z", 0, "2026-11-17T04:30:00Z")]   // 07:30 IST: due at 10:00 IST today
+    [InlineData("2026-11-17T10:00:00Z", 0, "2026-11-17T10:15:00Z")]   // 15:30 IST: 10:00 has passed, due in 15 min
+    [InlineData("2026-11-17T10:00:00Z", 3, "2026-11-20T04:30:00Z")]   // three days later at 10:00 IST
+    [InlineData("2026-11-17T20:00:00Z", 1, "2026-11-19T04:30:00Z")]   // 01:30 IST on the 18th: next day is the 19th
+    public void PlanStepsFallDueAtTenInTheMorningIndiaTime(string start, int day, string expected) =>
+        Assert.Equal(DateTime.Parse(expected).ToUniversalTime(), CrmRules.StepDueUtc(DateTime.Parse(start).ToUniversalTime(), day));
+
+    [Fact]
+    public async Task TasksCanOnlyGoToTeamMembers()
+    {
+        _me.UserId = (await MarketingUser("Mgr", CrmRole.Manager)).Id;
+        await Assert.ThrowsAsync<DomainValidationException>(() => Crm().SaveTaskAsync(null, new SaveCrmTaskRequest { Title = "x", DueAtUtc = DateTime.UtcNow, AssignedToUserId = Guid.NewGuid() }, default));
+    }
+
     private static readonly DateTime Now = new(2026, 11, 17, 10, 0, 0, DateTimeKind.Utc);
     private static Tenant TenantOld => new() { Name = "A", Code = "a", DatabaseName = "mt_a", Status = TenantStatus.Active, CreatedAtUtc = Now.AddDays(-200) };
 

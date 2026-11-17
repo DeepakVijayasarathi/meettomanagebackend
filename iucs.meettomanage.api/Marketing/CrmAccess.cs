@@ -43,6 +43,17 @@ public sealed class CrmAccess(MeetToManageDbContext db, ICurrentUserService curr
     public async Task<Guid?> VisibleToAsync(CancellationToken ct = default) =>
         await RoleAsync(ct) == CrmRole.Sales ? current.UserId : null;
 
+    /// <summary>Leads and tasks can only be owned by active managers and sales reps, never by viewers.</summary>
+    public async Task EnsureCanOwnAsync(Guid userId, CancellationToken ct = default)
+    {
+        if (!await CanOwnAsync(userId, ct))
+            throw new application.Common.Exceptions.DomainValidationException("Leads and tasks can only be given to an active manager or sales rep.");
+    }
+
+    public async Task<bool> CanOwnAsync(Guid userId, CancellationToken ct = default) =>
+        await db.Users.AnyAsync(x => x.Id == userId && x.Role == domain.Enums.UserRole.Marketing && x.Status == domain.Enums.UserStatus.Active, ct)
+        && !await db.CrmTeamMembers.AnyAsync(x => x.UserId == userId && x.Role == CrmRole.Viewer, ct);
+
     public static bool CanSee(Guid? visibleTo, Guid? assignedTo) => visibleTo is null || assignedTo is null || assignedTo == visibleTo;
 
     public async Task EnsureCanSeeLeadAsync(Guid leadId, CancellationToken ct = default)
@@ -71,6 +82,17 @@ public sealed class CrmLeadAccessFilter(CrmAccess access) : IAsyncActionFilter
 
         if (context.ActionArguments.TryGetValue("query", out var q) && q is MarketingLeadQuery query)
             query.VisibleToUserId = role == CrmRole.Sales ? access.UserId : null;
+
+        if (context.ActionArguments.TryGetValue("request", out var assignBody))
+        {
+            var assignee = assignBody switch
+            {
+                UpdatePlatformDemoRequestRequest u => u.AssignedToUserId,
+                BulkMarketingLeadRequest b => b.AssignedToUserId,
+                _ => null,
+            };
+            if (assignee is { } to) await access.EnsureCanOwnAsync(to, ct);
+        }
 
         if (role == CrmRole.Manager) { await next(); return; }
         if (!isRead) await access.RequireWriteAsync(ct);
