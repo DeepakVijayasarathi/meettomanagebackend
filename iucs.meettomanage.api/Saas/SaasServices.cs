@@ -22,6 +22,7 @@ public static class SaasServices
             : new ManualPlatformGateway());
         services.AddSingleton<PlatformAuditWriter>();
         services.AddSingleton<SaasUsageService>();
+        services.AddSingleton<AiTokenMeter>();
         services.AddSingleton<SaasReminderService>();
         services.AddSingleton<SaasSubscriptionService>();
         services.AddScoped<EntitlementInterceptor>();

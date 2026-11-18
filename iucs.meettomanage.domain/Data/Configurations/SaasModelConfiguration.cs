@@ -128,6 +128,17 @@ public static class SaasModelConfiguration
             e.HasIndex(x => new { x.TenantId, x.SnapshotDate }).IsUnique();
         });
 
+        modelBuilder.Entity<AiTokenUsage>(e =>
+        {
+            e.ToTable("ai_token_usage");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Month).HasMaxLength(7);
+            e.Property(x => x.Feature).HasMaxLength(40);
+            // One counter per tenant, month and feature; increments are applied in place.
+            e.HasIndex(x => new { x.TenantId, x.Month, x.Feature }).IsUnique();
+            e.HasIndex(x => x.Month);
+        });
+
         modelBuilder.Entity<SubscriptionReminderLog>(e =>
         {
             e.ToTable("subscription_reminder_log");

@@ -118,6 +118,31 @@ seed. Workers discover Active tenants within 15 seconds and stop for suspended
 tenants. Suspending a tenant rejects new requests and hub operations; it does not
 undo work that had already started.
 
+## AI usage (Hetzner)
+
+Academies and the marketing site use AI separately:
+
+- **Academies** (Mito, portal chatbot, business copilot, business brief) always run on
+  the platform key (`HetznerAi:ApiKey`, `Endpoint`, `Model`) through
+  `MeteredAiChatClient`. An endpoint or key an academy saved in its own settings is
+  ignored in tenant mode. Before each call the academy's monthly allowance is
+  checked: the plan limit `max_ai_tokens_per_month` (prompt + reply tokens per
+  calendar month, UTC). A plan without the limit is unlimited, `0` switches AI off,
+  and a used-up allowance is refused with HTTP 402 until the 1st. The check runs
+  before the call, so the last reply of a month may run a little over the limit.
+- **Marketing site** (website chat, blog drafts, marketing insights) uses
+  `HetznerAi:Marketing:*`. Each blank value falls back to the main setting, so
+  setting only `HetznerAi__Marketing__ApiKey` gives it its own key and bill.
+  `HetznerAi:Marketing:Enabled=false` switches it off without affecting academies.
+  Its usage is never counted against an academy.
+
+Every call's tokens are added to the master table `ai_token_usage` (one row per
+tenant, month and feature; marketing uses the empty GUID). Operators see it on
+**AI usage** (`/platform/ai-usage`, `GET /api/platform/ai-usage?month=yyyy-MM`).
+Academies see their own allowance in the AI settings panel
+(`GET /api/saas-billing/ai-usage`). In Jenkins, the optional credential
+`meettomanage-hetzner-ai-marketing-api-key` supplies the marketing key.
+
 ## Directory consistency
 
 User creates/updates reserve normalized aliases in master before saving business

@@ -54,8 +54,11 @@ public class HetznerMitoAssistant : IMitoAssistant
 
         var turns = new List<AiChatTurn> { new("system", system) };
         turns.AddRange(conversation.Select(x => new AiChatTurn(x.Role, x.Text.Trim())));
+        using var feature = iucs.meettomanage.application.Common.AiUsageScope.Enter(iucs.meettomanage.application.Common.AiUsageScope.Mito);
         try
         {
+            // In multi-tenant mode this is the metered client: the academy's monthly allowance applies, and an
+            // exhausted allowance surfaces as a plan-limit message rather than "try again".
             var result = await _client.CompleteAsync(_options.Endpoint, _options.ApiKey, _options.Model, turns, 700, 0.35, cancellationToken);
             var suggestions = mode switch
             {

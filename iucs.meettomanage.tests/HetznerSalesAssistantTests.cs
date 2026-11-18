@@ -174,6 +174,42 @@ public class HetznerSalesAssistantTests
         Assert.Empty(handler.Requests);
     }
 
+    [Fact]
+    public async Task Marketing_site_uses_its_own_key_and_is_metered_apart_from_academies()
+    {
+        const string withUsage = """{"choices":[{"message":{"role":"assistant","content":"Hi!"}}],"usage":{"prompt_tokens":120,"completion_tokens":30}}""";
+        var handler = new FakeHandler((HttpStatusCode.OK, withUsage));
+        using var master = new AiMasterDb();
+        var meter = master.Meter(new Dictionary<Guid, long>());
+        var options = new HetznerAiOptions
+        {
+            Enabled = true, ApiKey = "academy-key", Endpoint = "https://inference.hetzner.com/v1", Model = "primary",
+            Marketing = new() { ApiKey = "marketing-key", Model = "marketing-model" },
+        };
+        var assistant = new HetznerSalesAssistant(new FakeHttpClientFactory(handler), new FakeDemoRequests(),
+            Microsoft.Extensions.Options.Options.Create(options), NullLogger<HetznerSalesAssistant>.Instance, meter: meter);
+
+        await assistant.ReplyAsync(Conversation);
+
+        var sent = Assert.Single(handler.Requests);
+        Assert.Equal("marketing-key", sent.ApiKey);
+        Assert.Equal("https://inference.hetzner.com/v1/chat/completions", sent.Url); // blank marketing endpoint uses the main one
+        using (var payload = JsonDocument.Parse(sent.Body)) Assert.Equal("marketing-model", payload.RootElement.GetProperty("model").GetString());
+        var row = Assert.Single(await meter.MonthAsync(iucs.meettomanage.api.Saas.AiTokenMeter.MonthOf(DateTime.UtcNow)));
+        Assert.Equal((domain.Entities.Saas.AiTokenUsage.MarketingTenantId, "site-chat", 120L, 30L), (row.TenantId, row.Feature, row.PromptTokens, row.CompletionTokens));
+    }
+
+    [Fact]
+    public void Marketing_options_fall_back_to_the_main_settings_and_can_be_switched_off_alone()
+    {
+        var main = new HetznerAiOptions { Enabled = true, ApiKey = "k", Endpoint = "https://e/v1", Model = "m", FallbackModel = "f" };
+        var marketing = main.ForMarketing();
+        Assert.Equal(("k", "https://e/v1", "m", "f", true), (marketing.ApiKey, marketing.Endpoint, marketing.Model, marketing.FallbackModel, marketing.IsConfigured));
+        main.Marketing.Enabled = false;
+        Assert.False(main.ForMarketing().IsConfigured);
+        Assert.True(main.IsConfigured); // academies keep AI
+    }
+
     private static HetznerSalesAssistant Create(FakeHandler handler, HetznerAiOptions options) =>
         new(new FakeHttpClientFactory(handler), new FakeDemoRequests(), Microsoft.Extensions.Options.Options.Create(options), NullLogger<HetznerSalesAssistant>.Instance);
 

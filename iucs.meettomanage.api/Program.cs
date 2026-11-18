@@ -126,7 +126,14 @@ builder.Services.AddHttpClient(HetznerSalesAssistant.LongClient, client => clien
 builder.Services.AddScoped<ISalesAssistant, HetznerSalesAssistant>();
 builder.Services.AddScoped<IMitoAssistant, HetznerMitoAssistant>();
 builder.Services.AddHttpClient(nameof(OllamaChatClient), client => client.Timeout = TimeSpan.FromSeconds(45));
-builder.Services.AddScoped<IAiChatClient, OllamaChatClient>();
+// Multi-tenant: academies' AI always runs on the platform key, metered per academy against its plan's monthly
+// token allowance. Single-client installs keep calling the endpoint and key saved in their own settings.
+if (tenantMode)
+{
+    builder.Services.AddScoped<OllamaChatClient>();
+    builder.Services.AddScoped<IAiChatClient, iucs.meettomanage.api.Services.MeteredAiChatClient>();
+}
+else builder.Services.AddScoped<IAiChatClient, OllamaChatClient>();
 // S3-compatible object storage (Hetzner Object Storage) everywhere — dev and prod both, so
 // an upload made locally behaves identically to one made against the real deployment instead
 // of silently depending on which environment you're in. Configured via Storage:S3:* (real

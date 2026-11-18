@@ -95,7 +95,8 @@ public sealed class SaasNamingTests
         Assert.Contains("tenant_subscription", checkedTables);
         Assert.Contains("plan_price", checkedTables);
         Assert.Contains("platform_setting", checkedTables);
-        Assert.Equal(16, checkedTables.Count);
+        Assert.Contains("ai_token_usage", checkedTables);
+        Assert.Equal(17, checkedTables.Count);
     }
 
     [Fact]

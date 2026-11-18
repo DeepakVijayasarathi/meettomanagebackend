@@ -22,6 +22,58 @@ namespace iucs.meettomanage.domain.Migrations.Master
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("iucs.meettomanage.domain.Entities.Saas.AiTokenUsage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<long>("CompletionTokens")
+                        .HasColumnType("bigint")
+                        .HasColumnName("completion_tokens");
+
+                    b.Property<string>("Feature")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("feature");
+
+                    b.Property<string>("Month")
+                        .IsRequired()
+                        .HasMaxLength(7)
+                        .HasColumnType("character varying(7)")
+                        .HasColumnName("month");
+
+                    b.Property<long>("PromptTokens")
+                        .HasColumnType("bigint")
+                        .HasColumnName("prompt_tokens");
+
+                    b.Property<long>("Requests")
+                        .HasColumnType("bigint")
+                        .HasColumnName("requests");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("tenant_id");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at_utc");
+
+                    b.HasKey("Id")
+                        .HasName("pk_ai_token_usage");
+
+                    b.HasIndex("Month")
+                        .HasDatabaseName("ix_ai_token_usage_month");
+
+                    b.HasIndex("TenantId", "Month", "Feature")
+                        .IsUnique()
+                        .HasDatabaseName("ux_ai_token_usage_tenant_id_month_feature");
+
+                    b.ToTable("ai_token_usage", (string)null);
+                });
+
             modelBuilder.Entity("iucs.meettomanage.domain.Entities.Saas.Plan", b =>
                 {
                     b.Property<Guid>("Id")

@@ -77,6 +77,7 @@ services:
       Storage__S3__BucketName: ${STORAGE_S3_BUCKET_NAME:-}
       Storage__LocalPath: /app/uploads
       HetznerAi__ApiKey: ${HETZNER_AI_API_KEY:-}
+      HetznerAi__Marketing__ApiKey: ${HETZNER_AI_MARKETING_API_KEY:-}
     volumes:
       - reader_nest_uploads:/app/uploads
     ports:

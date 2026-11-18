@@ -16,6 +16,8 @@ public static class EntitlementKeys
     public const string MaxSessionsPerMonth = "max_sessions_per_month";
     public const string MaxRecordingsPerMonth = "max_recordings_per_month";
     public const string RecordingRetentionDays = "recording_retention_days";
+    /// <summary>AI tokens (prompt + reply) an academy may use on the platform's AI key each calendar month.</summary>
+    public const string MaxAiTokensPerMonth = "max_ai_tokens_per_month";
 
     // Features (Bool, 0/1).
     public const string WhiteLabel = "feature_white_label";
@@ -42,6 +44,7 @@ public static class EntitlementKeys
         new(MaxSessionsPerMonth, "Sessions per month", EntitlementValueType.Number, "sessions"),
         new(MaxRecordingsPerMonth, "Recordings per month", EntitlementValueType.Number, "recordings"),
         new(RecordingRetentionDays, "Recording retention", EntitlementValueType.Number, "days"),
+        new(MaxAiTokensPerMonth, "AI tokens per month (Mito, chatbot, copilot)", EntitlementValueType.Number, "tokens"),
         new(WhiteLabel, "White-label branding", EntitlementValueType.Bool, ""),
         new(ApiAccess, "API & webhook access", EntitlementValueType.Bool, ""),
         new(Whatsapp, "WhatsApp / SMS notifications", EntitlementValueType.Bool, ""),

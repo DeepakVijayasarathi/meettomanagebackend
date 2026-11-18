@@ -25,6 +25,7 @@ public sealed class MasterDbContext(DbContextOptions<MasterDbContext> options) :
     public DbSet<PlatformWebhookEvent> PlatformWebhookEvents => Set<PlatformWebhookEvent>();
     public DbSet<TenantBillingProfile> TenantBillingProfiles => Set<TenantBillingProfile>();
     public DbSet<TenantUsageSnapshot> TenantUsageSnapshots => Set<TenantUsageSnapshot>();
+    public DbSet<AiTokenUsage> AiTokenUsage => Set<AiTokenUsage>();
     public DbSet<SubscriptionReminderLog> SubscriptionReminderLogs => Set<SubscriptionReminderLog>();
     public DbSet<PlatformEmailTemplate> PlatformEmailTemplates => Set<PlatformEmailTemplate>();
     public DbSet<PlatformAuditLog> PlatformAuditLogs => Set<PlatformAuditLog>();

@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Exceptions;
 using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Common.Options;
@@ -194,14 +195,20 @@ namespace iucs.meettomanage.api.Services
             IPlatformDemoRequestService demoRequests,
             IOptions<HetznerAiOptions> options,
             ILogger<HetznerSalesAssistant> logger,
-            MasterDbContext? master = null)
+            MasterDbContext? master = null,
+            AiTokenMeter? meter = null)
         {
             _httpClientFactory = httpClientFactory;
             _demoRequests = demoRequests;
-            _options = options.Value;
+            // The marketing site runs on its own HetznerAi:Marketing settings (each blank value falls back to the
+            // main one) and is metered apart from every academy.
+            _options = options.Value.ForMarketing();
             _logger = logger;
             _master = master;
+            _meter = meter;
         }
+
+        private readonly AiTokenMeter? _meter;
 
         /// <summary>
         /// The pricing the assistant may quote, read from the same plans table that billing and the /pricing
@@ -275,6 +282,7 @@ namespace iucs.meettomanage.api.Services
             {
                 throw new ExternalServiceException("The chat assistant isn't available right now. Please reach us on WhatsApp or email instead.");
             }
+            using var feature = AiUsageScope.Enter(AiUsageScope.SiteChat);
 
             var messages = new JsonArray
             {
@@ -1078,6 +1086,25 @@ namespace iucs.meettomanage.api.Services
         /// <summary>Named HTTP client with a longer timeout, for full article drafts.</summary>
         public const string LongClient = nameof(HetznerSalesAssistant) + ".Long";
 
+        /// <summary>Counts the call's tokens under the marketing site, never under an academy.</summary>
+        private async Task RecordUsageAsync(string body)
+        {
+            if (_meter is null) return;
+            long prompt = 0, completion = 0;
+            try
+            {
+                using var json = System.Text.Json.JsonDocument.Parse(body);
+                if (json.RootElement.TryGetProperty("usage", out var usage))
+                {
+                    if (usage.TryGetProperty("prompt_tokens", out var p) && p.TryGetInt64(out var pv)) prompt = pv;
+                    if (usage.TryGetProperty("completion_tokens", out var c) && c.TryGetInt64(out var cv)) completion = cv;
+                }
+            }
+            catch (System.Text.Json.JsonException) { }
+            var feature = AiUsageScope.Current == AiUsageScope.Other ? AiUsageScope.MarketingTools : AiUsageScope.Current;
+            await _meter.RecordAsync(AiTokenUsage.MarketingTenantId, feature, prompt, completion);
+        }
+
         private async Task<(int Status, string Body)> SendAsync(string model, string payload, CancellationToken cancellationToken, string? clientName = null)
         {
             var client = _httpClientFactory.CreateClient(clientName ?? nameof(HetznerSalesAssistant));
@@ -1090,7 +1117,9 @@ namespace iucs.meettomanage.api.Services
             try
             {
                 using var response = await client.SendAsync(request, cancellationToken);
-                return ((int)response.StatusCode, await response.Content.ReadAsStringAsync(cancellationToken));
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (response.IsSuccessStatusCode) await RecordUsageAsync(body);
+                return ((int)response.StatusCode, body);
             }
             catch (Exception ex) when (ex is HttpRequestException || (ex is TaskCanceledException && !cancellationToken.IsCancellationRequested))
             {

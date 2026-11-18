@@ -21,6 +21,27 @@ namespace iucs.meettomanage.application.Common.Options
         public string DefaultSystemPrompt { get; set; } = string.Empty;
         /// <summary>Optional rewrite applied to every outgoing endpoint (e.g. a provider URL migration).</summary>
         public EndpointRewriteOptions EndpointRewrite { get; set; } = new();
+        /// <summary>
+        /// The platform marketing site's own provider settings (section HetznerAi:Marketing). Each blank value falls
+        /// back to the main setting, so the marketing site can run on a separate key without repeating the rest.
+        /// </summary>
+        public MarketingAiOptions Marketing { get; set; } = new();
+
+        /// <summary>Settings for the marketing site: its own values where set, otherwise the main ones.</summary>
+        public HetznerAiOptions ForMarketing()
+        {
+            static string Pick(string own, string main) => string.IsNullOrWhiteSpace(own) ? main : own.Trim();
+            return new HetznerAiOptions
+            {
+                Enabled = Enabled && Marketing.Enabled,
+                ApiKey = Pick(Marketing.ApiKey, ApiKey),
+                Endpoint = Pick(Marketing.Endpoint, Endpoint),
+                Model = Pick(Marketing.Model, Model),
+                FallbackModel = Pick(Marketing.FallbackModel, FallbackModel),
+                DefaultSystemPrompt = DefaultSystemPrompt,
+                EndpointRewrite = EndpointRewrite,
+            };
+        }
 
         /// <summary>True only when enabled and the endpoint, model and key are all configured.</summary>
         public bool IsConfigured => Enabled
@@ -36,6 +57,17 @@ namespace iucs.meettomanage.application.Common.Options
             if (!rewrite.Enabled || string.IsNullOrWhiteSpace(rewrite.From) || string.IsNullOrWhiteSpace(rewrite.To)) return value;
             return value.Replace(rewrite.From.Trim(), rewrite.To.Trim(), StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    public class MarketingAiOptions
+    {
+        /// <summary>Switches the marketing site's assistants off without affecting academies.</summary>
+        public bool Enabled { get; set; } = true;
+        /// <summary>Never committed: HetznerAi__Marketing__ApiKey in production.</summary>
+        public string ApiKey { get; set; } = string.Empty;
+        public string Endpoint { get; set; } = string.Empty;
+        public string Model { get; set; } = string.Empty;
+        public string FallbackModel { get; set; } = string.Empty;
     }
 
     public class EndpointRewriteOptions

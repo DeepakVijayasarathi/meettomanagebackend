@@ -105,6 +105,14 @@ pipeline {
               } catch (err) {
                   echo "WARNING: credential 'meettomanage-hetzner-ai-api-key' not found -- deploying without the chat assistant."
               }
+              // A separate key for the marketing site's AI keeps its usage and bill apart from academies'.
+              // Optional: without it the marketing site uses the main key (still metered separately).
+              try {
+                  withCredentials([string(credentialsId: 'meettomanage-hetzner-ai-marketing-api-key', variable: 'HETZNER_AI_MARKETING_PROBE')]) {}
+                  optionalCredentials << string(credentialsId: 'meettomanage-hetzner-ai-marketing-api-key', variable: 'HETZNER_AI_MARKETING_API_KEY')
+              } catch (err) {
+                  echo "INFO: credential 'meettomanage-hetzner-ai-marketing-api-key' not found -- the marketing site uses the main AI key."
+              }
               // Resend (HTTP email API) is optional too: without it, mail still goes through each
               // academy's own SMTP settings, and is only logged where none are set.
               try {
@@ -154,6 +162,7 @@ pipeline {
                       -e Storage__S3__BucketName="${STORAGE_S3_BUCKET_NAME}" \
                       -e Monitoring__Servers__0__SshPassword="\${SSH_PASS_0}" \
                       -e HetznerAi__ApiKey="\${HETZNER_AI_API_KEY:-}" \
+                      -e HetznerAi__Marketing__ApiKey="\${HETZNER_AI_MARKETING_API_KEY:-}" \
                       -e Resend__ApiKey="\${RESEND_API_KEY:-}" \
                       -e Resend__From="Meet to Manage <notifications@meettomanage.cloud>" \
                       -e Marketing__LeadAlertEmail="deepanvijayasarathi32@gmail.com" \

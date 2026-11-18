@@ -102,7 +102,7 @@ namespace iucs.meettomanage.application.Services
         public async Task<AiModelListDto> ListAiModelsAsync(CancellationToken cancellationToken = default)
         {
             var values = await AiSettingsAsync(cancellationToken);
-            var endpoint = Val(values, AiEndpointKey);
+            var endpoint = Endpoint(values);
             if (string.IsNullOrWhiteSpace(endpoint)) throw new DomainValidationException("Save the AI endpoint first.");
             string? key = null;
             if (values.TryGetValue(AiApiKeyKey, out var encrypted) && !string.IsNullOrWhiteSpace(encrypted)) key = _secretVault.TryReveal(encrypted);
@@ -182,9 +182,12 @@ namespace iucs.meettomanage.application.Services
             // Generating an AI briefing there as well would make every Copilot question wait
             // for two sequential provider completions, even though the first answer is thrown
             // away. Skip that redundant call for the Copilot path.
-            var ai = includeAiSummary
-                ? await AskAiAsync(prompt, Array.Empty<ChatMessage>(), requireEnabled: true, cancellationToken)
-                : null;
+            string? ai = null;
+            if (includeAiSummary)
+            {
+                using var feature = AiUsageScope.Enter(AiUsageScope.BusinessBrief);
+                ai = await AskAiAsync(prompt, Array.Empty<ChatMessage>(), requireEnabled: true, cancellationToken);
+            }
             return new BusinessAiBriefDto { ExecutiveSummary = ai ?? fallback, AiPowered = ai is not null, GeneratedAtUtc = DateTime.UtcNow, CostSnapshot = costSnapshot, StudentProgressInsights = insights, RecentClassSummaries = classSummaries };
         }
 
@@ -305,11 +308,12 @@ namespace iucs.meettomanage.application.Services
             if (values.TryGetValue(AiApiKeyKey, out var encrypted) && !string.IsNullOrWhiteSpace(encrypted)) key = _secretVault.TryReveal(encrypted);
             string? answer = null;
             var aiPowered = false;
-            if (Bool(values, AiEnabledKey) && !string.IsNullOrWhiteSpace(Val(values, AiEndpointKey)))
+            if (Bool(values, AiEnabledKey) && !string.IsNullOrWhiteSpace(Endpoint(values)))
             {
                 try
                 {
-                    var completion = await _aiChatClient.CompleteAsync(Val(values, AiEndpointKey), key, Val(values, AiModelKey, _aiDefaults.Model), turns, Int(values, AiMaxTokensKey, 500, 1, 2000), Double(values, AiTemperatureKey, 0.3, 0, 2), cancellationToken);
+                    using var feature = AiUsageScope.Enter(AiUsageScope.Copilot);
+                    var completion = await _aiChatClient.CompleteAsync(Endpoint(values), key, Val(values, AiModelKey, _aiDefaults.Model), turns, Int(values, AiMaxTokensKey, 500, 1, 2000), Double(values, AiTemperatureKey, 0.3, 0, 2), cancellationToken);
                     answer = completion.Content;
                     aiPowered = true;
                     await RecordAiUsageAsync(completion, succeeded: true, cancellationToken);
@@ -454,7 +458,9 @@ namespace iucs.meettomanage.application.Services
         private async Task<string?> AskAiAsync(string question, IReadOnlyList<ChatMessage> history, bool requireEnabled, CancellationToken cancellationToken)
         {
             var values = await AiSettingsAsync(cancellationToken);
-            if ((requireEnabled && !Bool(values, AiEnabledKey)) || string.IsNullOrWhiteSpace(Val(values, AiEndpointKey))) return null;
+            if ((requireEnabled && !Bool(values, AiEnabledKey)) || string.IsNullOrWhiteSpace(Endpoint(values))) return null;
+            // The business brief tags itself; anything else asked here is the portal chatbot.
+            using var feature = AiUsageScope.Current == AiUsageScope.Other ? AiUsageScope.Enter(AiUsageScope.Chatbot) : null;
             var turns = new List<AiChatTurn> { new("system", Val(values, AiSystemPromptKey, _aiDefaults.DefaultSystemPrompt)) };
             turns.AddRange(history.Select(m => new AiChatTurn(m.Sender == ChatMessageSender.User ? "user" : "assistant", m.Text)));
             turns.Add(new AiChatTurn("user", question));
@@ -462,7 +468,7 @@ namespace iucs.meettomanage.application.Services
             if (values.TryGetValue(AiApiKeyKey, out var encrypted) && !string.IsNullOrWhiteSpace(encrypted)) key = _secretVault.TryReveal(encrypted);
             try
             {
-                var completion = await _aiChatClient.CompleteAsync(Val(values, AiEndpointKey), key, Val(values, AiModelKey, _aiDefaults.Model), turns,
+                var completion = await _aiChatClient.CompleteAsync(Endpoint(values), key, Val(values, AiModelKey, _aiDefaults.Model), turns,
                     Int(values, AiMaxTokensKey, 500, 1, 2000), Double(values, AiTemperatureKey, 0.3, 0, 2), cancellationToken);
                 await RecordAiUsageAsync(completion, succeeded: true, cancellationToken);
                 return completion.Content;
@@ -539,6 +545,11 @@ namespace iucs.meettomanage.application.Services
             if (r.InputCostPerMillionTokensUsd < 0 || r.OutputCostPerMillionTokensUsd < 0 || r.MonthlyBudgetUsd < 0)
                 throw new DomainValidationException("AI prices and monthly budget cannot be negative.");
         }
+        /// <summary>
+        /// The saved endpoint, else the configured default. In multi-tenant mode the metered platform client ignores
+        /// it and always uses the platform's own provider, so an academy only has to switch AI on.
+        /// </summary>
+        private string Endpoint(Dictionary<string, string?> values) => Val(values, AiEndpointKey, _aiDefaults.Endpoint);
         private static string Val(Dictionary<string, string?> v, string k, string fallback = "") => v.TryGetValue(k, out var x) && !string.IsNullOrWhiteSpace(x) ? x : fallback;
         private static bool Bool(Dictionary<string, string?> v, string k) => bool.TryParse(Val(v, k), out var x) && x;
         private static int Int(Dictionary<string, string?> v, string k, int fallback, int min, int max) => int.TryParse(Val(v, k), out var x) ? Math.Clamp(x, min, max) : fallback;

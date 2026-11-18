@@ -444,6 +444,57 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
 
     // ------------------------------------------------------------------ revenue
 
+    /// <summary>
+    /// Tokens used on the platform AI key in one month: each academy against its plan allowance, and the marketing
+    /// site on its own line. Academies with no usage are listed too, so limits can be checked in one place.
+    /// </summary>
+    [HttpGet("ai-usage")]
+    public async Task<IActionResult> AiUsage([FromQuery] string? month, [FromServices] AiTokenMeter meter, CancellationToken ct)
+    {
+        month = string.IsNullOrWhiteSpace(month) ? AiTokenMeter.MonthOf(DateTime.UtcNow) : month.Trim();
+        if (!AiTokenMeter.IsValidMonth(month)) throw new DomainValidationException("Use a month in the form yyyy-MM.");
+        var rows = await meter.MonthAsync(month, ct);
+        static object Features(IEnumerable<domain.Entities.Saas.AiTokenUsage> items) => items.OrderBy(x => x.Feature)
+            .Select(x => new { x.Feature, x.Requests, x.PromptTokens, x.CompletionTokens, totalTokens = x.PromptTokens + x.CompletionTokens });
+
+        var marketing = rows.Where(x => x.TenantId == domain.Entities.Saas.AiTokenUsage.MarketingTenantId).ToList();
+        var byTenant = rows.Where(x => x.TenantId != domain.Entities.Saas.AiTokenUsage.MarketingTenantId).GroupBy(x => x.TenantId).ToDictionary(g => g.Key, g => g.ToList());
+        var tenants = await master.Tenants.AsNoTracking().Where(x => x.Status != TenantStatus.Failed).OrderBy(x => x.Name).ToListAsync(ct);
+        var plans = await master.TenantSubscriptions.AsNoTracking().Include(x => x.Plan)
+            .ToDictionaryAsync(x => x.TenantId, x => x.Plan.Name, ct);
+
+        var list = new List<object>();
+        foreach (var t in tenants)
+        {
+            var items = byTenant.GetValueOrDefault(t.Id) ?? [];
+            var used = items.Sum(x => x.PromptTokens + x.CompletionTokens);
+            var limit = (await entitlements.GetAsync(t.Id, ct)).Limit(EntitlementKeys.MaxAiTokensPerMonth);
+            list.Add(new
+            {
+                tenantId = t.Id, t.Code, t.Name, status = t.Status.ToString(), plan = plans.GetValueOrDefault(t.Id),
+                requests = items.Sum(x => x.Requests), usedTokens = used,
+                limit = limit == EntitlementKeys.Unlimited ? (long?)null : limit,
+                percentUsed = limit is > 0 ? Math.Round(used * 100m / limit, 1) : (decimal?)null,
+                features = Features(items),
+            });
+        }
+        // Usage left by a deleted tenant still cost money; keep it visible.
+        var unknown = byTenant.Keys.Except(tenants.Select(x => x.Id)).ToList();
+        return Ok(new
+        {
+            month,
+            tenantTotalTokens = byTenant.Values.SelectMany(x => x).Sum(x => x.PromptTokens + x.CompletionTokens),
+            marketing = new
+            {
+                requests = marketing.Sum(x => x.Requests),
+                usedTokens = marketing.Sum(x => x.PromptTokens + x.CompletionTokens),
+                features = Features(marketing),
+            },
+            tenants = list,
+            removedTenantTokens = unknown.Sum(id => byTenant[id].Sum(x => x.PromptTokens + x.CompletionTokens)),
+        });
+    }
+
     [HttpGet("revenue")]
     public async Task<IActionResult> Revenue(CancellationToken ct)
     {

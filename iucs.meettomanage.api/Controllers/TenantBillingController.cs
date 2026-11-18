@@ -23,6 +23,21 @@ public sealed class TenantBillingController(MasterDbContext master, TenantContex
 {
     private Guid TenantId => tenant.TenantId ?? throw new ForbiddenException("A tenant-bound session is required.");
 
+    /// <summary>This academy's AI allowance on the platform key this month, and what used it.</summary>
+    [HttpGet("ai-usage")]
+    public async Task<IActionResult> AiUsage([FromServices] AiTokenMeter meter, CancellationToken ct)
+    {
+        var allowance = await meter.AllowanceAsync(TenantId, ct);
+        var features = await meter.FeaturesAsync(TenantId, allowance.Month, ct);
+        return Ok(new
+        {
+            allowance.Month, allowance.UsedTokens,
+            limit = allowance.Unlimited ? (long?)null : allowance.Limit,
+            allowance.Remaining, allowance.Exhausted,
+            features = features.Select(x => new { x.Feature, x.Requests, x.TotalTokens }),
+        });
+    }
+
     [HttpGet("status")]
     public async Task<IActionResult> Status(CancellationToken ct)
     {
