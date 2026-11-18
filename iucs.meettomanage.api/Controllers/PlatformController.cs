@@ -30,7 +30,7 @@ public sealed class PlatformController(IConfiguration configuration, IPasswordHa
         var tenant = await master.Tenants.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, ct)
             ?? throw new NotFoundException("Tenant", id);
         if (tenant.Status != TenantStatus.Suspended)
-            throw new ConflictException("Suspend the client before synchronizing imported users.");
+            throw new ConflictException("Suspend the tenant before synchronizing imported users.");
         using var scope = scopes.CreateScope(tenant);
         var skippedPhones = await scope.ServiceProvider.GetRequiredService<LoginDirectory>().RebuildAsync(ct);
         return Ok(new { skippedPhones });

@@ -424,3 +424,20 @@ public sealed class CrmTests : IDisposable
     [InlineData("12345", "12345")]
     public void PhoneKeyComparesTheLastTenDigits(string phone, string key) => Assert.Equal(key, CrmRules.PhoneKey(phone));
 }
+
+public sealed class PlanPriceRuleTests
+{
+    [Fact]
+    public void OnlyOnePriceOnSalePerPeriodAndCurrency()
+    {
+        var current = new PlanPrice { BillingInterval = BillingInterval.Month, Amount = 5999, IsActive = true };
+        var retired = new PlanPrice { BillingInterval = BillingInterval.Month, Amount = 7999, IsActive = false };
+        var yearly = new PlanPrice { BillingInterval = BillingInterval.Year, Amount = 59990, IsActive = true };
+        var usd = new PlanPrice { BillingInterval = BillingInterval.Month, Currency = "USD", Amount = 79, IsActive = true };
+        iucs.meettomanage.api.Controllers.PlatformSaasController.EnsureOneActivePricePerPeriod([current, retired, yearly, usd, current]); // duplicates are fine
+
+        retired.IsActive = true; // someone re-ticks the old price while the current one is still on sale
+        var ex = Assert.Throws<DomainValidationException>(() => iucs.meettomanage.api.Controllers.PlatformSaasController.EnsureOneActivePricePerPeriod([current, retired, yearly]));
+        Assert.Contains("monthly INR", ex.Message);
+    }
+}

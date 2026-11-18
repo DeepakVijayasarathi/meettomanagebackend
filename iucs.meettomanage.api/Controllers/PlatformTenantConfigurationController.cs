@@ -87,19 +87,25 @@ public sealed class PlatformTenantConfigurationController(MasterDbContext master
     /// count. Credentials are never selected. The Marketing role belongs to the platform owner, not the
     /// academy, so it is excluded just as the tenant's own portals exclude it.
     /// </summary>
+    private const int MaxListedUsers = 5000;
+
     [HttpGet("users")]
     public async Task<IActionResult> Users(Guid tenantId, CancellationToken ct) =>
         Ok(await InTenant(tenantId, async sp =>
         {
             var db = sp.GetRequiredService<MeetToManageDbContext>();
-            var rows = await db.Users.AsNoTracking().Where(x => x.Role != domain.Enums.UserRole.Marketing)
-                .OrderBy(x => x.FirstName).ThenBy(x => x.LastName).Take(5000)
+            var people = db.Users.AsNoTracking().Where(x => x.Role != domain.Enums.UserRole.Marketing);
+            // Counts come from the database, so they stay right even when the list below is capped.
+            var counts = await people.GroupBy(x => x.Role).Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.Count, ct);
+            var rows = await people.OrderBy(x => x.FirstName).ThenBy(x => x.LastName).Take(MaxListedUsers)
                 .Select(x => new { x.Id, x.FirstName, x.LastName, x.Email, Role = x.Role.ToString(), Status = x.Status.ToString() })
                 .ToListAsync(ct);
             return new
             {
                 roles = Enum.GetValues<domain.Enums.UserRole>().Where(r => r != domain.Enums.UserRole.Marketing)
-                    .Select(r => new { role = r.ToString(), count = rows.Count(u => u.Role == r.ToString()) }),
+                    .Select(r => new { role = r.ToString(), count = counts.GetValueOrDefault(r) }),
+                total = counts.Values.Sum(),
+                truncated = counts.Values.Sum() > rows.Count,
                 users = rows.Select(x => new { x.Id, username = $"{x.FirstName} {x.LastName}".Trim(), x.Email, x.Role, x.Status }),
             };
         }, ct));

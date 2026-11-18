@@ -206,22 +206,25 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
         plan.IsPublic = request.IsPublic; plan.IsActive = request.IsActive; plan.TrialDays = request.TrialDays;
         plan.SortOrder = request.SortOrder; plan.UpdatedAtUtc = DateTime.UtcNow;
 
+        var added = new List<PlanPrice>();
         foreach (var input in request.Prices)
         {
             var existing = input.Id is { } priceId ? plan.Prices.SingleOrDefault(x => x.Id == priceId) : null;
             if (existing is null)
             {
                 if (input.Id is not null) throw new DomainValidationException("Unknown price.");
-                AddPrice(plan, new PlanPrice { BillingInterval = input.BillingInterval, Currency = input.Currency.ToUpperInvariant(), Amount = input.Amount, IsActive = input.IsActive, GatewayPlanRef = input.GatewayPlanRef });
+                added.Add(AddPrice(plan, new PlanPrice { BillingInterval = input.BillingInterval, Currency = input.Currency.ToUpperInvariant(), Amount = input.Amount, IsActive = input.IsActive, GatewayPlanRef = input.GatewayPlanRef }));
             }
             else if (existing.Amount != input.Amount || existing.BillingInterval != input.BillingInterval)
             {
                 // Grandfathering: subscribers keep the old price row; new buyers get a new one.
                 existing.IsActive = false;
-                AddPrice(plan, new PlanPrice { BillingInterval = input.BillingInterval, Currency = input.Currency.ToUpperInvariant(), Amount = input.Amount, IsActive = input.IsActive, GatewayPlanRef = input.GatewayPlanRef });
+                added.Add(AddPrice(plan, new PlanPrice { BillingInterval = input.BillingInterval, Currency = input.Currency.ToUpperInvariant(), Amount = input.Amount, IsActive = input.IsActive, GatewayPlanRef = input.GatewayPlanRef }));
             }
             else { existing.IsActive = input.IsActive; existing.GatewayPlanRef = input.GatewayPlanRef; }
         }
+        // EF usually fixes new rows up into plan.Prices as well; the check de-duplicates.
+        EnsureOneActivePricePerPeriod(plan.Prices.Concat(added));
 
         var keys = new HashSet<string>();
         foreach (var input in request.Entitlements)
@@ -241,10 +244,22 @@ public sealed class PlatformSaasController(MasterDbContext master, SaasSubscript
     /// New children get client-generated GUID keys, so adding them only to the parent's collection would make EF
     /// treat them as updates of existing rows. Adding through the DbSet marks them as inserts.
     /// </summary>
-    private void AddPrice(Plan plan, PlanPrice price)
+    /// <summary>
+    /// Checkout and the pricing page take "the" active price for a period and currency, so a plan may have at most
+    /// one on sale for each; re-ticking a retired price while another is on sale is refused.
+    /// </summary>
+    internal static void EnsureOneActivePricePerPeriod(IEnumerable<PlanPrice> prices)
+    {
+        var clash = prices.Distinct().Where(x => x.IsActive).GroupBy(x => (x.BillingInterval, x.Currency)).FirstOrDefault(g => g.Count() > 1);
+        if (clash is not null)
+            throw new DomainValidationException($"Only one {(clash.Key.BillingInterval == BillingInterval.Year ? "yearly" : "monthly")} {clash.Key.Currency} price can be on sale at a time. Untick the other one first.");
+    }
+
+    private PlanPrice AddPrice(Plan plan, PlanPrice price)
     {
         price.PlanId = plan.Id;
         master.PlanPrices.Add(price);
+        return price;
     }
 
     private static object PlanView(Plan p, int subscribers) => new

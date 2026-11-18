@@ -69,7 +69,7 @@ public sealed class TenantRequestMiddleware(RequestDelegate next)
         else if (http.User.Identity?.IsAuthenticated == true)
             throw new ForbiddenException("A tenant-bound session is required.");
         else
-            throw new DomainValidationException("Open this page using the client's /t/{tenantCode} URL.");
+            throw new DomainValidationException("Open this page using the tenant's /t/{tenantCode} URL.");
     }
 
     private static bool IsMarketingSiteApi(string path) =>
