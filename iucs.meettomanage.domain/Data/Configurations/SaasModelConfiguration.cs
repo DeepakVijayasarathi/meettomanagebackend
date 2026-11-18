@@ -79,6 +79,9 @@ public static class SaasModelConfiguration
             e.Property(x => x.Subtotal).HasPrecision(12, 2);
             e.Property(x => x.TaxRatePercent).HasPrecision(5, 2);
             e.Property(x => x.TaxAmount).HasPrecision(12, 2);
+            e.Property(x => x.CgstAmount).HasPrecision(12, 2);
+            e.Property(x => x.SgstAmount).HasPrecision(12, 2);
+            e.Property(x => x.IgstAmount).HasPrecision(12, 2);
             e.Property(x => x.Total).HasPrecision(12, 2);
             e.HasIndex(x => x.InvoiceNumber).IsUnique();
             e.HasIndex(x => new { x.TenantId, x.IssuedAtUtc });

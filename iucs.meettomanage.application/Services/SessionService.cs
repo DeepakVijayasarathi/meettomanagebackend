@@ -1780,6 +1780,7 @@ namespace iucs.meettomanage.application.Services
                             $"Can't apply this time — the teacher already has a session from " +
                             $"{DateTimeDisplay.ToLocal(conflict.ScheduledStartAtUtc)} to {DateTimeDisplay.ToLocal(conflict.ScheduledEndAtUtc)}.");
                     }
+                    await EnsureTeacherNotOnLeaveAsync(targetTeacherProfileId, newStart, newEnd, cancellationToken);
                 }
 
                 foreach (var session in remainingSessions)
@@ -1850,6 +1851,7 @@ namespace iucs.meettomanage.application.Services
                             $"Can't apply this schedule — the teacher already has a session from " +
                             $"{DateTimeDisplay.ToLocal(conflict.ScheduledStartAtUtc)} to {DateTimeDisplay.ToLocal(conflict.ScheduledEndAtUtc)}.");
                     }
+                    await EnsureTeacherNotOnLeaveAsync(targetTeacherProfileId, startUtc, endUtc, cancellationToken);
                 }
 
                 foreach (var session in remainingSessions)
@@ -2022,6 +2024,13 @@ namespace iucs.meettomanage.application.Services
                     $"The teacher already has a session from {DateTimeDisplay.ToLocal(conflict.ScheduledStartAtUtc)} to {DateTimeDisplay.ToLocal(conflict.ScheduledEndAtUtc)}.");
             }
 
+            await EnsureTeacherNotOnLeaveAsync(teacherProfileId, startUtc, endUtc, cancellationToken);
+        }
+
+        /// <summary>Blocks a slot inside an approved leave window (also used by bulk schedule edits).</summary>
+        private async Task EnsureTeacherNotOnLeaveAsync(
+            Guid teacherProfileId, DateTime startUtc, DateTime endUtc, CancellationToken cancellationToken)
+        {
             var onLeave = await _unitOfWork.Repository<LeaveRequest>().ExistsAsync(
                 l => l.TeacherProfileId == teacherProfileId
                      && l.Status == LeaveStatus.Approved

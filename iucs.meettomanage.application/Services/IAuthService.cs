@@ -59,5 +59,13 @@ namespace iucs.meettomanage.application.Services
 
         /// <summary>The signed-in user sets a new PIN after confirming their current one (any role, Admin included).</summary>
         Task ChangePinAsync(Guid userId, ChangePinRequest request, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Self-service account deletion for a Parent (required by Google Play and the App Store for
+        /// any app that creates accounts). Verifies the PIN, then permanently deletes the parent, their
+        /// children and everything that is theirs through the same audited path staff use, so every
+        /// removed row is snapshotted to the deletion log first.
+        /// </summary>
+        Task DeleteOwnAccountAsync(Guid userId, DeleteAccountRequest request, CancellationToken cancellationToken = default);
     }
 }

@@ -31,6 +31,7 @@ namespace iucs.meettomanage.application.Services
         private readonly INotificationService _notificationService;
         private readonly IConfiguration _configuration;
         private readonly IPinVault? _vault;
+        private readonly IUserDeletionService? _deletion;
 
         private const int TwoFactorChallengeMinutes = 5;
         private const int RecoveryCodeCount = 8;
@@ -42,9 +43,11 @@ namespace iucs.meettomanage.application.Services
             IAuditLogService auditLog,
             INotificationService notificationService,
             IConfiguration configuration,
-            IPinVault? vault = null)
+            IPinVault? vault = null,
+            IUserDeletionService? deletion = null)
         {
             _vault = vault;
+            _deletion = deletion;
             _unitOfWork = unitOfWork;
             _passwordHasher = passwordHasher;
             _tokenService = tokenService;
@@ -410,6 +413,39 @@ namespace iucs.meettomanage.application.Services
                     ["ExpiryMinutes"] = ResetTokenExpiryMinutes.ToString(),
                 },
                 cancellationToken);
+        }
+
+        public async Task DeleteOwnAccountAsync(Guid userId, DeleteAccountRequest request, CancellationToken cancellationToken = default)
+        {
+            var deletion = _deletion ?? throw new InvalidOperationException("Account deletion is not configured.");
+            var user = await _unitOfWork.Repository<User>().TrackedQuery()
+                .FirstOrDefaultAsync(u => u.Id == userId, cancellationToken)
+                ?? throw new NotFoundException(nameof(User), userId);
+
+            // Staff and admin accounts are removed by an administrator, never by a stray tap in an app.
+            if (user.Role != UserRole.Parent)
+            {
+                throw new DomainValidationException("Only parent accounts can be deleted here. Ask your administrator to remove this account.");
+            }
+
+            // A wrong PIN counts toward the same lockout as a failed sign-in, so this endpoint can't be
+            // used to guess a PIN with a stolen session token.
+            if (user.LockoutEndUtc is { } lockoutEnd && lockoutEnd > DateTime.UtcNow)
+            {
+                throw new UnauthorizedException("Too many failed attempts. Try again later.");
+            }
+            if (!_passwordHasher.Verify(request.CurrentPin, user.PinHash))
+            {
+                user.FailedLoginAttempts++;
+                if (user.FailedLoginAttempts >= MaxFailedLoginAttempts)
+                {
+                    user.LockoutEndUtc = DateTime.UtcNow.AddMinutes(LockoutMinutes);
+                }
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+                throw new DomainValidationException("That PIN is not correct.");
+            }
+
+            await deletion.DeleteParentAsync(userId, userId, cancellationToken);
         }
 
         public async Task ChangePinAsync(Guid userId, ChangePinRequest request, CancellationToken cancellationToken = default)

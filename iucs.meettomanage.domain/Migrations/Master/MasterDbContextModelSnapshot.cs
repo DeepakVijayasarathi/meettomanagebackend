@@ -333,6 +333,16 @@ namespace iucs.meettomanage.domain.Migrations.Master
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("BuyerGstin")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("buyer_gstin");
+
+                    b.Property<decimal>("CgstAmount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("cgst_amount");
+
                     b.Property<string>("Currency")
                         .IsRequired()
                         .HasMaxLength(3)
@@ -347,6 +357,11 @@ namespace iucs.meettomanage.domain.Migrations.Master
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)")
                         .HasColumnName("gateway_order_ref");
+
+                    b.Property<decimal>("IgstAmount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("igst_amount");
 
                     b.Property<string>("InvoiceNumber")
                         .IsRequired()
@@ -374,6 +389,26 @@ namespace iucs.meettomanage.domain.Migrations.Master
                     b.Property<DateTime>("PeriodStartUtc")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("period_start_utc");
+
+                    b.Property<string>("PlaceOfSupply")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("place_of_supply");
+
+                    b.Property<string>("SacCode")
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("sac_code");
+
+                    b.Property<string>("SellerGstin")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("seller_gstin");
+
+                    b.Property<decimal>("SgstAmount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("sgst_amount");
 
                     b.Property<string>("Status")
                         .IsRequired()

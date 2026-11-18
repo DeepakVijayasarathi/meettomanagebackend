@@ -119,6 +119,23 @@ namespace iucs.meettomanage.api.Controllers
             return NoContent();
         }
 
+        /// <summary>
+        /// A parent permanently deletes their own account and their children's data (store policy:
+        /// in-app account deletion). Refused for "view as parent" sessions so staff can never trigger it.
+        /// </summary>
+        [HttpPost("me/delete-account")]
+        [Authorize]
+        [EnableRateLimiting("pin-reset")]
+        public async Task<IActionResult> DeleteMyAccount(DeleteAccountRequest request, CancellationToken cancellationToken)
+        {
+            if (User.FindFirstValue(ViewAsParent.ActorClaimType) is not null)
+            {
+                return Forbid();
+            }
+            await _authService.DeleteOwnAccountAsync(CurrentUserId(), request, cancellationToken);
+            return NoContent();
+        }
+
         [HttpPost("reset-pin")]
         [AllowAnonymous]
         [EnableRateLimiting("pin-reset")]

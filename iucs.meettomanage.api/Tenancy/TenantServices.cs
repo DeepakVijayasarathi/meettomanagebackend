@@ -66,7 +66,8 @@ public static class TenantServices
             : [];
     }
 
-    public static async Task InitializeTenantsAsync(this WebApplication app)
+    /// <returns>How many tenants failed to initialise/migrate (0 = all good).</returns>
+    public static async Task<int> InitializeTenantsAsync(this WebApplication app)
     {
         await using var scope = app.Services.CreateAsyncScope();
         var master = scope.ServiceProvider.GetRequiredService<MasterDbContext>();
@@ -82,6 +83,7 @@ public static class TenantServices
         var seedValues = new Dictionary<string, string?> { ["Seed:AdminEmail"] = "", ["Seed:AdminPin"] = "" };
         foreach (var (name, value) in await MarketingSeedOverridesAsync(master, app.Configuration)) seedValues[name] = value;
         var seed = new ConfigurationBuilder().AddConfiguration(app.Configuration).AddInMemoryCollection(seedValues).Build();
+        var failures = 0;
         foreach (var tenant in tenants)
         {
             try
@@ -92,8 +94,10 @@ public static class TenantServices
             }
             catch (Exception ex)
             {
+                failures++;
                 app.Logger.LogError(ex, "Startup initialization failed for tenant {TenantId}; other tenants remain available.", tenant.Id);
             }
         }
+        return failures;
     }
 }

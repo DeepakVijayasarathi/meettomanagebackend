@@ -28,8 +28,10 @@ public static class PlatformInvoicePdf
                 {
                     row.RelativeItem().Column(c =>
                     {
-                        c.Item().Text(options.PlatformName).FontSize(20).Bold();
-                        c.Item().Text("Tax invoice").FontSize(12).FontColor(Colors.Grey.Darken1);
+                        c.Item().Text(string.IsNullOrWhiteSpace(options.SellerLegalName) ? options.PlatformName : options.SellerLegalName).FontSize(20).Bold();
+                        if (!string.IsNullOrWhiteSpace(options.SellerAddress)) c.Item().Text(options.SellerAddress);
+                        if (!string.IsNullOrWhiteSpace(invoice.SellerGstin)) c.Item().Text($"GSTIN {invoice.SellerGstin}");
+                        c.Item().Text(string.IsNullOrWhiteSpace(invoice.SellerGstin) ? "Invoice" : "Tax invoice").FontSize(12).FontColor(Colors.Grey.Darken1);
                     });
                     row.ConstantItem(200).Column(c =>
                     {
@@ -45,7 +47,9 @@ public static class PlatformInvoicePdf
                     c.Item().Text(profile?.LegalName ?? tenant.Name).Bold();
                     if (!string.IsNullOrWhiteSpace(profile?.Address)) c.Item().Text(profile.Address);
                     if (!string.IsNullOrWhiteSpace(profile?.State)) c.Item().Text(profile.State);
-                    if (!string.IsNullOrWhiteSpace(profile?.Gstin)) c.Item().Text($"GSTIN {profile.Gstin}");
+                    var buyerGstin = invoice.BuyerGstin ?? profile?.Gstin;
+                    if (!string.IsNullOrWhiteSpace(buyerGstin)) c.Item().Text($"GSTIN {buyerGstin}");
+                    if (!string.IsNullOrWhiteSpace(invoice.PlaceOfSupply)) c.Item().Text($"Place of supply: {invoice.PlaceOfSupply}");
                 });
                 col.Item().Text($"Service period {invoice.PeriodStartUtc:dd MMM yyyy} to {invoice.PeriodEndUtc:dd MMM yyyy}");
                 col.Item().Table(table =>
@@ -60,7 +64,7 @@ public static class PlatformInvoicePdf
                     });
                     foreach (var line in invoice.Lines)
                     {
-                        table.Cell().PaddingVertical(4).Text(line.Description);
+                        table.Cell().PaddingVertical(4).Text(string.IsNullOrWhiteSpace(invoice.SacCode) ? line.Description : $"{line.Description} (SAC {invoice.SacCode})");
                         table.Cell().PaddingVertical(4).AlignRight().Text(line.Quantity.ToString());
                         table.Cell().PaddingVertical(4).AlignRight().Text(Money(line.UnitAmount));
                         table.Cell().PaddingVertical(4).AlignRight().Text(Money(line.Amount));
@@ -74,7 +78,15 @@ public static class PlatformInvoicePdf
                         if (bold) { left.Bold(); right.Bold(); }
                     });
                     Row("Subtotal", Money(invoice.Subtotal));
-                    Row($"GST ({invoice.TaxRatePercent:0.##}%)", Money(invoice.TaxAmount));
+                    if (invoice.IgstAmount > 0m)
+                        Row($"IGST ({invoice.TaxRatePercent:0.##}%)", Money(invoice.IgstAmount));
+                    else if (invoice.CgstAmount > 0m || invoice.SgstAmount > 0m)
+                    {
+                        var half = invoice.TaxRatePercent / 2m;
+                        Row($"CGST ({half:0.##}%)", Money(invoice.CgstAmount));
+                        Row($"SGST ({half:0.##}%)", Money(invoice.SgstAmount));
+                    }
+                    else Row($"GST ({invoice.TaxRatePercent:0.##}%)", Money(invoice.TaxAmount));
                     Row("Total", Money(invoice.Total), true);
                 });
                 if (!string.IsNullOrWhiteSpace(invoice.PaymentUrl) && invoice.Status == PlatformInvoiceStatus.Open)

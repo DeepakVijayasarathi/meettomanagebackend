@@ -16,6 +16,16 @@ public class PlatformInvoice
     public decimal Subtotal { get; set; }
     public decimal TaxRatePercent { get; set; }
     public decimal TaxAmount { get; set; }
+    /// <summary>Parts of <see cref="TaxAmount"/>: CGST + SGST within the supplier's state, IGST between states. Zero when not split.</summary>
+    public decimal CgstAmount { get; set; }
+    public decimal SgstAmount { get; set; }
+    public decimal IgstAmount { get; set; }
+    /// <summary>Snapshots taken at issue time so a later profile edit can't rewrite an issued tax invoice.</summary>
+    [MaxLength(20)] public string? SellerGstin { get; set; }
+    [MaxLength(20)] public string? BuyerGstin { get; set; }
+    [MaxLength(10)] public string? SacCode { get; set; }
+    /// <summary>"29-Karnataka" style state of supply.</summary>
+    [MaxLength(80)] public string? PlaceOfSupply { get; set; }
     public decimal Total { get; set; }
     [MaxLength(3)] public string Currency { get; set; } = "INR";
     public PlatformInvoiceStatus Status { get; set; } = PlatformInvoiceStatus.Open;

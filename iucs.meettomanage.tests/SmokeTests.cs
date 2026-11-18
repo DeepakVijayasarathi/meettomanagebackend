@@ -6850,6 +6850,33 @@ namespace iucs.meettomanage.tests
         }
 
         [Fact]
+        public async Task UpdateFutureSchedule_BlocksWhenTheNewTimeFallsInApprovedLeave()
+        {
+            var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 1, includeSession: false);
+            var day7 = DateTime.UtcNow.AddDays(7);
+            var originalStart = new DateTime(day7.Year, day7.Month, day7.Day, 10, 0, 0, DateTimeKind.Utc);
+            _db.Context.Add(new ClassSession
+            {
+                BatchId = batch.Id, TeacherProfileId = batch.TeacherProfileId, Status = SessionStatus.Scheduled,
+                ScheduledStartAtUtc = originalStart, ScheduledEndAtUtc = originalStart.AddMinutes(45),
+            });
+            // Approved leave covering the whole day the class would move to.
+            _db.Context.Add(new LeaveRequest
+            {
+                TeacherProfileId = batch.TeacherProfileId, StartAtUtc = originalStart.Date, EndAtUtc = originalStart.Date.AddDays(1),
+                Reason = "x", Status = LeaveStatus.Approved,
+            });
+            await _db.Context.SaveChangesAsync();
+            _db.Context.ChangeTracker.Clear();
+
+            var ex = await Assert.ThrowsAsync<DomainValidationException>(() => CreateSessionService().UpdateFutureScheduleAsync(batch.Id, new UpdateFutureScheduleRequest
+            {
+                Slots = [new GenerateScheduleSlot { DayOfWeek = originalStart.DayOfWeek, StartTimeUtc = new TimeOnly(14, 0) }],
+            }));
+            Assert.Contains("approved leave", ex.Message);
+        }
+
+        [Fact]
         public async Task UpdateFutureSchedule_ReassignsTeacherAgainstTheReplacementTimesAtomically()
         {
             var (batch, _, _) = await SeedBatchWithSessionAsync(totalSessions: 1, includeSession: false);

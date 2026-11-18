@@ -578,8 +578,15 @@ public sealed class SaasSubscriptionService(IDbContextFactory<MasterDbContext> f
         var subtotal = SaasRules.Round(lines.Sum(x => x.Amount));
         var tax = SaasRules.TaxFor(Math.Max(0m, subtotal), Options.TaxRatePercent);
         var seq = await db.Database.SqlQueryRaw<long>("SELECT nextval('platform_invoice_number_seq') AS \"Value\"").SingleAsync(ct);
+        var profile = await db.TenantBillingProfiles.AsNoTracking().FirstOrDefaultAsync(x => x.TenantId == tenant.Id, ct);
+        var sellerGstin = Options.SellerGstin.Trim().ToUpperInvariant();
+        var split = GstRules.Split(tax, GstRules.StateCodeFromGstin(sellerGstin), profile?.Gstin, profile?.State);
         var invoice = new PlatformInvoice
         {
+            SellerGstin = GstRules.LooksLikeGstin(sellerGstin) ? sellerGstin : null,
+            BuyerGstin = GstRules.LooksLikeGstin(profile?.Gstin) ? profile!.Gstin!.Trim().ToUpperInvariant() : null,
+            SacCode = string.IsNullOrWhiteSpace(Options.SacCode) ? null : Options.SacCode.Trim(),
+            PlaceOfSupply = split.PlaceOfSupply, CgstAmount = split.Cgst, SgstAmount = split.Sgst, IgstAmount = split.Igst,
             InvoiceNumber = $"{Options.InvoicePrefix}-{DateTime.UtcNow:yyyy}-{seq:D6}",
             TenantId = tenant.Id, SubscriptionId = sub.Id, PeriodStartUtc = periodStart, PeriodEndUtc = periodEnd,
             Subtotal = Math.Max(0m, subtotal), TaxRatePercent = Options.TaxRatePercent, TaxAmount = tax,

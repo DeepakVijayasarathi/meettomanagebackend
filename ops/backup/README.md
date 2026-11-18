@@ -76,3 +76,32 @@ done
 ```
 
 Practise a restore into a scratch database now and then; a backup that has never been restored is a guess.
+
+## Prove the backups restore (weekly)
+
+A backup nobody has restored is only a hope. `pg-restore-drill.sh` starts a throwaway Postgres container,
+restores the master registry plus a sample of academy databases from the newest backup, runs sanity
+queries and deletes the container. It never touches the production database.
+
+```bash
+sudo install -m 750 ops/backup/pg-restore-drill.sh /usr/local/bin/meettomanage-restore-drill
+sudo /usr/local/bin/meettomanage-restore-drill        # SAMPLE_TENANTS=5 to test more academies
+echo '30 4 * * 0 root /usr/local/bin/meettomanage-restore-drill >> /var/log/meettomanage-restore-drill.log 2>&1' \
+  | sudo tee /etc/cron.d/meettomanage-restore-drill
+```
+
+On success it writes `/var/backups/meettomanage/last-restore-drill`; alert when that is older than 8 days.
+Do a full manual restore onto a fresh server at least once before launch and time it: that time is your
+real recovery time.
+
+## Copy backups off the server
+
+`offsite-sync.sh` copies the backups to another provider/region with rclone (`copy`, never `sync`, so a bad
+local state cannot delete the off-site copies). Configure an rclone remote (use a `crypt` remote so dumps are
+encrypted before they leave the server), then:
+
+```bash
+sudo install -m 750 ops/backup/offsite-sync.sh /usr/local/bin/meettomanage-offsite-sync
+echo '30 3 * * * root RCLONE_REMOTE=offsite:meettomanage-backups /usr/local/bin/meettomanage-offsite-sync >> /var/log/meettomanage-offsite.log 2>&1' \
+  | sudo tee /etc/cron.d/meettomanage-offsite
+```

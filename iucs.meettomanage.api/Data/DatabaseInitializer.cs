@@ -320,6 +320,16 @@ namespace iucs.meettomanage.api.Data
                 return;
             }
 
+            // Outside Development a PIN the admin changed must survive a restart, and a leaked or
+            // forgotten seed value must not stay a standing backdoor. The seed PIN is applied once,
+            // when the admin account is first created (SeedAdminAsync). Operators who really need
+            // to force-reset it can set Seed:ForcePinConvergence=true for a single deploy.
+            var env = services.GetService<IHostEnvironment>();
+            if (env is not null && !env.IsDevelopment() && !configuration.GetValue<bool>("Seed:ForcePinConvergence"))
+            {
+                return;
+            }
+
             var admin = context.Users.Local.FirstOrDefault(u => u.Email == email.Trim().ToLowerInvariant() && u.Role == UserRole.Admin)
                 ?? await context.Users.FirstOrDefaultAsync(u => u.Email == email.Trim().ToLowerInvariant() && u.Role == UserRole.Admin);
             if (admin is null)

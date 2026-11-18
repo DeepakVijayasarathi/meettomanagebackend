@@ -205,7 +205,7 @@ namespace iucs.meettomanage.application.Services
         }
 
         /// <summary>Field names that hold credentials/secrets and must never round-trip to the client in the clear.</summary>
-        private static readonly string[] SecretFieldHints = ["secret", "key", "token", "password"];
+        private static readonly string[] SecretFieldHints = ["secret", "key", "token", "password", "passwd", "pwd", "credential", "signature", "salt", "bearer", "authorization"];
 
         private static bool IsSecretField(string fieldName) =>
             SecretFieldHints.Any(hint => fieldName.Contains(hint, StringComparison.OrdinalIgnoreCase));
@@ -218,7 +218,8 @@ namespace iucs.meettomanage.application.Services
                 return value;
             }
 
-            return value.Length <= 4
+            // Showing the last 4 of a short secret gives away half of it, so short ones are hidden completely.
+            return value.Length < 8
                 ? new string('•', value.Length)
                 : new string('•', value.Length - 4) + value[^4..];
         }

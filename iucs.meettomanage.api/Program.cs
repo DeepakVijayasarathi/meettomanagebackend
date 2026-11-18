@@ -34,6 +34,12 @@ if (args.Contains("platform-password-hash", StringComparer.Ordinal))
     return;
 }
 var builder = WebApplication.CreateBuilder(args);
+// `dotnet iucs.meettomanage.api.dll migrate-tenants` applies the master + every tenant database
+// migration and exits (non-zero if any tenant failed) without serving traffic. Run it as a deploy
+// step, then start the API with Database__MigrateOnStartup=false so a slow or failing migration
+// can never take every tenant down at once as the app boots.
+var migrateOnly = args.Contains("migrate-tenants", StringComparer.Ordinal);
+if (migrateOnly) builder.Configuration["Database:MigrateOnStartup"] = "true";
 var tenantMode = builder.Configuration.GetValue<bool>("MultiTenancy:Enabled");
 // Local development may reuse its existing PostgreSQL server credentials while
 // keeping the control plane in a new database. Never infer production mappings.
@@ -248,6 +254,17 @@ if (string.IsNullOrWhiteSpace(jwt.SigningKey) || Encoding.UTF8.GetByteCount(jwt.
     throw new InvalidOperationException(
         "Jwt:SigningKey is missing or shorter than 32 bytes. " +
         "Set the Jwt__SigningKey environment variable (or appsettings) to a random secret of at least 32 characters.");
+}
+// A well-known seed PIN on a real deployment is an open door: reject it at startup.
+if (!builder.Environment.IsDevelopment())
+{
+    var seedPin = builder.Configuration["Seed:AdminPin"]?.Trim();
+    string[] weakPins = ["0000", "1111", "2222", "3333", "4444", "5555", "6666", "7777", "8888", "9999",
+        "1234", "4321", "1212", "2580", "0852", "1122", "2000", "1004", "6969", "1010"];
+    if (!string.IsNullOrEmpty(seedPin) && weakPins.Contains(seedPin, StringComparer.Ordinal))
+        Console.Error.WriteLine(
+            "WARNING: Seed:AdminPin is a well-known weak PIN. Set Seed__AdminPin to a PIN that is not guessable, " +
+            "and change it after the first sign-in.");
 }
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -843,8 +860,16 @@ app.MapGet("/m/{slug}", async (
         : Results.Redirect(target, permanent: false);
 });
 
-if (tenantMode) await app.InitializeTenantsAsync();
+var tenantInitFailures = 0;
+if (tenantMode) tenantInitFailures = await app.InitializeTenantsAsync();
 else await DatabaseInitializer.InitializeAsync(app.Services, app.Configuration);
+
+if (migrateOnly)
+{
+    app.Logger.LogInformation("migrate-tenants finished with {Failures} failed tenant(s).", tenantInitFailures);
+    Environment.ExitCode = tenantInitFailures == 0 ? 0 : 1;
+    return;
+}
 
 // The S3-or-local choice saved on Admin → Settings → File storage.
 if (!tenantMode) await app.Services.GetRequiredService<StorageProviderSwitch>().LoadAsync(app.Services);

@@ -22,6 +22,13 @@ public sealed class SaasOptions
     /// <summary>GST on SaaS services in India.</summary>
     public decimal TaxRatePercent { get; set; } = 18m;
     public string InvoicePrefix { get; set; } = "SAAS";
+    /// <summary>The platform's own GSTIN. Required for a valid GST tax invoice; the supplier state is read from it.</summary>
+    public string SellerGstin { get; set; } = "";
+    /// <summary>Name and address printed as the supplier on every invoice.</summary>
+    public string SellerLegalName { get; set; } = "";
+    public string SellerAddress { get; set; } = "";
+    /// <summary>Service accounting code printed per line. Confirm the right code with your CA before going live.</summary>
+    public string SacCode { get; set; } = "998431";
 
     /// <summary>Public self-service signup. Off by default; the operator turns it on deliberately.</summary>
     public bool SignupEnabled { get; set; }

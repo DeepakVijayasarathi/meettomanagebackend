@@ -20,17 +20,32 @@ namespace iucs.meettomanage.api.Services.Payments
         private readonly IEnumerable<IGatewayAdapter> _adapters;
         private readonly SimulatedPaymentGateway _simulated;
         private readonly ILogger<PaymentGatewayDispatcher> _logger;
+        private readonly bool _allowSimulated;
+
+        /// <summary>
+        /// The simulated gateway hands out a fake link that no provider will ever settle. It is
+        /// only acceptable for local development and demos: in Production a payer must never be
+        /// sent to a link that silently does nothing, so an unconfigured gateway is reported as
+        /// unavailable instead. Opt in explicitly with Payments:AllowSimulatedGateway=true (e.g. a
+        /// staging demo tenant).
+        /// </summary>
+        internal const string SimulatedBlockedReason =
+            "Online payment is not set up yet. Please pay at the centre or contact your academy.";
 
         public PaymentGatewayDispatcher(
             IUnitOfWork unitOfWork,
             IEnumerable<IGatewayAdapter> adapters,
             SimulatedPaymentGateway simulated,
-            ILogger<PaymentGatewayDispatcher> logger)
+            ILogger<PaymentGatewayDispatcher> logger,
+            IHostEnvironment environment,
+            IConfiguration configuration)
         {
             _unitOfWork = unitOfWork;
             _adapters = adapters;
             _simulated = simulated;
             _logger = logger;
+            _allowSimulated = !environment.IsProduction()
+                || configuration.GetValue<bool>("Payments:AllowSimulatedGateway");
         }
 
         public async Task<PaymentLinkResult> CreatePaymentLinkAsync(
@@ -48,6 +63,13 @@ namespace iucs.meettomanage.api.Services.Payments
             {
                 // Unknown/unset provider and no explicit gateway → demo/simulated link so the
                 // platform still works before real accounts are wired.
+                if (!_allowSimulated)
+                {
+                    _logger.LogError(
+                        "No gateway adapter matches method '{Method}' / provider '{Provider}' for account {Account}; simulated gateway is disabled in Production.",
+                        preferredMethodKey, account.GatewayProvider, account.Name);
+                    return new PaymentLinkResult { UnavailableReason = SimulatedBlockedReason };
+                }
                 _logger.LogInformation(
                     "No gateway adapter matches method '{Method}' / provider '{Provider}' for account {Account}; using the simulated gateway.",
                     preferredMethodKey, account.GatewayProvider, account.Name);
@@ -78,6 +100,14 @@ namespace iucs.meettomanage.api.Services.Payments
                     "Payer chose '{Key}' but it is disabled/unconfigured for invoice {Invoice}: {Reason}",
                     adapter.IntegrationKey, invoice.InvoiceNumber, reason);
                 return new PaymentLinkResult { UnavailableReason = reason };
+            }
+
+            if (!_allowSimulated)
+            {
+                _logger.LogError(
+                    "Integration '{Key}' disabled/unconfigured for invoice {Invoice}; simulated gateway is disabled in Production.",
+                    adapter.IntegrationKey, invoice.InvoiceNumber);
+                return new PaymentLinkResult { UnavailableReason = SimulatedBlockedReason };
             }
 
             _logger.LogInformation(
@@ -176,6 +206,11 @@ namespace iucs.meettomanage.api.Services.Payments
             var (live, config) = await ResolveLiveConfigAsync(adapter, cancellationToken);
             if (!live)
             {
+                // A real, settled gateway payment can only be refunded by that gateway. Recording a
+                // "simulated" refund here would tell the parent their money is on its way when it is not.
+                if (!_allowSimulated)
+                    throw new iucs.meettomanage.application.Common.Exceptions.DomainValidationException(
+                        $"{adapter.IntegrationKey} is turned off or missing credentials, so this online payment cannot be refunded. Re-enable it in Settings → Integrations and retry.");
                 _logger.LogInformation(
                     "Integration '{Key}' is disabled or missing credentials; using the simulated refund for transaction {Transaction}.",
                     adapter.IntegrationKey, transaction.Id);
