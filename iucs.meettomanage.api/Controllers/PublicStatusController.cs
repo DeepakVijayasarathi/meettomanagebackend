@@ -57,6 +57,9 @@ public sealed class PublicStatusController(MasterDbContext master, StatusPageSet
         if (component.Type.Equals("Api", StringComparison.OrdinalIgnoreCase)) return "Operational";
         if (component.Type.Equals("Database", StringComparison.OrdinalIgnoreCase)) return databaseHealthy ? "Operational" : "MajorOutage";
         var server = infrastructure.Servers.FirstOrDefault(x => x.Name.Equals(component.Server, StringComparison.OrdinalIgnoreCase));
+        // A saved status-page component may still carry the former server display name after
+        // consolidating onto one host. In single-server mode there is no ambiguity: use it.
+        server ??= infrastructure.Servers.Count == 1 ? infrastructure.Servers[0] : null;
         if (server is null) return "Degraded";
         if (!server.Reachable) return server.IsOnDemand ? "Operational" : "MajorOutage";
         if (component.Type.Equals("Service", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(component.Service))

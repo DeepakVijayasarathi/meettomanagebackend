@@ -568,8 +568,8 @@ namespace iucs.meettomanage.application.Services
             var baseUrl = _options.PrometheusBaseUrl;
             var instanceLabel = EscapeLabelValue(server.Instance);
 
-            var upTask = _prometheus.QueryScalarAsync(baseUrl, $"up{{instance=\"{instanceLabel}\"}}", cancellationToken);
-            var freshnessTask = _prometheus.QueryScalarAsync(baseUrl, $"time() - timestamp(up{{instance=\"{instanceLabel}\"}})", cancellationToken);
+            var upTask = _prometheus.QueryScalarAsync(baseUrl, $"up{{instance=\"{instanceLabel}\",job=\"single-server\"}}", cancellationToken);
+            var freshnessTask = _prometheus.QueryScalarAsync(baseUrl, $"time() - timestamp(up{{instance=\"{instanceLabel}\",job=\"single-server\"}})", cancellationToken);
             var cpuCoresTask = _prometheus.QueryScalarAsync(baseUrl, $"count(node_cpu_seconds_total{{instance=\"{instanceLabel}\",mode=\"idle\"}})", cancellationToken);
             var cpuUsageTask = _prometheus.QueryScalarAsync(baseUrl, $"100 - (avg(rate(node_cpu_seconds_total{{instance=\"{instanceLabel}\",mode=\"idle\"}}[2m])) * 100)", cancellationToken);
             var memUsedPercentTask = _prometheus.QueryScalarAsync(baseUrl, $"100 * (1 - node_memory_MemAvailable_bytes{{instance=\"{instanceLabel}\"}} / node_memory_MemTotal_bytes{{instance=\"{instanceLabel}\"}})", cancellationToken);

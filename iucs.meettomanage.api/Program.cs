@@ -231,8 +231,6 @@ builder.Services.PostConfigure<MonitoringOptions>(options =>
 {
     if (!options.SingleServerMode || options.Servers.Count == 0) return;
     var primary = options.Servers[0];
-    primary.Services = options.Servers.SelectMany(server => server.Services)
-        .Distinct(StringComparer.Ordinal).ToList();
     options.Servers = [primary];
 });
 builder.Services.Configure<HetznerAiOptions>(builder.Configuration.GetSection(HetznerAiOptions.SectionName));

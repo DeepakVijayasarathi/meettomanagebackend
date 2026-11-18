@@ -123,8 +123,11 @@ public sealed class PlatformMonitoringSettingsService(IDbContextFactory<MasterDb
             x.SshHost.Equals(configured.SshHost, StringComparison.OrdinalIgnoreCase))
             ?? settings.Servers.FirstOrDefault(x => x.TracksLiveCalls)
             ?? settings.Servers.FirstOrDefault();
-        var services = settings.Servers.SelectMany(x => x.Services)
-            .Concat(configured.Services)
+        var savedServices = settings.Servers.SelectMany(x => x.Services)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var services = savedServices.Count > 0 ? savedServices : configured.Services
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();

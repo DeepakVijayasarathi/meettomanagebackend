@@ -24,7 +24,8 @@ public sealed class PlatformInfrastructureMonitor(IPrometheusClient prometheus)
     {
         var i = Escape(server.Instance);
         Task<double?> Q(string query) => prometheus.QueryScalarAsync(url, query, ct);
-        var up = Q($"up{{instance=\"{i}\"}}"); var fresh = Q($"time() - timestamp(up{{instance=\"{i}\"}})");
+        var up = Q($"up{{instance=\"{i}\",job=\"single-server\"}}");
+        var fresh = Q($"time() - timestamp(up{{instance=\"{i}\",job=\"single-server\"}})");
         var cores = Q($"count(node_cpu_seconds_total{{instance=\"{i}\",mode=\"idle\"}})");
         var cpu = Q($"100-(avg(rate(node_cpu_seconds_total{{instance=\"{i}\",mode=\"idle\"}}[2m]))*100)");
         var memory = Q($"100*(1-node_memory_MemAvailable_bytes{{instance=\"{i}\"}}/node_memory_MemTotal_bytes{{instance=\"{i}\"}})");
