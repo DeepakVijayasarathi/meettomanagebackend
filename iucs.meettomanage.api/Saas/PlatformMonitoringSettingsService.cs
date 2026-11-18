@@ -134,6 +134,9 @@ public sealed class PlatformMonitoringSettingsService(IDbContextFactory<MasterDb
             saved?.HasSshPassword == true || !string.IsNullOrWhiteSpace(configured.SshPassword),
             saved?.SshPassword ?? configured.SshPassword,
             saved?.CpuWarningPercent ?? 80, saved?.MemoryWarningPercent ?? 85, saved?.DiskWarningPercent ?? 85);
-        return settings with { Servers = [server] };
+        // In single-server mode Prometheus is a private container on the application network.
+        // A legacy database row may still contain the old public host URL, which is deliberately
+        // not exposed by the monitoring compose stack and would make every metric look offline.
+        return settings with { PrometheusBaseUrl = fallback.Value.PrometheusBaseUrl, Servers = [server] };
     }
 }
