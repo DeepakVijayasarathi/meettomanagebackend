@@ -7,6 +7,7 @@ using iucs.meettomanage.domain.Entities.Tenancy;
 using iucs.meettomanage.domain.Entities.Users;
 using iucs.meettomanage.domain.Enums;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -232,6 +233,59 @@ public sealed class CrmTests : IDisposable
         public domain.Data.MasterDbContext CreateDbContext() => new(options);
     }
 
+    private const string OwnerMarketingEmail = "marketing@platform.test";
+    private static readonly Guid OwnerTenantId = Guid.NewGuid();
+
+    /// <summary>A CRM bound to <paramref name="tenantId"/>, where the platform owner (holder of Seed:MarketingEmail) is <see cref="OwnerTenantId"/>.</summary>
+    private CrmService TenantCrm(DbContextOptions<domain.Data.MasterDbContext> options, Guid tenantId)
+    {
+        var tenant = new iucs.meettomanage.api.Tenancy.TenantContext();
+        tenant.Bind(tenantId, tenantId == OwnerTenantId ? "owner" : "other", "Host=unused;Database=mt_test");
+        var configuration = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Seed:MarketingEmail"] = OwnerMarketingEmail }).Build();
+        var services = new ServiceCollection()
+            .AddSingleton<IDbContextFactory<domain.Data.MasterDbContext>>(new MasterFactory(options))
+            .AddSingleton(tenant)
+            .AddSingleton<Microsoft.Extensions.Configuration.IConfiguration>(configuration)
+            .BuildServiceProvider();
+        return new CrmService(_db.Context, new CrmAccess(_db.Context, _me), new BcryptPasswordHasher(), services);
+    }
+
+    private static void AddOwnerTenant(domain.Data.MasterDbContext master)
+    {
+        var userId = Guid.NewGuid();
+        master.Tenants.Add(new Tenant { Id = OwnerTenantId, Code = "owner", Name = "Platform Owner", DatabaseName = "mt_owner", Status = TenantStatus.Active });
+        master.LoginAccounts.Add(new TenantLoginAccount { UserId = userId, TenantId = OwnerTenantId });
+        master.LoginIdentifiers.Add(new TenantLoginIdentifier { Identifier = "email:" + OwnerMarketingEmail, UserId = userId, TenantId = OwnerTenantId });
+    }
+
+    [Fact]
+    public async Task Customers_AreHiddenFromAMarketingRoleOutsideThePlatformOwnersTenant()
+    {
+        using var connection = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        var options = new DbContextOptionsBuilder<domain.Data.MasterDbContext>().UseSqlite(connection).Options;
+        var otherId = Guid.NewGuid();
+        await using (var master = new domain.Data.MasterDbContext(options))
+        {
+            await master.Database.EnsureCreatedAsync();
+            AddOwnerTenant(master);
+            master.Tenants.Add(new Tenant { Id = otherId, Code = "other", Name = "Other Academy", DatabaseName = "mt_other", Status = TenantStatus.Active });
+            master.TenantBillingProfiles.Add(new TenantBillingProfile { TenantId = OwnerTenantId, BillingEmail = "billing@owner.test" });
+            await master.SaveChangesAsync();
+        }
+
+        // e.g. a Marketing user carried over in an imported legacy database
+        _me.UserId = (await MarketingUser("Imported", CrmRole.Manager)).Id;
+        var crm = TenantCrm(options, otherId);
+
+        Assert.False(await crm.CustomersAvailableAsync(default));
+        Assert.Empty(await crm.CustomersAsync(null, null, default));
+        await Assert.ThrowsAsync<NotFoundException>(() => crm.CustomerAsync(OwnerTenantId, default));
+        await Assert.ThrowsAsync<NotFoundException>(() => crm.AddCustomerNoteAsync(OwnerTenantId, "probe", default));
+        Assert.True(await TenantCrm(options, OwnerTenantId).CustomersAvailableAsync(default));
+    }
+
     [Fact]
     public async Task Customers_ReadFromTheMasterDatabase_WithHealthInvoicesAndNotes()
     {
@@ -243,6 +297,7 @@ public sealed class CrmTests : IDisposable
         await using (var master = new domain.Data.MasterDbContext(options))
         {
             await master.Database.EnsureCreatedAsync();
+            AddOwnerTenant(master); // the platform owner itself is not listed as a customer
             var plan = new Plan { Code = "pro", Name = "Pro" };
             var price = new PlanPrice { Plan = plan, BillingInterval = BillingInterval.Year, Amount = 24_990 };
             master.Plans.Add(plan);
@@ -259,8 +314,7 @@ public sealed class CrmTests : IDisposable
         }
 
         _me.UserId = (await MarketingUser("Mgr", CrmRole.Manager)).Id;
-        var services = new ServiceCollection().AddSingleton<IDbContextFactory<domain.Data.MasterDbContext>>(new MasterFactory(options)).BuildServiceProvider();
-        var crm = new CrmService(_db.Context, new CrmAccess(_db.Context, _me), new BcryptPasswordHasher(), services);
+        var crm = TenantCrm(options, OwnerTenantId);
 
         var all = await crm.CustomersAsync(null, null, default);
         Assert.Equal(["Bright Abacus", "Newbie Phonics"], all.Select(c => c.Name).ToArray());   // at risk first

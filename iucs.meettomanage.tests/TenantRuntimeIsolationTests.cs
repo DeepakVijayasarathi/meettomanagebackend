@@ -53,6 +53,10 @@ public sealed class TenantRuntimeIsolationTests
             Assert.Single(tracker.GetLiveConnections());
             Assert.Equal("Teacher A", tracker.GetLiveConnections()[0].Name);
         }
+        // A read with no tenant bound must not fall open to every tenant's rooms.
+        Assert.Equal(0, tracker.TotalConnectedUsers);
+        Assert.Equal(0, tracker.ActiveClassCount);
+        Assert.Empty(tracker.GetLiveConnections());
     }
 
     [Fact]

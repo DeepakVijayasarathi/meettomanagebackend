@@ -10,6 +10,11 @@ public sealed class TenantRequestMiddleware(RequestDelegate next)
     public async Task InvokeAsync(HttpContext http, TenantResolver resolver, TenantContext tenant)
     {
         var path = http.Request.Path.Value ?? "";
+        // A platform token carries no tenant, but a /t/{code} URL would otherwise bind one below and hand the
+        // operator principal to a tenant controller. Operators reach tenant data only through /api/platform,
+        // which binds the selected tenant explicitly and records an audit entry.
+        if (IsPlatformPrincipal(http.User) && !IsTenantOptionalPath(path) && !HttpMethods.IsOptions(http.Request.Method))
+            throw new ForbiddenException("Platform operator sessions can only use the platform console.");
         // These legacy APIs use server-wide SSH credentials and backup folders,
         // not the scoped business database. Never expose other clients' dumps,
         // logs, infrastructure controls or monitoring streams to a tenant Admin.
@@ -71,6 +76,10 @@ public sealed class TenantRequestMiddleware(RequestDelegate next)
         else
             throw new DomainValidationException("Open this page using the tenant's /t/{tenantCode} URL.");
     }
+
+    internal static bool IsPlatformPrincipal(System.Security.Claims.ClaimsPrincipal user) =>
+        user.Identity?.IsAuthenticated == true && user.IsInRole("PlatformAdmin")
+        && user.FindFirst("purpose")?.Value == "platform-admin";
 
     private static bool IsMarketingSiteApi(string path) =>
         path.Equals("/api/settings/public", StringComparison.OrdinalIgnoreCase)

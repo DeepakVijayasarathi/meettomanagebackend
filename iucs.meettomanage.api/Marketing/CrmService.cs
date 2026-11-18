@@ -510,11 +510,23 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
 
     // ================================================================== customers
 
-    public bool CustomersAvailable => Master is not null;
+    /// <summary>
+    /// The customer list reads every tenant's plan, usage and billing contact from the master database, so it is
+    /// only for the platform owner's tenant. A Marketing role elsewhere (for example in an imported legacy database)
+    /// gets nothing.
+    /// </summary>
+    private async Task<IDbContextFactory<MasterDbContext>?> OwnerMasterAsync(CancellationToken ct)
+    {
+        if (Master is not { } factory || CurrentTenantId is not { } self || services.GetService<IConfiguration>() is not { } configuration) return null;
+        await using var master = await factory.CreateDbContextAsync(ct);
+        return await TenantResolver.PlatformOwnerTenantIdAsync(master, configuration, ct) == self ? factory : null;
+    }
+
+    public async Task<bool> CustomersAvailableAsync(CancellationToken ct) => await OwnerMasterAsync(ct) is not null;
 
     public async Task<List<CrmCustomerRow>> CustomersAsync(string? search, CustomerHealth? health, CancellationToken ct)
     {
-        if (Master is not { } factory) return [];
+        if (await OwnerMasterAsync(ct) is not { } factory) return [];
         var now = DateTime.UtcNow;
         await using var master = await factory.CreateDbContextAsync(ct);
         var self = CurrentTenantId;
@@ -549,7 +561,7 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
 
     public async Task<CrmCustomerDetail> CustomerAsync(Guid tenantId, CancellationToken ct)
     {
-        if (Master is not { } factory) throw new DomainValidationException("Customers are only available in multi-tenant mode.");
+        if (await OwnerMasterAsync(ct) is not { } factory) throw new NotFoundException("Customer", tenantId);
         var row = (await CustomersAsync(null, null, ct)).FirstOrDefault(x => x.TenantId == tenantId) ?? throw new NotFoundException("Customer", tenantId);
         await using var master = await factory.CreateDbContextAsync(ct);
         var invoices = await master.PlatformInvoices.AsNoTracking().Where(x => x.TenantId == tenantId).OrderByDescending(x => x.IssuedAtUtc).Take(12)
@@ -569,6 +581,7 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
     public async Task<CrmNote> AddCustomerNoteAsync(Guid tenantId, string text, CancellationToken ct)
     {
         await access.RequireWriteAsync(ct);
+        if (await OwnerMasterAsync(ct) is null) throw new NotFoundException("Customer", tenantId);
         var clean = Clean(text, 2000) ?? throw new DomainValidationException("Write the note first.");
         var me = await MeAsync(ct);
         var note = new CrmCustomerNote { Id = Guid.NewGuid(), TenantId = tenantId, Text = clean, Author = me.Name };

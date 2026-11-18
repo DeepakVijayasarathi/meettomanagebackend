@@ -41,6 +41,20 @@ public sealed class TenantResolver(MasterDbContext master, TenantContext current
         await ResolveLoginAsync(email, cancellationToken);
     }
 
+    /// <summary>
+    /// The platform owner's tenant: the one that holds the configured Marketing account. A Marketing role in any
+    /// other tenant (for example one carried over in an imported legacy database) is not the platform owner and must
+    /// never see other tenants' data from the master database.
+    /// </summary>
+    public static async Task<Guid?> PlatformOwnerTenantIdAsync(MasterDbContext master, IConfiguration configuration, CancellationToken ct = default)
+    {
+        var email = configuration["Seed:MarketingEmail"]?.Trim();
+        if (string.IsNullOrWhiteSpace(email)) return null;
+        var key = NormalizeIdentifier(email);
+        return await master.LoginIdentifiers.AsNoTracking().Where(x => x.Identifier == key)
+            .Select(x => (Guid?)x.TenantId).SingleOrDefaultAsync(ct);
+    }
+
     public async Task ResolveTokenAsync(Guid tenantId, string tenantCode, CancellationToken cancellationToken = default)
     {
         var tenant = await master.Tenants.AsNoTracking()

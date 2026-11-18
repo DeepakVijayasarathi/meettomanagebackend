@@ -1,3 +1,4 @@
+using iucs.meettomanage.api.Tenancy;
 using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Services;
 using iucs.meettomanage.domain.Data;
@@ -133,6 +134,11 @@ public sealed class LeadAutomationService(MeetToManageDbContext db, IEmailSender
     private async Task SyncAccountsAsync(DateTime now, CancellationToken ct)
     {
         if (Master is not { } factory) return;
+        // This worker runs in every tenant. Only the platform owner's leads may be matched against other tenants'
+        // accounts; anywhere else it would copy another academy's plan and usage into this tenant's database.
+        if (services.GetService<TenantContext>()?.TenantId is not { } self) return;
+        await using (var check = await factory.CreateDbContextAsync(ct))
+            if (await TenantResolver.PlatformOwnerTenantIdAsync(check, configuration, ct) != self) return;
         var since = now.AddDays(-365);
         var leads = await db.PlatformDemoRequests.Where(x => x.ArchivedAtUtc == null && x.Stage != LeadStage.Customer
             && (x.TenantId != null || (x.WorkEmail != "" && x.CreatedAtUtc > since))).OrderByDescending(x => x.CreatedAtUtc).Take(1000).ToListAsync(ct);

@@ -31,7 +31,15 @@ A scope cannot switch tenants. There is no fallback client database. Current
 account access checks fail closed in tenant mode instead of accepting stale
 permission claims on database errors. Existing tokens require a new login when
 switching to tenant mode. Tenant admins cannot administer platform clients;
-platform tokens cannot access tenant business APIs.
+platform tokens cannot access tenant business APIs. `TenantRequestMiddleware`
+rejects a platform token on any path outside `/api/platform` and the health
+probes, including `/t/{code}/...` URLs.
+
+The marketing console's cross-tenant views (CRM **Customers** and the lead-to-account
+sync) read every tenant's plan, usage and billing contact from master. They are
+served only in the platform owner's tenant: the tenant that holds the
+`Seed:MarketingEmail` login. A Marketing account in any other tenant, for example
+one carried over in an imported legacy database, gets an empty list.
 
 ## Configuration
 

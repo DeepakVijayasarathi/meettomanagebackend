@@ -28,31 +28,6 @@ public sealed class TenantDomainResolver(MasterDbContext master, IConfiguration 
         return hosts;
     }
 
-    public async Task<string?> ResolveCodeAsync(HttpRequest request, CancellationToken ct)
-    {
-        var candidates = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var requestHost = request.Host.Host.TrimEnd('.').ToLowerInvariant();
-        if (requestHost.Length > 0) candidates.Add(requestHost);
-        if (request.Headers.Origin.FirstOrDefault() is { } origin && Uri.TryCreate(origin, UriKind.Absolute, out var originUri))
-            candidates.Add(originUri.IdnHost.TrimEnd('.').ToLowerInvariant());
-        foreach (var host in candidates)
-        {
-            if (cache.TryGetValue(CacheKey(host), out string? cached))
-            {
-                continue;
-            }
-            var code = await master.Tenants.AsNoTracking()
-                .Where(x => x.Status == domain.Entities.Tenancy.TenantStatus.Active
-                    && x.CustomDomainVerifiedAtUtc != null && x.CustomDomain == host)
-                .Select(x => x.Code).SingleOrDefaultAsync(ct);
-            // Cache misses briefly, but never cache a positive routing decision. Domain
-            // removal/suspension must take effect on every API instance immediately.
-            if (code is null) cache.Set(CacheKey(host), "", TimeSpan.FromSeconds(10));
-            if (code is not null) return code;
-        }
-        return null;
-    }
-
     public async Task<string?> ResolveHostAsync(string? rawHost, CancellationToken ct)
     {
         var host = rawHost?.Trim().TrimEnd('.').ToLowerInvariant();
@@ -62,6 +37,8 @@ public sealed class TenantDomainResolver(MasterDbContext master, IConfiguration 
             .Where(x => x.Status == domain.Entities.Tenancy.TenantStatus.Active
                 && x.CustomDomainVerifiedAtUtc != null && x.CustomDomain == host)
             .Select(x => x.Code).SingleOrDefaultAsync(ct);
+        // Cache misses briefly, but never cache a positive routing decision. Domain
+        // removal/suspension must take effect on every API instance immediately.
         if (code is null) cache.Set(CacheKey(host), "", TimeSpan.FromSeconds(10));
         return code;
     }

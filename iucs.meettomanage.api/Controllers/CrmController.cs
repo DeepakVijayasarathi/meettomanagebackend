@@ -84,7 +84,7 @@ public sealed class CrmController(CrmService crm) : ControllerBase
     // ---- customers
     [HttpGet("customers")]
     public async Task<ActionResult<object>> Customers([FromQuery] string? search, [FromQuery] CustomerHealth? health, CancellationToken ct) =>
-        Ok(new { available = crm.CustomersAvailable, items = await crm.CustomersAsync(search, health, ct) });
+        Ok(new { available = await crm.CustomersAvailableAsync(ct), items = await crm.CustomersAsync(search, health, ct) });
 
     [HttpGet("customers/{tenantId:guid}")]
     public async Task<ActionResult<CrmCustomerDetail>> Customer(Guid tenantId, CancellationToken ct) => Ok(await crm.CustomerAsync(tenantId, ct));

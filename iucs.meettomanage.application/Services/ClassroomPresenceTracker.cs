@@ -7,7 +7,16 @@ namespace iucs.meettomanage.application.Services
     public class ClassroomPresenceTracker : IClassroomPresenceTracker
     {
         private static string Prefix => Common.TenantExecution.Current is { } tenant ? tenant.Id.ToString("N") + ":" : "";
-        private IEnumerable<ConcurrentDictionary<string, LivePresenceEntry>> TenantRooms => _rooms.Where(x => x.Key.StartsWith(Prefix, StringComparison.Ordinal)).Select(x => x.Value);
+        // Without a bound tenant only un-prefixed (single-client) rooms match: an empty prefix must never read
+        // every tenant's rooms. Tenant keys are "{id:N}:{sessionId}"; session ids are GUIDs and contain no ':'.
+        private IEnumerable<ConcurrentDictionary<string, LivePresenceEntry>> TenantRooms
+        {
+            get
+            {
+                var prefix = Prefix;
+                return _rooms.Where(x => prefix.Length == 0 ? !x.Key.Contains(':') : x.Key.StartsWith(prefix, StringComparison.Ordinal)).Select(x => x.Value);
+            }
+        }
         private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, LivePresenceEntry>> _rooms = new();
 
         public void UserJoined(string sessionId, string connectionId, Guid userId, string name, string role)
