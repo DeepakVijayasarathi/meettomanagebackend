@@ -21,6 +21,8 @@ public interface IMarketingChatLogService
     Task<PagedResult<MarketingChatConversationDto>> ListAsync(int page, int pageSize, string? search, bool bookedOnly, CancellationToken cancellationToken = default);
 
     Task<MarketingChatDetailDto> GetAsync(Guid id, CancellationToken cancellationToken = default);
+
+    Task DeleteAsync(Guid id, CancellationToken cancellationToken = default);
 }
 
 public class MarketingChatLogService(IUnitOfWork unitOfWork) : IMarketingChatLogService
@@ -101,6 +103,19 @@ public class MarketingChatLogService(IUnitOfWork unitOfWork) : IMarketingChatLog
             .Select(m => new MarketingChatMessageDto { Role = m.Role, Text = m.Text, CreatedAtUtc = m.CreatedAtUtc })
             .ToListAsync(cancellationToken);
         return new MarketingChatDetailDto { Conversation = ToDto(row), Messages = messages };
+    }
+
+    public async Task DeleteAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var conversations = unitOfWork.Repository<MarketingChatConversation>();
+        if (!await conversations.Query().AnyAsync(c => c.Id == id, cancellationToken))
+            throw new NotFoundException(nameof(MarketingChatConversation), id);
+
+        // Delete children explicitly so this remains safe if database cascade settings differ
+        // between an older production schema and a newly provisioned environment.
+        await unitOfWork.Repository<MarketingChatMessage>()
+            .ExecuteHardDeleteAsync(m => m.ConversationId == id, cancellationToken);
+        await conversations.ExecuteHardDeleteAsync(c => c.Id == id, cancellationToken);
     }
 
     private static MarketingChatConversationDto ToDto(MarketingChatConversation c) => new()

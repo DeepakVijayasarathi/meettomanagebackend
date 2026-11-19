@@ -32,20 +32,34 @@ public class HetznerSalesAssistantTests
     }
 
     [Fact]
-    public async Task Missing_key_never_calls_provider()
+    public async Task Missing_key_uses_rule_based_fallback_without_calling_provider()
     {
         var handler = new FakeHandler((HttpStatusCode.OK, OkBody));
-        await Assert.ThrowsAsync<ExternalServiceException>(() => Create(handler, new()).ReplyAsync(Conversation));
+        var result = await Create(handler, new()).ReplyAsync([new() { Role = "user", Text = "How much do the plans cost?" }]);
+        Assert.Contains("Pricing", result.Reply, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("/pricing", result.Reply);
         Assert.Empty(handler.Requests);
     }
 
     [Fact]
-    public async Task Disabled_flag_never_calls_provider_even_with_key()
+    public async Task Disabled_flag_uses_rule_based_fallback_even_with_key()
     {
         var handler = new FakeHandler((HttpStatusCode.OK, OkBody));
         var options = new HetznerAiOptions { Enabled = false, ApiKey = "key", Endpoint = "https://ai.test/v1", Model = "primary" };
-        await Assert.ThrowsAsync<ExternalServiceException>(() => Create(handler, options).ReplyAsync(Conversation));
+        var result = await Create(handler, options).ReplyAsync([new() { Role = "user", Text = "Can I book a demo?" }]);
+        Assert.Contains("/get-started", result.Reply);
         Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task Provider_outage_uses_rule_based_fallback_after_all_models_fail()
+    {
+        var handler = new FakeHandler((HttpStatusCode.ServiceUnavailable, "{}"), (HttpStatusCode.ServiceUnavailable, "{}"));
+        var result = await Create(handler, new() { Enabled = true, ApiKey = "key", Endpoint = "https://ai.test/v1", Model = "primary", FallbackModel = "fallback" })
+            .ReplyAsync([new() { Role = "user", Text = "Do you support class recordings?" }]);
+
+        Assert.Contains("recording", result.Reply, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, handler.Requests.Count);
     }
 
     [Fact]

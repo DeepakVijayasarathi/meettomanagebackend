@@ -12452,6 +12452,12 @@ namespace iucs.meettomanage.tests
             // Search looks inside the whole transcript.
             Assert.Single((await log.ListAsync(1, 25, "abacus", false)).Items);
             Assert.Single((await log.ListAsync(1, 25, "cost", false)).Items);
+
+            await log.DeleteAsync(booked.Id);
+            Assert.Equal(1, (await log.ListAsync(1, 25, null, false)).TotalCount);
+            Assert.Empty(_db.UnitOfWork.Repository<iucs.meettomanage.domain.Entities.Marketing.MarketingChatMessage>()
+                .Query().Where(m => m.ConversationId == booked.Id));
+            await Assert.ThrowsAsync<NotFoundException>(() => log.GetAsync(booked.Id));
         }
 
         [Fact]

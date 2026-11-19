@@ -280,7 +280,7 @@ namespace iucs.meettomanage.api.Services
         {
             if (!_options.IsConfigured)
             {
-                throw new ExternalServiceException("The chat assistant isn't available right now. Please reach us on WhatsApp or email instead.");
+                return await RuleBasedReplyAsync(conversation, cancellationToken);
             }
             using var feature = AiUsageScope.Enter(AiUsageScope.SiteChat);
 
@@ -310,7 +310,7 @@ namespace iucs.meettomanage.api.Services
                 var (model, message) = await GenerateAsync(models, messages, cancellationToken);
                 if (message is null)
                 {
-                    return new SalesChatResponse { Reply = NoAnswer, BookedName = bookedName };
+                    return await RuleBasedReplyAsync(conversation, cancellationToken);
                 }
 
                 var call = message["tool_calls"]?.AsArray()
@@ -318,7 +318,9 @@ namespace iucs.meettomanage.api.Services
                 if (call is null)
                 {
                     var reply = message["content"]?.GetValue<string>();
-                    return new SalesChatResponse { Reply = string.IsNullOrWhiteSpace(reply) ? NoAnswer : reply.Trim(), BookedName = bookedName };
+                    return string.IsNullOrWhiteSpace(reply)
+                        ? await RuleBasedReplyAsync(conversation, cancellationToken)
+                        : new SalesChatResponse { Reply = reply.Trim(), BookedName = bookedName };
                 }
 
                 JsonObject? args = null;
@@ -352,7 +354,69 @@ namespace iucs.meettomanage.api.Services
                 models = [model, .. models.Where(m => m != model)];
             }
 
-            return new SalesChatResponse { Reply = NoAnswer, BookedName = bookedName };
+            return await RuleBasedReplyAsync(conversation, cancellationToken);
+        }
+
+        /// <summary>
+        /// Deterministic public-site fallback used when AI is disabled, unconfigured, rate-limited,
+        /// timed out or unavailable. It deliberately answers only from documented product facts.
+        /// </summary>
+        private async Task<SalesChatResponse> RuleBasedReplyAsync(
+            IReadOnlyList<SalesChatTurn> conversation,
+            CancellationToken cancellationToken)
+        {
+            var latest = conversation.LastOrDefault(x => string.Equals(x.Role, "user", StringComparison.OrdinalIgnoreCase))?.Text?.Trim() ?? "";
+            var text = latest.ToLowerInvariant();
+            static bool Has(string value, params string[] terms) => terms.Any(value.Contains);
+
+            string reply;
+            if (Has(text, "demo", "book", "trial", "get started", "get-started"))
+            {
+                reply = "You can request a free platform demo at https://meettomanage.cloud/get-started — no card is needed. Or message our team on WhatsApp at +91 93447 73231 and we’ll help arrange it.";
+            }
+            else if (Has(text, "price", "pricing", "cost", "plan", "fee", "₹", "rupee"))
+            {
+                reply = await PricingFactsAsync(cancellationToken)
+                    + "\nSee the current plan comparison at https://meettomanage.cloud/pricing, or request a free demo at https://meettomanage.cloud/get-started.";
+            }
+            else if (Has(text, "record", "storage"))
+            {
+                reply = "Class recording is available based on plan: Basic keeps recordings for 7 days, Pro for 30 days, and Growth for 90 days. Storage and longer-retention add-ons are also available; see https://meettomanage.cloud/pricing.";
+            }
+            else if (Has(text, "whatsapp", "notification", "reminder", "sms"))
+            {
+                reply = "Meet to Manage supports booking confirmations, reminders and payment alerts by email, SMS and WhatsApp. WhatsApp usage is available through prepaid message credit; contact us at https://wa.me/919344773231 for setup details.";
+            }
+            else if (Has(text, "payment", "invoice", "billing", "razorpay", "cashfree", "collect fees"))
+            {
+                reply = "Billing includes subscriptions, automatic invoices, Razorpay or Cashfree payments, overdue fee suspension, and instant restoration after payment. Online fee collection starts with the Basic plan.";
+            }
+            else if (Has(text, "class", "jitsi", "video", "whiteboard", "attendance", "schedule"))
+            {
+                reply = "Meet to Manage includes Jitsi live classes, screen sharing, chat, teacher controls, interactive whiteboards, attendance and conflict-aware scheduling for 1:1 and group classes. You can see it in a free demo: https://meettomanage.cloud/get-started.";
+            }
+            else if (Has(text, "admission", "crm", "lead", "follow up", "follow-up"))
+            {
+                reply = "The Admissions CRM manages enquiries, demo bookings, teacher feedback, follow-ups and the conversion pipeline in one place. It is included from the Pro plan.";
+            }
+            else if (Has(text, "security", "secure", "privacy", "permission", "role", "login"))
+            {
+                reply = "Meet to Manage uses permission-gated role portals, and deactivated accounts lose access on their next request. It does not currently claim ISO or SOC 2 certification; our team can answer detailed security questions at info@infinityuniquers.com.";
+            }
+            else if (Has(text, "parent", "school", "academy", "coaching", "tutor", "student", "teacher"))
+            {
+                reply = "Meet to Manage brings live classes, scheduling, admissions, billing, attendance, reports and parent communication into one platform for academies, coaching centres, schools and tutors. Tell me which area you want to know about, or request a free demo at https://meettomanage.cloud/get-started.";
+            }
+            else if (Has(text, "contact", "phone", "email", "help", "support"))
+            {
+                reply = "You can reach Meet to Manage at info@infinityuniquers.com or WhatsApp/phone +91 93447 73231 (https://wa.me/919344773231).";
+            }
+            else
+            {
+                reply = "I can help with Meet to Manage pricing, live classes, admissions CRM, billing, recordings, WhatsApp notifications, security, or booking a free demo. What would you like to know?";
+            }
+
+            return new SalesChatResponse { Reply = reply };
         }
 
         public async Task<IReadOnlyList<string>> TranslateAsync(IReadOnlyList<string> texts, string targetLanguage, CancellationToken cancellationToken = default)
@@ -1079,7 +1143,7 @@ namespace iucs.meettomanage.api.Services
                 }
             }
 
-            throw new ExternalServiceException("The chat assistant couldn't answer just now. Please try again, or reach us on WhatsApp or email.");
+            return (models.FirstOrDefault() ?? "rule-based", null);
         }
 
         /// <summary>One OpenAI-compatible chat-completions call. Status 0 means no HTTP response.</summary>

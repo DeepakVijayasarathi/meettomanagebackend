@@ -25,5 +25,12 @@ namespace iucs.meettomanage.api.Controllers
         [HttpGet("{id:guid}")]
         public async Task<ActionResult<MarketingChatDetailDto>> Get(Guid id, CancellationToken cancellationToken) =>
             Ok(await chatLog.GetAsync(id, cancellationToken));
+
+        [HttpDelete("{id:guid}")]
+        public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
+        {
+            await chatLog.DeleteAsync(id, cancellationToken);
+            return NoContent();
+        }
     }
 }
