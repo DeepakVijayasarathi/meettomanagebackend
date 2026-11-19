@@ -546,10 +546,12 @@ namespace iucs.meettomanage.application.Services
                 throw new DomainValidationException("AI prices and monthly budget cannot be negative.");
         }
         /// <summary>
-        /// The saved endpoint, else the configured default. In multi-tenant mode the metered platform client ignores
-        /// it and always uses the platform's own provider, so an academy only has to switch AI on.
+        /// The saved endpoint. On the platform's metered client (multi-tenant mode) the platform provider is always
+        /// used, so the configured default stands in and an academy only has to switch AI on; a single-client install
+        /// still has to save its own endpoint, as before.
         /// </summary>
-        private string Endpoint(Dictionary<string, string?> values) => Val(values, AiEndpointKey, _aiDefaults.Endpoint);
+        private string Endpoint(Dictionary<string, string?> values) =>
+            Val(values, AiEndpointKey, _aiChatClient.UsesPlatformProvider ? _aiDefaults.Endpoint : "");
         private static string Val(Dictionary<string, string?> v, string k, string fallback = "") => v.TryGetValue(k, out var x) && !string.IsNullOrWhiteSpace(x) ? x : fallback;
         private static bool Bool(Dictionary<string, string?> v, string k) => bool.TryParse(Val(v, k), out var x) && x;
         private static int Int(Dictionary<string, string?> v, string k, int fallback, int min, int max) => int.TryParse(Val(v, k), out var x) ? Math.Clamp(x, min, max) : fallback;

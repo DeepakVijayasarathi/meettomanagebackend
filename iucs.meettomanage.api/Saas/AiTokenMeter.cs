@@ -45,9 +45,11 @@ public sealed class AiTokenMeter(IDbContextFactory<MasterDbContext> factory, IEn
     {
         var allowance = await AllowanceAsync(tenantId, ct);
         if (allowance.Exhausted)
+            // Students and parents read this in Mito too, so it speaks to anyone; the academy admin sees the figures
+            // on the Subscription page.
             throw new PlanLimitException(allowance.Limit == 0
-                ? "AI features aren't included in your academy's plan. Upgrade to use them."
-                : $"Your academy has used this month's AI allowance ({allowance.Limit.ToString("N0", CultureInfo.InvariantCulture)} tokens). It resets on the 1st, or upgrade your plan for more.");
+                ? "AI features aren't included in your academy's plan. Your academy admin can upgrade the plan to use them."
+                : "Your academy has used this month's AI allowance. AI answers resume on the 1st, or your academy admin can upgrade the plan for more.");
     }
 
     /// <summary>Adds one call's tokens. Never throws: metering must not lose an answer that was already paid for.</summary>

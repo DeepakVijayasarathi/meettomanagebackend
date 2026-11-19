@@ -69,6 +69,11 @@ public class MitoController : ControllerBase
             .ToList();
         var context = new MitoStudentContext(child.Name, child.AcademicLevel, child.ClassesCompleted,
             child.ClassesRemaining, child.AttendancePercent, upcoming, recent, pendingWork, results);
+        // Refuse before counting the student's daily request: an academy whose monthly AI allowance is used up
+        // must not also burn its students' daily Mito quota on answers that can't be given.
+        if (HttpContext.RequestServices.GetService<iucs.meettomanage.api.Saas.AiTokenMeter>() is { } meter
+            && HttpContext.RequestServices.GetService<iucs.meettomanage.api.Tenancy.TenantContext>()?.TenantId is { } tenantId)
+            await meter.EnsureWithinAllowanceAsync(tenantId, cancellationToken);
         var remaining = await _usage.RecordAsync(request.ChildId, request.Mode, configuration.DailyLimit, cancellationToken);
         var reply = await _mito.ReplyAsync(context, request.Messages, request.Mode, cancellationToken);
         reply.RemainingToday = remaining;

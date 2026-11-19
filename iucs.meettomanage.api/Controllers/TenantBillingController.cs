@@ -39,7 +39,7 @@ public sealed class TenantBillingController(MasterDbContext master, TenantContex
     }
 
     [HttpGet("status")]
-    public async Task<IActionResult> Status(CancellationToken ct)
+    public async Task<IActionResult> Status([FromServices] AiTokenMeter aiMeter, CancellationToken ct)
     {
         var tenantId = TenantId;
         var sub = await master.TenantSubscriptions.AsNoTracking().Include(x => x.Plan).Include(x => x.PlanPrice)
@@ -56,11 +56,14 @@ public sealed class TenantBillingController(MasterDbContext master, TenantContex
         var rules = await platformRules.GetAsync(ct);
         var banner = SaasRules.Banner(sub, now, !string.IsNullOrWhiteSpace(rules.TrialFallbackPlanCode));
 
-        var limits = SaasUsageService.MeteredKeys.Select(key =>
+        // AI tokens are metered in the master database rather than measured from the academy's data, so they join
+        // the list here; the plan comparison below uses the same keys and so shows each plan's AI allowance too.
+        var aiUsed = (await aiMeter.AllowanceAsync(tenantId, ct)).UsedTokens;
+        var limits = SaasUsageService.MeteredKeys.Append(EntitlementKeys.MaxAiTokensPerMonth).Select(key =>
         {
             var definition = EntitlementKeys.Find(key)!;
             var limit = granted.Limit(key);
-            var current = used.For(key) ?? 0;
+            var current = key == EntitlementKeys.MaxAiTokensPerMonth ? aiUsed : used.For(key) ?? 0;
             return new
             {
                 key, label = definition.Label, unit = definition.Unit, used = current, limit,

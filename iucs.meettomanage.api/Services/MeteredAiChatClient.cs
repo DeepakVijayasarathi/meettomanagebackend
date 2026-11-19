@@ -17,6 +17,8 @@ public sealed class MeteredAiChatClient(OllamaChatClient inner, IOptions<Hetzner
 {
     private readonly HetznerAiOptions _options = options.Value;
 
+    public bool UsesPlatformProvider => true;
+
     private Guid TenantId => tenant.TenantId ?? throw new InvalidOperationException("AI calls need a bound academy.");
 
     public async Task<AiChatCompletion> CompleteAsync(string endpoint, string? bearerKey, string model,

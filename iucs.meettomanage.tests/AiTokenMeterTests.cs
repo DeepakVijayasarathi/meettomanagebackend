@@ -173,3 +173,39 @@ public sealed class AiTokenMeterTests : IDisposable
         }
     }
 }
+
+public sealed class ChatbotPlatformProviderTests : IDisposable
+{
+    private readonly TestDatabase _db = new();
+    public void Dispose() => _db.Dispose();
+
+    private sealed class Client(bool platform) : IAiChatClient
+    {
+        public int Calls { get; private set; }
+        public bool UsesPlatformProvider => platform;
+        public Task<AiChatCompletion> CompleteAsync(string endpoint, string? bearerKey, string model, IReadOnlyList<AiChatTurn> messages, int maxTokens, double temperature, CancellationToken cancellationToken = default)
+        { Calls++; return Task.FromResult(new AiChatCompletion("Answer.", 10, 5)); }
+        public Task<IReadOnlyList<string>> ListModelsAsync(string endpoint, string? bearerKey, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private iucs.meettomanage.application.Services.ChatbotService Service(IAiChatClient client) => new(_db.UnitOfWork, client,
+        new iucs.meettomanage.application.Helper.AesGcmPinVault(Microsoft.Extensions.Options.Options.Create(new iucs.meettomanage.application.Helper.PinVaultOptions { Key = "test-key-test-key-test-key-test-key" })),
+        Microsoft.Extensions.Options.Options.Create(new HetznerAiOptions { Endpoint = "https://inference.hetzner.com/v1", Model = "platform-model" }));
+
+    [Fact]
+    public async Task A_single_client_install_still_has_to_save_its_own_endpoint()
+    {
+        var client = new Client(platform: false);
+        await Assert.ThrowsAsync<DomainValidationException>(() => Service(client).TestAiAsync(new() { Message = "hi" }));
+        Assert.Equal(0, client.Calls);
+    }
+
+    [Fact]
+    public async Task An_academy_on_the_platform_key_needs_no_saved_endpoint()
+    {
+        var client = new Client(platform: true);
+        Assert.Equal("Answer.", (await Service(client).TestAiAsync(new() { Message = "hi" })).Answer);
+        Assert.Equal(1, client.Calls);
+    }
+}
