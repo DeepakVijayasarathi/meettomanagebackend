@@ -10,6 +10,17 @@ public enum CustomerHealth { Trial, New, Healthy, AtRisk, Churned }
 /// <summary>CRM rules with no I/O, so they can be tested directly.</summary>
 public static class CrmRules
 {
+    /// <summary>Days without movement after which an open lead at this stage counts as stuck.</summary>
+    public static int StuckDays(LeadStage stage) => stage switch
+    {
+        LeadStage.New => 1,
+        LeadStage.Contacted => 7,
+        LeadStage.DemoDone => 5,
+        LeadStage.Trial => 5,
+        LeadStage.ActiveTrial => 10,
+        _ => int.MaxValue,
+    };
+
     /// <summary>Chance a lead at each open stage becomes a paying customer, for the weighted forecast.</summary>
     public static double WinProbability(LeadStage stage) => stage switch
     {

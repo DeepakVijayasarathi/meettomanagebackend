@@ -21,6 +21,7 @@ namespace iucs.meettomanage.application.Mappings
                 Medium = request.Medium,
                 Campaign = request.Campaign,
                 LandingPath = request.LandingPath,
+                VisitorId = request.VisitorId,
                 AssignedTo = request.AssignedTo,
                 NextFollowUpAtUtc = request.NextFollowUpAtUtc,
                 LastContactedAtUtc = request.LastContactedAtUtc,

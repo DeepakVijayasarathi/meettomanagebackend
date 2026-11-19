@@ -29,6 +29,21 @@ public sealed class CrmController(CrmService crm) : ControllerBase
         return NoContent();
     }
 
+    // ---- targets and stuck leads
+    [HttpGet("targets")]
+    public async Task<ActionResult<CrmTargets>> Targets([FromQuery] int utcOffsetMinutes = 330, CancellationToken ct = default) =>
+        Ok(await crm.TargetsAsync(Math.Clamp(utcOffsetMinutes, -720, 840), ct));
+
+    [HttpPut("targets/{userId:guid}")]
+    public async Task<IActionResult> SaveTarget(Guid userId, SaveCrmTargetRequest request, CancellationToken ct)
+    {
+        await crm.SaveTargetAsync(userId, request, ct);
+        return NoContent();
+    }
+
+    [HttpGet("stuck")]
+    public async Task<ActionResult<List<CrmStuckLead>>> Stuck(CancellationToken ct) => Ok(await crm.StuckAsync(ct));
+
     // ---- tasks
     [HttpGet("today")]
     public async Task<ActionResult<CrmToday>> Today([FromQuery] int utcOffsetMinutes = 330, CancellationToken ct = default) =>

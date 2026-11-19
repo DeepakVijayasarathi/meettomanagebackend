@@ -495,3 +495,77 @@ public sealed class PlanPriceRuleTests
         Assert.Contains("monthly INR", ex.Message);
     }
 }
+
+public sealed class CrmInsightTests : IDisposable
+{
+    private readonly TestDatabase _db = new();
+    private readonly FakeCurrentUser _me = new();
+
+    public void Dispose() => _db.Dispose();
+
+    private CrmService Crm() => new(_db.Context, new CrmAccess(_db.Context, _me), new BcryptPasswordHasher(), new ServiceCollection().BuildServiceProvider());
+
+    private async Task<User> MarketingUser(string first, CrmRole? role)
+    {
+        var user = new User { Id = Guid.NewGuid(), Email = $"{first.ToLowerInvariant()}@crm.test", FirstName = first, LastName = "T", PinHash = "x", Role = UserRole.Marketing };
+        _db.Context.Users.Add(user);
+        if (role is { } r) _db.Context.CrmTeamMembers.Add(new CrmTeamMember { Id = Guid.NewGuid(), UserId = user.Id, Role = r });
+        await _db.Context.SaveChangesAsync();
+        return user;
+    }
+
+    [Fact]
+    public async Task Targets_ManagerSetsThem_RepSeesOnlyTheirOwnProgressThisMonth()
+    {
+        var boss = await MarketingUser("Boss", CrmRole.Manager);
+        var rep = await MarketingUser("Rep", CrmRole.Sales);
+        var now = DateTime.UtcNow;
+        _db.Context.PlatformDemoRequests.AddRange(
+            new PlatformDemoRequest { Id = Guid.NewGuid(), FullName = "A", WorkEmail = "a@a.in", Phone = "1", AcademyName = "A", Stage = LeadStage.Customer, StageChangedAtUtc = now, AssignedToUserId = rep.Id, ExpectedMonthlyValue = 2499 },
+            new PlatformDemoRequest { Id = Guid.NewGuid(), FullName = "B", WorkEmail = "b@a.in", Phone = "2", AcademyName = "B", Stage = LeadStage.Customer, StageChangedAtUtc = now.AddMonths(-2), AssignedToUserId = rep.Id, ExpectedMonthlyValue = 999 });
+        await _db.Context.SaveChangesAsync();
+
+        _me.UserId = boss.Id;
+        await Crm().SaveTargetAsync(rep.Id, new SaveCrmTargetRequest(5, 12000), default);
+        var all = await Crm().TargetsAsync(0, default);
+        var row = all.Rows.Single(r => r.UserId == rep.Id);
+        Assert.Equal((5, 12000m, 1, 2499m), (row.WonTarget, row.ValueTarget, row.Won, row.WonValue)); // last-month win not counted
+        Assert.Equal(2, all.Rows.Count);
+
+        _me.UserId = rep.Id;
+        Assert.Single((await Crm().TargetsAsync(0, default)).Rows);
+        await Assert.ThrowsAsync<ForbiddenException>(() => Crm().SaveTargetAsync(rep.Id, new SaveCrmTargetRequest(50, null), default));
+
+        _me.UserId = boss.Id;
+        await Crm().SaveTargetAsync(rep.Id, new SaveCrmTargetRequest(null, null), default); // clearing removes it
+        Assert.Null((await Crm().TargetsAsync(0, default)).Rows.Single(r => r.UserId == rep.Id).WonTarget);
+    }
+
+    [Fact]
+    public async Task Stuck_FlagsLeadsThatWaitedTooLong_AndIgnoresOnesBeingWorked()
+    {
+        _me.UserId = (await MarketingUser("Mgr", CrmRole.Manager)).Id;
+        var now = DateTime.UtcNow;
+        PlatformDemoRequest Lead(string name, LeadStage stage, DateTime changed, DateTime? contacted = null, DateTime? demo = null) => new()
+        {
+            Id = Guid.NewGuid(), FullName = name, WorkEmail = $"{name}@a.in", Phone = name, AcademyName = name, Stage = stage,
+            CreatedAtUtc = changed, StageChangedAtUtc = changed, LastContactedAtUtc = contacted, DemoAtUtc = demo,
+        };
+        _db.Context.PlatformDemoRequests.AddRange(
+            Lead("newold", LeadStage.New, now.AddDays(-2)),
+            Lead("newfresh", LeadStage.New, now.AddHours(-3)),
+            Lead("contacted", LeadStage.Contacted, now.AddDays(-9)),
+            Lead("worked", LeadStage.Contacted, now.AddDays(-9), contacted: now.AddDays(-1)),
+            Lead("demopast", LeadStage.DemoBooked, now.AddDays(-5), demo: now.AddDays(-2)),
+            Lead("demosoon", LeadStage.DemoBooked, now.AddDays(-5), demo: now.AddDays(1)),
+            Lead("won", LeadStage.Customer, now.AddDays(-60)));
+        await _db.Context.SaveChangesAsync();
+        // Saving stamps CreatedAtUtc with the current time; backdate it the way an old lead would have it.
+        foreach (var l in _db.Context.PlatformDemoRequests) l.CreatedAtUtc = l.StageChangedAtUtc!.Value;
+        await _db.Context.SaveChangesAsync();
+
+        var stuck = await Crm().StuckAsync(default);
+        Assert.Equal(["contacted", "demopast", "newold"], stuck.Select(x => x.FullName).Order().ToArray());
+        Assert.Equal("Demo time passed, not marked done", stuck.Single(x => x.FullName == "demopast").Reason);
+    }
+}

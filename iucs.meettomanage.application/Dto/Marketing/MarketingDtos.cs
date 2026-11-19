@@ -61,6 +61,9 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public string? Medium { get; set; }
         public string? Campaign { get; set; }
         public string? LandingPath { get; set; }
+
+        /// <summary>The website visitor who submitted this lead, for their journey in the marketing console.</summary>
+        public string? VisitorId { get; set; }
         public string? AssignedTo { get; set; }
         public DateTime? NextFollowUpAtUtc { get; set; }
         public DateTime? LastContactedAtUtc { get; set; }
