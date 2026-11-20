@@ -41,15 +41,32 @@ namespace iucs.meettomanage.application.Services
             CreatePlatformDemoRequestRequest request,
             CancellationToken cancellationToken = default)
         {
+            var email = request.WorkEmail?.Trim().ToLowerInvariant() ?? "";
+            var phone = NormalizePhone(request.Phone);
+            var visitorId = Clean(request.VisitorId);
+            var duplicateSince = DateTime.UtcNow.AddMinutes(-10);
+            var existing = await _unitOfWork.Repository<PlatformDemoRequest>().Query()
+                .Where(x => x.CreatedAtUtc >= duplicateSince && (
+                    (email != "" && x.WorkEmail == email) ||
+                    (phone != "" && x.Phone == phone) ||
+                    (visitorId != null && x.VisitorId == visitorId)))
+                .OrderByDescending(x => x.CreatedAtUtc)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (existing is not null)
+            {
+                _logger?.LogInformation("Reused recent demo request {Id} for an idempotent retry", existing.Id);
+                return existing.ToDto();
+            }
+
             var demoRequest = new PlatformDemoRequest
             {
                 Id = Guid.NewGuid(),
                 FullName = request.FullName.Trim(),
-                WorkEmail = request.WorkEmail?.Trim().ToLowerInvariant() ?? "",
-                Phone = request.Phone?.Trim() ?? "",
+                WorkEmail = email,
+                Phone = phone,
                 AcademyName = string.IsNullOrWhiteSpace(request.AcademyName) ? "Not provided" : request.AcademyName.Trim(),
                 Message = string.IsNullOrWhiteSpace(request.Message) ? null : request.Message.Trim(),
-                VisitorId = Clean(request.VisitorId), Source = NormalizeSource(request.Source), Medium = NormalizeToken(request.Medium),
+                VisitorId = visitorId, Source = NormalizeSource(request.Source), Medium = NormalizeToken(request.Medium),
                 Campaign = NormalizeToken(request.Campaign), LandingPath = Clean(request.LandingPath),
             };
             var ownerEmail = await IsOnAsync(LeadLifecycle.AutoAssign, cancellationToken) ? await AssignOwnerAsync(demoRequest, cancellationToken) : null;
@@ -60,9 +77,20 @@ namespace iucs.meettomanage.application.Services
             await _auditLog.StageAsync(AuditAction.Create, nameof(PlatformDemoRequest), demoRequest.Id.ToString(), cancellationToken: cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-            await SendLeadAlertAsync(demoRequest, ownerEmail, cancellationToken);
-            await AcknowledgeAsync(demoRequest, cancellationToken);
+            // These independent best-effort notifications run together so mail latency is paid once,
+            // while the lead remains safely committed before either starts.
+            await Task.WhenAll(
+                SendLeadAlertAsync(demoRequest, ownerEmail, cancellationToken),
+                AcknowledgeAsync(demoRequest, cancellationToken));
             return demoRequest.ToDto();
+        }
+
+        private static string NormalizePhone(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return "";
+            var trimmed = value.Trim();
+            var digits = new string(trimmed.Where(char.IsDigit).ToArray());
+            return trimmed.StartsWith('+') ? $"+{digits}" : digits;
         }
 
         /// <summary>An automation is on unless the team switched it off in the console (stored as "false").</summary>

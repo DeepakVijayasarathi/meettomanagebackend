@@ -300,6 +300,8 @@ namespace iucs.meettomanage.application.Services
                 ChatVisitors = events.Where(e => e.Type == MarketingEvent.ChatStarted).Select(e => e.VisitorId).Distinct().Count(),
                 BookedVisitors = visitorIds.Count(booked.Contains),
                 FormStartedVisitors = events.Where(e => e.Type == MarketingEvent.FormStarted).Select(e => e.VisitorId).Distinct().Count(),
+                FormSubmitAttemptedVisitors = events.Where(e => e.Type == MarketingEvent.FormSubmitAttempted).Select(e => e.VisitorId).Distinct().Count(),
+                FormSubmitFailedVisitors = events.Where(e => e.Type == MarketingEvent.FormSubmitFailed).Select(e => e.VisitorId).Distinct().Count(),
                 FormValidationFailedVisitors = events.Where(e => e.Type == MarketingEvent.FormValidationFailed).Select(e => e.VisitorId).Distinct().Count(),
                 FormAbandonedVisitors = events.Where(e => e.Type == MarketingEvent.FormAbandoned).Select(e => e.VisitorId).Distinct().Count(),
                 FormSubmittedVisitors = events.Where(e => e.Type == MarketingEvent.FormSubmitted).Select(e => e.VisitorId).Distinct().Count(),
@@ -365,12 +367,30 @@ namespace iucs.meettomanage.application.Services
             var views = events.Where(e => e.Type == MarketingEvent.PageView).ToList();
             var booked = await _unitOfWork.Repository<PlatformDemoRequest>().Query()
                     .Where(r => r.VisitorId != null && r.CreatedAtUtc >= startUtc && r.CreatedAtUtc < endUtc)
-                    .Select(r => new { VisitorId = r.VisitorId!, r.CreatedAtUtc })
+                    .Select(r => new { VisitorId = r.VisitorId!, r.CreatedAtUtc, r.LandingPath })
                     .ToListAsync(cancellationToken);
             var titles = (await _unitOfWork.Repository<BlogPost>().Query().Select(b => new { b.Slug, b.Title }).ToListAsync(cancellationToken))
                 .GroupBy(b => b.Slug).ToDictionary(g => g.Key, g => g.First().Title);
             var byVisitor = events.GroupBy(v => v.VisitorId).ToDictionary(g => g.Key, g => g.ToList());
-            var bookedByVisitor = booked.GroupBy(r => r.VisitorId).ToDictionary(g => g.Key, g => g.Select(r => r.CreatedAtUtc).ToList());
+            var blogViewsByVisitor = views.Where(v => v.Path.StartsWith("/blog/"))
+                .GroupBy(v => v.VisitorId).ToDictionary(g => g.Key, g => g.OrderBy(v => v.CreatedAtUtc).ToList());
+            var attributionWindow = TimeSpan.FromMinutes(30);
+
+            string? LastBlogPath(string visitorId, DateTime actionAt)
+            {
+                if (!blogViewsByVisitor.TryGetValue(visitorId, out var blogViews)) return null;
+                var last = blogViews.LastOrDefault(v => v.CreatedAtUtc < actionAt && actionAt - v.CreatedAtUtc <= attributionWindow);
+                return last?.Path;
+            }
+
+            static string? ExplicitBlogPath(string? landingPath)
+            {
+                if (string.IsNullOrWhiteSpace(landingPath)) return null;
+                var match = System.Text.RegularExpressions.Regex.Match(landingPath, @"(?:\?|&)from=([^&]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (!match.Success) return null;
+                var slug = Uri.UnescapeDataString(match.Groups[1].Value).Trim('/');
+                return slug.Length == 0 ? null : $"/blog/{slug}";
+            }
 
             var posts = views
                 .Where(v => v.Path.StartsWith("/blog/"))
@@ -378,28 +398,24 @@ namespace iucs.meettomanage.application.Services
                 .Select(g =>
                 {
                     var readers = g.Select(v => v.VisitorId).Distinct().ToList();
-                    DateTime FirstRead(string reader) => g.Where(v => v.VisitorId == reader).Min(v => v.CreatedAtUtc);
-                    int AfterPage(Func<string, bool> match) => readers.Count(r =>
-                    {
-                        var firstRead = FirstRead(r);
-                        return byVisitor[r].Any(v => v.Type == MarketingEvent.PageView && v.CreatedAtUtc > firstRead && match(v.Path));
-                    });
-                    int AfterEvent(string type) => readers.Count(r =>
-                        byVisitor[r].Any(v => v.Type == type && v.CreatedAtUtc > FirstRead(r)));
-                    int SavedAfterRead() => readers.Count(r => bookedByVisitor.TryGetValue(r, out var saved)
-                        && saved.Any(created => created > FirstRead(r)));
+                    int AttributedAction(string type, Func<string, bool>? pathMatch = null) => readers.Count(reader =>
+                        byVisitor[reader].Any(action => action.Type == type && (pathMatch == null || pathMatch(action.Path))
+                            && LastBlogPath(reader, action.CreatedAtUtc) == g.Key));
+                    int SavedAfterRead() => readers.Count(reader => booked.Any(saved => saved.VisitorId == reader
+                        && (ExplicitBlogPath(saved.LandingPath) == g.Key
+                            || (ExplicitBlogPath(saved.LandingPath) == null && LastBlogPath(reader, saved.CreatedAtUtc) == g.Key))));
                     return new MarketingContentStatDto
                     {
                         Path = g.Key,
                         Title = titles.GetValueOrDefault(g.Key["/blog/".Length..]),
                         Readers = readers.Count,
                         Views = g.Count(),
-                        WentOn = AfterPage(_ => true),
-                        ToBuyingPages = AfterPage(p => BuyingPages.Contains(p)),
-                        ToPricing = AfterPage(p => p == "/pricing"),
-                        ToDemoPage = AfterPage(p => p is "/get-started" or "/demo"),
-                        FormStarted = AfterEvent(MarketingEvent.FormStarted),
-                        FormSubmitted = AfterEvent(MarketingEvent.FormSubmitted),
+                        WentOn = AttributedAction(MarketingEvent.PageView),
+                        ToBuyingPages = AttributedAction(MarketingEvent.PageView, p => BuyingPages.Contains(p)),
+                        ToPricing = AttributedAction(MarketingEvent.PageView, p => p == "/pricing"),
+                        ToDemoPage = AttributedAction(MarketingEvent.PageView, p => p is "/get-started" or "/demo"),
+                        FormStarted = AttributedAction(MarketingEvent.FormStarted),
+                        FormSubmitted = AttributedAction(MarketingEvent.FormSubmitted),
                         BookedDemo = SavedAfterRead(),
                     };
                 })
@@ -517,9 +533,12 @@ namespace iucs.meettomanage.application.Services
                     ChatsStarted = conversationVisitors,
                     DemoRequests = requestsList.Count,
                     FormStartedVisitors = list.Where(e => e.Type == MarketingEvent.FormStarted).Select(e => e.VisitorId).Distinct().Count(),
+                    FormSubmitAttemptedVisitors = list.Where(e => e.Type == MarketingEvent.FormSubmitAttempted).Select(e => e.VisitorId).Distinct().Count(),
+                    FormSubmitFailedVisitors = list.Where(e => e.Type == MarketingEvent.FormSubmitFailed).Select(e => e.VisitorId).Distinct().Count(),
                     FormSubmittedVisitors = list.Where(e => e.Type == MarketingEvent.FormSubmitted).Select(e => e.VisitorId).Distinct().Count(),
                     FormValidationFailedVisitors = list.Where(e => e.Type == MarketingEvent.FormValidationFailed).Select(e => e.VisitorId).Distinct().Count(),
                     FormAbandonedVisitors = list.Where(e => e.Type == MarketingEvent.FormAbandoned).Select(e => e.VisitorId).Distinct().Count(),
+                    WhatsAppVisitors = list.Where(e => e.Type == MarketingEvent.WhatsAppClicked).Select(e => e.VisitorId).Distinct().Count(),
                     ChatBookings = requestsList.Count(r => r.Message != null && r.Message.StartsWith(ChatBookingMarker)),
                     ConversionRate = visitors == 0 ? 0 : Math.Round(requestsList.Count * 100.0 / visitors, 1),
                     PagesPerVisitor = visitors == 0 ? 0 : Math.Round(list.Count(e => e.Type == MarketingEvent.PageView) * 1.0 / visitors, 1),
@@ -585,6 +604,29 @@ namespace iucs.meettomanage.application.Services
                 }).OrderByDescending(x => x.Converted).ThenByDescending(x => x.Leads).Take(10).ToList();
             }
 
+            int EventVisitors(string type) => current.Where(e => e.Type == type).Select(e => e.VisitorId).Distinct().Count();
+            int PageVisitors(Func<string, bool> match) => views.Where(e => match(e.Path)).Select(e => e.VisitorId).Distinct().Count();
+            var submittedVisitors = current.Where(e => e.Type == MarketingEvent.FormSubmitted).Select(e => e.VisitorId).ToHashSet();
+            var savedFormVisitors = currentRequests.Where(r => r.VisitorId != null && submittedVisitors.Contains(r.VisitorId))
+                .Select(r => r.VisitorId!).Distinct().Count();
+            var conversionDetail = new MarketingConversionDetailDto
+            {
+                Visitors = views.Select(e => e.VisitorId).Distinct().Count(),
+                HighIntentPageVisitors = PageVisitors(path => BuyingPages.Contains(path)),
+                PricingVisitors = PageVisitors(path => path == "/pricing"),
+                DemoPageVisitors = PageVisitors(path => path is "/get-started" or "/demo"),
+                FormStartedVisitors = EventVisitors(MarketingEvent.FormStarted),
+                SubmitAttemptedVisitors = EventVisitors(MarketingEvent.FormSubmitAttempted),
+                ValidationFailedVisitors = EventVisitors(MarketingEvent.FormValidationFailed),
+                AbandonedVisitors = EventVisitors(MarketingEvent.FormAbandoned),
+                ApiFailedVisitors = EventVisitors(MarketingEvent.FormSubmitFailed),
+                SavedFormLeadVisitors = savedFormVisitors,
+                ChatBookedVisitors = currentRequests.Where(r => r.Message != null && r.Message.StartsWith(ChatBookingMarker))
+                    .Select(r => r.VisitorId!).Distinct().Count(),
+                WhatsAppVisitors = EventVisitors(MarketingEvent.WhatsAppClicked),
+                TotalSavedLeadVisitors = currentRequests.Select(r => r.VisitorId!).Distinct().Count(),
+            };
+
             return new MarketingDashboardDto
             {
                 Days = days,
@@ -592,6 +634,7 @@ namespace iucs.meettomanage.application.Services
                 EndDate = endLocal.ToString("yyyy-MM-dd"),
                 Totals = Totals(current.Select(e => (e.Type, e.VisitorId)), currentRequests.Select(r => (r.Message, r.Status)), currentConversations.Select(c => c.VisitorKey)),
                 Previous = Totals(previous.Select(e => (e.Type, e.VisitorId)), previousRequests.Select(r => (r.Message, r.Status)), previousConversations.Select(c => c.VisitorKey)),
+                ConversionDetail = conversionDetail,
                 Daily = daily,
                 TopPages = Top(views.Select(e => e.Path), 10),
                 TopBlogPosts = Top(views.Where(e => e.Path.StartsWith("/blog/")).Select(e => e.Path), 10),

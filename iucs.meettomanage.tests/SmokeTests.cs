@@ -12734,6 +12734,7 @@ namespace iucs.meettomanage.tests
             await View("visitor-content-1", "/pricing");
             await View("visitor-content-1", "/get-started");
             await Track("visitor-content-1", "form_started", "/get-started");
+            await Track("visitor-content-1", "form_submit_attempted", "/get-started");
             await Track("visitor-content-1", "form_submitted", "/get-started");
             await new PlatformDemoRequestService(_db.UnitOfWork, _auditLog).CreateAsync(new CreatePlatformDemoRequestRequest
             {
@@ -12743,15 +12744,25 @@ namespace iucs.meettomanage.tests
             await View("visitor-content-2", "/blog/kpis");
             await View("visitor-content-3", "/blog/gamification");
             await View("visitor-content-3", "/blog/kpis");
+            await View("visitor-content-4", "/blog/old-guide");
+            await View("visitor-content-4", "/blog/kpis");
+            await View("visitor-content-4", "/pricing");
+            await View("visitor-content-5", "/blog/old-guide");
+            await View("visitor-content-5", "/blog/kpis");
+            await new PlatformDemoRequestService(_db.UnitOfWork, _auditLog).CreateAsync(new CreatePlatformDemoRequestRequest
+            {
+                FullName = "Explicit Source", WorkEmail = "explicit-source@x.com", Phone = "+91 90000 00013",
+                AcademyName = "Source Academy", VisitorId = "visitor-content-5", LandingPath = "/get-started?from=old-guide"
+            });
 
             var result = await analytics.GetContentPerformanceAsync(7, 330);
-            Assert.Equal(3, result.BlogReaders);
+            Assert.Equal(5, result.BlogReaders);
             var kpis = result.Posts[0];
             Assert.Equal("/blog/kpis", kpis.Path);
-            Assert.Equal(3, kpis.Readers);
-            Assert.Equal(1, kpis.WentOn);         // only visitor 1 opened another page after it
-            Assert.Equal(1, kpis.ToBuyingPages);
-            Assert.Equal(1, kpis.ToPricing);
+            Assert.Equal(5, kpis.Readers);
+            Assert.Equal(2, kpis.WentOn);         // visitors 1 and 4 acted while kpis was last-touch content
+            Assert.Equal(2, kpis.ToBuyingPages);
+            Assert.Equal(2, kpis.ToPricing);
             Assert.Equal(1, kpis.ToDemoPage);
             Assert.Equal(1, kpis.FormStarted);
             Assert.Equal(1, kpis.FormSubmitted);
@@ -12759,9 +12770,46 @@ namespace iucs.meettomanage.tests
             var games = Assert.Single(result.Posts, p => p.Path == "/blog/gamification");
             Assert.Equal(1, games.WentOn);
             Assert.Equal(0, games.ToBuyingPages);
+            var old = Assert.Single(result.Posts, p => p.Path == "/blog/old-guide");
+            Assert.Equal(2, old.Readers);
+            Assert.Equal(0, old.ToBuyingPages);   // a later article gets last-touch page credit
+            Assert.Equal(1, old.BookedDemo);      // explicit ?from= source wins for the saved lead
+
+            var dashboard = await analytics.GetDashboardAsync(7, 330);
+            Assert.Equal(1, dashboard.Totals.FormSubmitAttemptedVisitors);
+            Assert.Equal(0, dashboard.Totals.FormSubmitFailedVisitors);
+            Assert.Equal(2, dashboard.Totals.DemoRequests);
+            Assert.Equal(5, dashboard.ConversionDetail.Visitors);
+            Assert.Equal(2, dashboard.ConversionDetail.HighIntentPageVisitors);
+            Assert.Equal(2, dashboard.ConversionDetail.PricingVisitors);
+            Assert.Equal(1, dashboard.ConversionDetail.DemoPageVisitors);
+            Assert.Equal(1, dashboard.ConversionDetail.FormStartedVisitors);
+            Assert.Equal(1, dashboard.ConversionDetail.SubmitAttemptedVisitors);
+            Assert.Equal(1, dashboard.ConversionDetail.SavedFormLeadVisitors);
+            Assert.Equal(2, dashboard.ConversionDetail.TotalSavedLeadVisitors);
 
             // Visitor text sent to the AI never carries contact details.
             Assert.Equal("Call me on [phone] or [email] about fees", MarketingAnalyticsService.RedactContact("Call me on +91 98765 43210 or asha@x.com about fees"));
+        }
+
+        [Fact]
+        public async Task PlatformDemoRequest_IsValidatedAndRecentRetriesAreIdempotent()
+        {
+            var invalid = new CreatePlatformDemoRequestRequest { FullName = "Invalid", Phone = "call-me", AcademyName = "Test" };
+            var validation = new List<System.ComponentModel.DataAnnotations.ValidationResult>();
+            Assert.False(System.ComponentModel.DataAnnotations.Validator.TryValidateObject(invalid, new(invalid), validation, true));
+            Assert.Contains(validation, x => x.ErrorMessage!.Contains("valid phone"));
+
+            var service = new PlatformDemoRequestService(_db.UnitOfWork, _auditLog);
+            var request = new CreatePlatformDemoRequestRequest
+            {
+                FullName = "Retry Test", Phone = "+91 98765 40123", AcademyName = "Retry Academy",
+                VisitorId = "visitor-idempotent-1234", LandingPath = "/get-started?from=kpis"
+            };
+            var first = await service.CreateAsync(request);
+            var retry = await service.CreateAsync(request);
+            Assert.Equal(first.Id, retry.Id);
+            Assert.Equal("+919876540123", retry.Phone);
         }
 
         [Fact]

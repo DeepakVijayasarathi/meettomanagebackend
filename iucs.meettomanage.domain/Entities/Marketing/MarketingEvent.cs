@@ -17,6 +17,8 @@ namespace iucs.meettomanage.domain.Entities.Marketing
         public const string PageView = "page_view";
         public const string ChatStarted = "chat_started";
         public const string FormStarted = "form_started";
+        public const string FormSubmitAttempted = "form_submit_attempted";
+        public const string FormSubmitFailed = "form_submit_failed";
         public const string FormValidationFailed = "form_validation_failed";
         public const string FormAbandoned = "form_abandoned";
         public const string FormSubmitted = "form_submitted";

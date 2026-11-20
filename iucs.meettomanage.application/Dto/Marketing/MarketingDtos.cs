@@ -36,6 +36,12 @@ namespace iucs.meettomanage.application.Dto.Marketing
                 yield return new ValidationResult("Enter an email address or WhatsApp number.", [nameof(WorkEmail), nameof(Phone)]);
             if (!string.IsNullOrWhiteSpace(email) && !new EmailAddressAttribute().IsValid(email))
                 yield return new ValidationResult("Please enter a valid email address.", [nameof(WorkEmail)]);
+            if (!string.IsNullOrWhiteSpace(phone))
+            {
+                var digits = phone.Count(char.IsDigit);
+                if (digits is < 7 or > 15 || phone.Any(c => !char.IsDigit(c) && !"+ -().".Contains(c)))
+                    yield return new ValidationResult("Please enter a valid phone or WhatsApp number.", [nameof(Phone)]);
+            }
         }
     }
 
@@ -387,7 +393,7 @@ namespace iucs.meettomanage.application.Dto.Marketing
     public class TrackMarketingEventRequest
     {
         [Required]
-        [RegularExpression("^(page_view|chat_started|form_started|form_validation_failed|form_abandoned|form_submitted|whatsapp_clicked|exit_intent_shown|exit_intent_submitted|experiment_viewed|signin_clicked|demo_login_clicked|content_cta_clicked|sales_cta_clicked)$")]
+        [RegularExpression("^(page_view|chat_started|form_started|form_submit_attempted|form_submit_failed|form_validation_failed|form_abandoned|form_submitted|whatsapp_clicked|exit_intent_shown|exit_intent_submitted|experiment_viewed|signin_clicked|demo_login_clicked|content_cta_clicked|sales_cta_clicked)$")]
         public string Type { get; set; } = null!;
 
         [Required]
@@ -469,6 +475,12 @@ namespace iucs.meettomanage.application.Dto.Marketing
         /// <summary>Unique visitors who started the demo form during the period.</summary>
         public int FormStartedVisitors { get; set; }
 
+        /// <summary>Unique visitors who pressed submit after client-side validation passed.</summary>
+        public int FormSubmitAttemptedVisitors { get; set; }
+
+        /// <summary>Unique visitors whose valid submission failed before a lead was confirmed.</summary>
+        public int FormSubmitFailedVisitors { get; set; }
+
         /// <summary>Unique visitors whose browser emitted a demo-form submitted event.</summary>
         public int FormSubmittedVisitors { get; set; }
 
@@ -477,6 +489,9 @@ namespace iucs.meettomanage.application.Dto.Marketing
 
         /// <summary>Unique visitors who started but left the demo form.</summary>
         public int FormAbandonedVisitors { get; set; }
+
+        /// <summary>Unique visitors who opened the WhatsApp contact path.</summary>
+        public int WhatsAppVisitors { get; set; }
 
         /// <summary>Demo requests the chat assistant booked itself (a subset of DemoRequests).</summary>
         public int ChatBookings { get; set; }
@@ -505,6 +520,8 @@ namespace iucs.meettomanage.application.Dto.Marketing
         /// <summary>Same figures for the equal-length period just before, for trend arrows.</summary>
         public MarketingTotalsDto Previous { get; set; } = new();
 
+        public MarketingConversionDetailDto ConversionDetail { get; set; } = new();
+
         public List<MarketingDailyPointDto> Daily { get; set; } = new();
 
         public List<NamedCountDto> TopPages { get; set; } = new();
@@ -525,6 +542,24 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public List<MarketingPerformanceDto> SourceQuality { get; set; } = new();
         public List<MarketingPerformanceDto> CampaignPerformance { get; set; } = new();
         public List<MarketingPerformanceDto> LandingPagePerformance { get; set; } = new();
+    }
+
+    /// <summary>Unique-visitor stages and alternate conversion paths for a selected dashboard period.</summary>
+    public class MarketingConversionDetailDto
+    {
+        public int Visitors { get; set; }
+        public int HighIntentPageVisitors { get; set; }
+        public int PricingVisitors { get; set; }
+        public int DemoPageVisitors { get; set; }
+        public int FormStartedVisitors { get; set; }
+        public int SubmitAttemptedVisitors { get; set; }
+        public int ValidationFailedVisitors { get; set; }
+        public int AbandonedVisitors { get; set; }
+        public int ApiFailedVisitors { get; set; }
+        public int SavedFormLeadVisitors { get; set; }
+        public int ChatBookedVisitors { get; set; }
+        public int WhatsAppVisitors { get; set; }
+        public int TotalSavedLeadVisitors { get; set; }
     }
 
     public class MarketingAiInsightsDto
@@ -791,6 +826,8 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int ChatVisitors { get; set; }
         public int BookedVisitors { get; set; }
         public int FormStartedVisitors { get; set; }
+        public int FormSubmitAttemptedVisitors { get; set; }
+        public int FormSubmitFailedVisitors { get; set; }
         public int FormValidationFailedVisitors { get; set; }
         public int FormAbandonedVisitors { get; set; }
         public int FormSubmittedVisitors { get; set; }
