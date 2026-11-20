@@ -12792,8 +12792,16 @@ namespace iucs.meettomanage.tests
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/pricing?x=1", VisitorId = "visitor-aaaa" }, desktop);
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/blog/five-signs/", VisitorId = "visitor-bbbb", UtmSource = "Instagram", UtmMedium = "social", UtmCampaign = "launch", Country = "US" }, phone);
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "chat_started", Path = "/", VisitorId = "visitor-bbbb" }, phone);
+            // An analytics start without a persisted transcript must not appear as a viewable chat.
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "chat_started", Path = "/pricing", VisitorId = "visitor-aaaa" }, desktop);
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/", VisitorId = "visitor-cccc" }, "Googlebot/2.1 (+http://www.google.com/bot.html)");
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/<script>", VisitorId = "visitor-dddd" }, desktop);
+
+            await new MarketingChatLogService(_db.UnitOfWork).RecordTurnAsync(
+                "analytics-chat-bbbb",
+                [new SalesChatTurn { Role = "user", Text = "How much does it cost?" }],
+                "Here are the plans.", null,
+                new MarketingLeadAttributionDto { VisitorId = "visitor-bbbb", Source = "Instagram", LandingPath = "/" });
 
             var demos = new PlatformDemoRequestService(_db.UnitOfWork, _auditLog);
             await demos.CreateAsync(new CreatePlatformDemoRequestRequest { FullName = "A", WorkEmail = "a@x.com", Phone = "9000000001", AcademyName = "A Academy", VisitorId = "visitor-aaaa" });
@@ -12823,7 +12831,9 @@ namespace iucs.meettomanage.tests
 
             Assert.Equal(3, dashboard.Totals.PageViews);
             Assert.Equal(2, dashboard.Totals.Visitors);
+            Assert.Equal(1, dashboard.Totals.ChatsStarted);
             Assert.Equal(2, dashboard.Totals.DemoRequests);
+            Assert.Equal(1, dashboard.Daily.Sum(d => d.ChatsStarted));
             Assert.Equal(2, dashboard.Daily.Sum(d => d.DemoRequests));
             Assert.Equal(1, dashboard.Totals.ChatsStarted);
             Assert.Equal(2, dashboard.Totals.DemoRequests);

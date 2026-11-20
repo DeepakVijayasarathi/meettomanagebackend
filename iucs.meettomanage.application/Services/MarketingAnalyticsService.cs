@@ -467,6 +467,10 @@ namespace iucs.meettomanage.application.Services
                 .Where(r => r.CreatedAtUtc >= previousStartUtc && r.CreatedAtUtc < endUtc)
                 .Select(r => new { r.CreatedAtUtc, r.Message, r.Status, r.Source, r.Campaign, r.LandingPath, r.VisitorId })
                 .ToListAsync(cancellationToken);
+            var conversations = await _unitOfWork.Repository<MarketingChatConversation>().Query()
+                .Where(c => c.CreatedAtUtc >= previousStartUtc && c.CreatedAtUtc < endUtc)
+                .Select(c => new { c.CreatedAtUtc, VisitorKey = c.VisitorId ?? c.ConversationKey })
+                .ToListAsync(cancellationToken);
 
             // The CRM also stores imported spreadsheet rows and leads added by the team. Those are
             // sales prospects, not website conversions. Public form and chat bookings always carry
@@ -479,19 +483,26 @@ namespace iucs.meettomanage.application.Services
             var previous = events.Where(e => e.CreatedAtUtc < startUtc).ToList();
             var currentRequests = websiteRequests.Where(r => r.CreatedAtUtc >= startUtc).ToList();
             var previousRequests = websiteRequests.Where(r => r.CreatedAtUtc < startUtc).ToList();
+            var currentConversations = conversations.Where(c => c.CreatedAtUtc >= startUtc).ToList();
+            var previousConversations = conversations.Where(c => c.CreatedAtUtc < startUtc).ToList();
 
             MarketingTotalsDto Totals(
                 IEnumerable<(string Type, string VisitorId)> evts,
-                IEnumerable<(string? Message, StoreInquiryStatus Status)> demoRequests)
+                IEnumerable<(string? Message, StoreInquiryStatus Status)> demoRequests,
+                IEnumerable<string> savedConversations)
             {
                 var list = evts.ToList();
                 var requestsList = demoRequests.ToList();
+                var conversationVisitors = savedConversations.Distinct().Count();
                 var visitors = list.Where(e => e.Type == MarketingEvent.PageView).Select(e => e.VisitorId).Distinct().Count();
                 return new MarketingTotalsDto
                 {
                     PageViews = list.Count(e => e.Type == MarketingEvent.PageView),
                     Visitors = visitors,
-                    ChatsStarted = list.Count(e => e.Type == MarketingEvent.ChatStarted),
+                    // This number links to the Chats screen, so count only conversations that
+                    // were actually persisted and can be opened there. A chat_started event is
+                    // still useful in visitor journeys, but can exist when the API call failed.
+                    ChatsStarted = conversationVisitors,
                     DemoRequests = requestsList.Count,
                     FormStartedVisitors = list.Where(e => e.Type == MarketingEvent.FormStarted).Select(e => e.VisitorId).Distinct().Count(),
                     FormSubmittedVisitors = list.Where(e => e.Type == MarketingEvent.FormSubmitted).Select(e => e.VisitorId).Distinct().Count(),
@@ -500,7 +511,7 @@ namespace iucs.meettomanage.application.Services
                     ChatBookings = requestsList.Count(r => r.Message != null && r.Message.StartsWith(ChatBookingMarker)),
                     ConversionRate = visitors == 0 ? 0 : Math.Round(requestsList.Count * 100.0 / visitors, 1),
                     PagesPerVisitor = visitors == 0 ? 0 : Math.Round(list.Count(e => e.Type == MarketingEvent.PageView) * 1.0 / visitors, 1),
-                    ChatStartRate = visitors == 0 ? 0 : Math.Round(list.Count(e => e.Type == MarketingEvent.ChatStarted) * 100.0 / visitors, 1),
+                    ChatStartRate = visitors == 0 ? 0 : Math.Round(conversationVisitors * 100.0 / visitors, 1),
                     DemoPipelineConversionRate = requestsList.Count == 0 ? 0 : Math.Round(
                         requestsList.Count(r => r.Status == StoreInquiryStatus.Converted) * 100.0 / requestsList.Count, 1),
                 };
@@ -517,7 +528,7 @@ namespace iucs.meettomanage.application.Services
                     PageViews = views.Count(e => LocalDay(e.CreatedAtUtc) == day),
                     Visitors = views.Where(e => LocalDay(e.CreatedAtUtc) == day).Select(e => e.VisitorId).Distinct().Count(),
                     DemoRequests = currentRequests.Count(r => LocalDay(r.CreatedAtUtc) == day),
-                    ChatsStarted = current.Count(e => e.Type == MarketingEvent.ChatStarted && LocalDay(e.CreatedAtUtc) == day),
+                    ChatsStarted = currentConversations.Where(c => LocalDay(c.CreatedAtUtc) == day).Select(c => c.VisitorKey).Distinct().Count(),
                 })
                 .ToList();
 
@@ -567,8 +578,8 @@ namespace iucs.meettomanage.application.Services
                 Days = days,
                 StartDate = startLocal.ToString("yyyy-MM-dd"),
                 EndDate = endLocal.ToString("yyyy-MM-dd"),
-                Totals = Totals(current.Select(e => (e.Type, e.VisitorId)), currentRequests.Select(r => (r.Message, r.Status))),
-                Previous = Totals(previous.Select(e => (e.Type, e.VisitorId)), previousRequests.Select(r => (r.Message, r.Status))),
+                Totals = Totals(current.Select(e => (e.Type, e.VisitorId)), currentRequests.Select(r => (r.Message, r.Status)), currentConversations.Select(c => c.VisitorKey)),
+                Previous = Totals(previous.Select(e => (e.Type, e.VisitorId)), previousRequests.Select(r => (r.Message, r.Status)), previousConversations.Select(c => c.VisitorKey)),
                 Daily = daily,
                 TopPages = Top(views.Select(e => e.Path), 10),
                 TopBlogPosts = Top(views.Where(e => e.Path.StartsWith("/blog/")).Select(e => e.Path), 10),
