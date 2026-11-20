@@ -356,19 +356,21 @@ namespace iucs.meettomanage.application.Services
             CancellationToken cancellationToken = default, DateOnly? from = null, DateOnly? to = null)
         {
             (days, _, var startLocal, var endLocal, var startUtc, var endUtc) = Window(days, tzOffsetMinutes, from, to);
-            var views = await _unitOfWork.Repository<MarketingEvent>().Query()
-                .Where(e => e.Type == MarketingEvent.PageView && e.CreatedAtUtc >= startUtc && e.CreatedAtUtc < endUtc)
+            var events = await _unitOfWork.Repository<MarketingEvent>().Query()
+                .Where(e => (e.Type == MarketingEvent.PageView || e.Type == MarketingEvent.FormStarted || e.Type == MarketingEvent.FormSubmitted)
+                    && e.CreatedAtUtc >= startUtc && e.CreatedAtUtc < endUtc)
                 .OrderBy(e => e.CreatedAtUtc)
-                .Select(e => new { e.VisitorId, e.Path, e.CreatedAtUtc })
+                .Select(e => new { e.VisitorId, e.Path, e.Type, e.CreatedAtUtc })
                 .ToListAsync(cancellationToken);
-            var booked = (await _unitOfWork.Repository<PlatformDemoRequest>().Query()
+            var views = events.Where(e => e.Type == MarketingEvent.PageView).ToList();
+            var booked = await _unitOfWork.Repository<PlatformDemoRequest>().Query()
                     .Where(r => r.VisitorId != null && r.CreatedAtUtc >= startUtc && r.CreatedAtUtc < endUtc)
-                    .Select(r => r.VisitorId!)
-                    .ToListAsync(cancellationToken))
-                .ToHashSet();
+                    .Select(r => new { VisitorId = r.VisitorId!, r.CreatedAtUtc })
+                    .ToListAsync(cancellationToken);
             var titles = (await _unitOfWork.Repository<BlogPost>().Query().Select(b => new { b.Slug, b.Title }).ToListAsync(cancellationToken))
                 .GroupBy(b => b.Slug).ToDictionary(g => g.Key, g => g.First().Title);
-            var byVisitor = views.GroupBy(v => v.VisitorId).ToDictionary(g => g.Key, g => g.ToList());
+            var byVisitor = events.GroupBy(v => v.VisitorId).ToDictionary(g => g.Key, g => g.ToList());
+            var bookedByVisitor = booked.GroupBy(r => r.VisitorId).ToDictionary(g => g.Key, g => g.Select(r => r.CreatedAtUtc).ToList());
 
             var posts = views
                 .Where(v => v.Path.StartsWith("/blog/"))
@@ -376,23 +378,33 @@ namespace iucs.meettomanage.application.Services
                 .Select(g =>
                 {
                     var readers = g.Select(v => v.VisitorId).Distinct().ToList();
-                    int After(Func<string, bool> match) => readers.Count(r =>
+                    DateTime FirstRead(string reader) => g.Where(v => v.VisitorId == reader).Min(v => v.CreatedAtUtc);
+                    int AfterPage(Func<string, bool> match) => readers.Count(r =>
                     {
-                        var firstRead = g.Where(v => v.VisitorId == r).Min(v => v.CreatedAtUtc);
-                        return byVisitor[r].Any(v => v.CreatedAtUtc > firstRead && match(v.Path));
+                        var firstRead = FirstRead(r);
+                        return byVisitor[r].Any(v => v.Type == MarketingEvent.PageView && v.CreatedAtUtc > firstRead && match(v.Path));
                     });
+                    int AfterEvent(string type) => readers.Count(r =>
+                        byVisitor[r].Any(v => v.Type == type && v.CreatedAtUtc > FirstRead(r)));
+                    int SavedAfterRead() => readers.Count(r => bookedByVisitor.TryGetValue(r, out var saved)
+                        && saved.Any(created => created > FirstRead(r)));
                     return new MarketingContentStatDto
                     {
                         Path = g.Key,
                         Title = titles.GetValueOrDefault(g.Key["/blog/".Length..]),
                         Readers = readers.Count,
                         Views = g.Count(),
-                        WentOn = After(_ => true),
-                        ToBuyingPages = After(p => BuyingPages.Contains(p)),
-                        BookedDemo = readers.Count(booked.Contains),
+                        WentOn = AfterPage(_ => true),
+                        ToBuyingPages = AfterPage(p => BuyingPages.Contains(p)),
+                        ToPricing = AfterPage(p => p == "/pricing"),
+                        ToDemoPage = AfterPage(p => p is "/get-started" or "/demo"),
+                        FormStarted = AfterEvent(MarketingEvent.FormStarted),
+                        FormSubmitted = AfterEvent(MarketingEvent.FormSubmitted),
+                        BookedDemo = SavedAfterRead(),
                     };
                 })
-                .OrderByDescending(p => p.ToBuyingPages).ThenByDescending(p => p.Readers).ThenByDescending(p => p.WentOn)
+                .OrderByDescending(p => p.BookedDemo).ThenByDescending(p => p.FormSubmitted)
+                .ThenByDescending(p => p.ToBuyingPages).ThenByDescending(p => p.Readers).ThenByDescending(p => p.WentOn)
                 .ToList();
 
             return new MarketingContentPerformanceDto

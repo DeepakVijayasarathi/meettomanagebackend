@@ -12728,9 +12728,18 @@ namespace iucs.meettomanage.tests
         {
             var analytics = new MarketingAnalyticsService(_db.UnitOfWork);
             const string ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0";
-            Task View(string visitor, string path) => analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = path, VisitorId = visitor }, ua);
+            Task Track(string visitor, string type, string path) => analytics.TrackAsync(new TrackMarketingEventRequest { Type = type, Path = path, VisitorId = visitor }, ua);
+            Task View(string visitor, string path) => Track(visitor, "page_view", path);
             await View("visitor-content-1", "/blog/kpis");
             await View("visitor-content-1", "/pricing");
+            await View("visitor-content-1", "/get-started");
+            await Track("visitor-content-1", "form_started", "/get-started");
+            await Track("visitor-content-1", "form_submitted", "/get-started");
+            await new PlatformDemoRequestService(_db.UnitOfWork, _auditLog).CreateAsync(new CreatePlatformDemoRequestRequest
+            {
+                FullName = "Content Reader", WorkEmail = "reader@x.com", Phone = "9000000012",
+                AcademyName = "Reader Academy", VisitorId = "visitor-content-1"
+            });
             await View("visitor-content-2", "/blog/kpis");
             await View("visitor-content-3", "/blog/gamification");
             await View("visitor-content-3", "/blog/kpis");
@@ -12741,7 +12750,12 @@ namespace iucs.meettomanage.tests
             Assert.Equal("/blog/kpis", kpis.Path);
             Assert.Equal(3, kpis.Readers);
             Assert.Equal(1, kpis.WentOn);         // only visitor 1 opened another page after it
-            Assert.Equal(1, kpis.ToBuyingPages);  // ...and that page was /pricing
+            Assert.Equal(1, kpis.ToBuyingPages);
+            Assert.Equal(1, kpis.ToPricing);
+            Assert.Equal(1, kpis.ToDemoPage);
+            Assert.Equal(1, kpis.FormStarted);
+            Assert.Equal(1, kpis.FormSubmitted);
+            Assert.Equal(1, kpis.BookedDemo);
             var games = Assert.Single(result.Posts, p => p.Path == "/blog/gamification");
             Assert.Equal(1, games.WentOn);
             Assert.Equal(0, games.ToBuyingPages);

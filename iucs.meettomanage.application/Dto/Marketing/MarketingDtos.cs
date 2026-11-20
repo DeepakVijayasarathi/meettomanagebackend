@@ -624,6 +624,15 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int WentOn { get; set; }
         /// <summary>Readers who went on to /pricing, /get-started or /demo after this post.</summary>
         public int ToBuyingPages { get; set; }
+        /// <summary>Readers who opened /pricing after this post.</summary>
+        public int ToPricing { get; set; }
+        /// <summary>Readers who opened /get-started or /demo after this post.</summary>
+        public int ToDemoPage { get; set; }
+        /// <summary>Readers who started the demo form after this post.</summary>
+        public int FormStarted { get; set; }
+        /// <summary>Readers whose browser recorded a demo-form submission after this post.</summary>
+        public int FormSubmitted { get; set; }
+        /// <summary>Readers whose demo request was persisted after this post.</summary>
         public int BookedDemo { get; set; }
     }
 
