@@ -465,13 +465,20 @@ namespace iucs.meettomanage.application.Services
                 .ToListAsync(cancellationToken);
             var requests = await _unitOfWork.Repository<PlatformDemoRequest>().Query()
                 .Where(r => r.CreatedAtUtc >= previousStartUtc && r.CreatedAtUtc < endUtc)
-                .Select(r => new { r.CreatedAtUtc, r.Message, r.Status, r.Source, r.Campaign, r.LandingPath })
+                .Select(r => new { r.CreatedAtUtc, r.Message, r.Status, r.Source, r.Campaign, r.LandingPath, r.VisitorId })
                 .ToListAsync(cancellationToken);
+
+            // The CRM also stores imported spreadsheet rows and leads added by the team. Those are
+            // sales prospects, not website conversions. Public form and chat bookings always carry
+            // the browser's first-party visitor id, so dashboard conversion metrics must use only
+            // that attributable subset. Counting every CRM row made a 20-row CSV import appear as
+            // 20 demo bookings (including on days with zero visitors).
+            var websiteRequests = requests.Where(r => !string.IsNullOrWhiteSpace(r.VisitorId)).ToList();
 
             var current = events.Where(e => e.CreatedAtUtc >= startUtc).ToList();
             var previous = events.Where(e => e.CreatedAtUtc < startUtc).ToList();
-            var currentRequests = requests.Where(r => r.CreatedAtUtc >= startUtc).ToList();
-            var previousRequests = requests.Where(r => r.CreatedAtUtc < startUtc).ToList();
+            var currentRequests = websiteRequests.Where(r => r.CreatedAtUtc >= startUtc).ToList();
+            var previousRequests = websiteRequests.Where(r => r.CreatedAtUtc < startUtc).ToList();
 
             MarketingTotalsDto Totals(
                 IEnumerable<(string Type, string VisitorId)> evts,

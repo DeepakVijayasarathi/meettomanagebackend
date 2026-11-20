@@ -12796,12 +12796,14 @@ namespace iucs.meettomanage.tests
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/<script>", VisitorId = "visitor-dddd" }, desktop);
 
             var demos = new PlatformDemoRequestService(_db.UnitOfWork, _auditLog);
-            await demos.CreateAsync(new CreatePlatformDemoRequestRequest { FullName = "A", WorkEmail = "a@x.com", Phone = "9000000001", AcademyName = "A Academy" });
+            await demos.CreateAsync(new CreatePlatformDemoRequestRequest { FullName = "A", WorkEmail = "a@x.com", Phone = "9000000001", AcademyName = "A Academy", VisitorId = "visitor-aaaa" });
             await demos.CreateAsync(new CreatePlatformDemoRequestRequest
             {
                 FullName = "B", WorkEmail = "b@x.com", Phone = "9000000002", AcademyName = "B School",
-                Message = "Booked by the website chat assistant. Notes: 200 students",
+                Message = "Booked by the website chat assistant. Notes: 200 students", VisitorId = "visitor-bbbb",
             });
+            // CRM imports/manual additions are prospects, not website demo conversions.
+            await demos.CreateAsync(new CreatePlatformDemoRequestRequest { FullName = "Imported", WorkEmail = "imported@x.com", Phone = "9000000003", AcademyName = "Imported Academy", Source = "spreadsheet_import" });
 
             var dashboard = await analytics.GetDashboardAsync(30, 330);
 
@@ -12821,6 +12823,8 @@ namespace iucs.meettomanage.tests
 
             Assert.Equal(3, dashboard.Totals.PageViews);
             Assert.Equal(2, dashboard.Totals.Visitors);
+            Assert.Equal(2, dashboard.Totals.DemoRequests);
+            Assert.Equal(2, dashboard.Daily.Sum(d => d.DemoRequests));
             Assert.Equal(1, dashboard.Totals.ChatsStarted);
             Assert.Equal(2, dashboard.Totals.DemoRequests);
             Assert.Equal(1, dashboard.Totals.ChatBookings);
