@@ -13,6 +13,8 @@ namespace iucs.meettomanage.application.Services
         public sealed record Email(string Subject, string Html);
 
         private const string WhatsAppUrl = "https://wa.me/919344773231";
+        private const string WebsiteUrl = "https://meettomanage.cloud";
+        private const string DemoVideoUrl = "https://www.youtube.com/watch?v=wIadR73CVus";
 
         private static string H(string? value) => WebUtility.HtmlEncode(value ?? "");
 
@@ -24,7 +26,9 @@ namespace iucs.meettomanage.application.Services
 
         private static string Wrap(string inner) =>
             $"<div style=\"font-family:Arial,sans-serif;font-size:15px;line-height:1.6;color:#1c1917;max-width:560px\">{inner}" +
-            "<p style=\"margin-top:24px\">The Meet to Manage team</p></div>";
+            $"<p style=\"margin-top:24px\">Website: <a href=\"{WebsiteUrl}\">{WebsiteUrl}</a><br>" +
+            $"Demo video: <a href=\"{DemoVideoUrl}\">Watch the Meet to Manage demo</a></p>" +
+            "<p>Looking forward to connecting!</p><p>Best regards,<br>Meet to Manage team</p></div>";
 
         private static string Button(string url, string label) =>
             $"<p><a href=\"{H(url)}\" style=\"display:inline-block;background:#c2410c;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:bold\">{H(label)}</a></p>";

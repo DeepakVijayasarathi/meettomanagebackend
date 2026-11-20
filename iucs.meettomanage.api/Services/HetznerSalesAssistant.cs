@@ -1003,18 +1003,22 @@ namespace iucs.meettomanage.api.Services
 
         public async Task<MarketingLeadRecommendationDto> RecommendLeadAsync(PlatformDemoRequestDto lead, CancellationToken cancellationToken = default)
         {
+            const string demoVideoUrl = "https://www.youtube.com/watch?v=wIadR73CVus";
+            const string messageFooter = "Website: https://meettomanage.cloud\nDemo video: https://www.youtube.com/watch?v=wIadR73CVus\n\nLooking forward to connecting!\n\nBest regards,\nMeet to Manage team";
+            static string WithFooter(string message, string videoUrl, string footer) =>
+                message.Contains(videoUrl, StringComparison.OrdinalIgnoreCase) ? message.Trim() : $"{message.Trim()}\n\n{footer}";
             var fallback = new MarketingLeadRecommendationDto
             {
                 Summary = $"{lead.LeadTemperature} lead from {lead.Source ?? "direct traffic"}; current status is {lead.Status}.",
                 NextAction = lead.Status == StoreInquiryStatus.New ? "Contact the lead today and confirm their academy's priorities." : "Complete the scheduled follow-up and update the outcome.",
                 SuggestedChannel = string.IsNullOrWhiteSpace(lead.Phone) ? "Email" : "WhatsApp",
-                SuggestedMessage = $"Hi {lead.FullName}, thank you for your interest in Meet to Manage. When would be a convenient time for a short platform walkthrough?",
+                SuggestedMessage = WithFooter($"Hi {lead.FullName}, thank you for your interest in Meet to Manage. When would be a convenient time for a short platform walkthrough?", demoVideoUrl, messageFooter),
                 AiPowered = false,
             };
             if (!_options.IsConfigured) return fallback;
             var messages = new JsonArray
             {
-                new JsonObject { ["role"] = "system", ["content"] = "You are a B2B SaaS sales coach. Use only the supplied lead data. Return strict JSON with summary, nextAction, suggestedChannel (WhatsApp, Email, or Call), and suggestedMessage. Keep the message respectful and under 70 words. Do not invent facts." },
+                new JsonObject { ["role"] = "system", ["content"] = "You are a B2B SaaS sales coach. Use only the supplied lead data. Return strict JSON with summary, nextAction, suggestedChannel (WhatsApp, Email, or Call), and suggestedMessage. Keep the personalised message body respectful and under 70 words. Do not add a signature, website or video link; the application adds the standard footer. Do not invent facts." },
                 new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(new { lead.FullName, lead.AcademyName, lead.Message, lead.Status, lead.Source, lead.Campaign, lead.LeadScore, lead.LeadTemperature, lead.LastContactedAtUtc, lead.NextFollowUpAtUtc }) },
             };
             try
@@ -1026,7 +1030,7 @@ namespace iucs.meettomanage.api.Services
                     var content = JsonNode.Parse(body)?["choices"]?[0]?["message"]?["content"]?.GetValue<string>();
                     var json = string.IsNullOrWhiteSpace(content) ? null : JsonNode.Parse(content) as JsonObject;
                     if (json?["nextAction"]?.GetValue<string>() is { } action && json["summary"]?.GetValue<string>() is { } summary)
-                        return new MarketingLeadRecommendationDto { Summary = summary, NextAction = action, SuggestedChannel = json["suggestedChannel"]?.GetValue<string>() ?? fallback.SuggestedChannel, SuggestedMessage = json["suggestedMessage"]?.GetValue<string>() ?? fallback.SuggestedMessage, AiPowered = true };
+                        return new MarketingLeadRecommendationDto { Summary = summary, NextAction = action, SuggestedChannel = json["suggestedChannel"]?.GetValue<string>() ?? fallback.SuggestedChannel, SuggestedMessage = WithFooter(json["suggestedMessage"]?.GetValue<string>() ?? fallback.SuggestedMessage, demoVideoUrl, messageFooter), AiPowered = true };
                 }
             }
             catch (Exception ex) when (ex is JsonException or HttpRequestException or ExternalServiceException) { _logger.LogWarning(ex, "Lead recommendation fallback used."); }
