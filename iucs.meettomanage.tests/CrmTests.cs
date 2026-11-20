@@ -187,6 +187,28 @@ public sealed class CrmTests : IDisposable
     }
 
     [Fact]
+    public async Task SalesRep_CannotReopenDoNotContactLead_ButManagerCan()
+    {
+        var rep = await MarketingUser("Rep", CrmRole.Sales);
+        var manager = await MarketingUser("Mgr", CrmRole.Manager);
+        var lead = new PlatformDemoRequest
+        {
+            Id = Guid.NewGuid(), FullName = "Opted out", WorkEmail = "optout@crm.test", Phone = "1",
+            AcademyName = "DNC Academy", AssignedToUserId = rep.Id, Stage = LeadStage.Lost,
+            Status = StoreInquiryStatus.Closed, LostReason = "Do not contact"
+        };
+        _db.Context.PlatformDemoRequests.Add(lead);
+        await _db.Context.SaveChangesAsync();
+
+        var reopen = new application.Dto.Marketing.SetLeadStageRequest { Stage = LeadStage.Contacted };
+        _me.UserId = rep.Id;
+        await Assert.ThrowsAsync<ForbiddenException>(() => Through("SetStage", "PUT", new() { ["id"] = lead.Id, ["request"] = reopen }));
+
+        _me.UserId = manager.Id;
+        Assert.True(await Through("SetStage", "PUT", new() { ["id"] = lead.Id, ["request"] = reopen }));
+    }
+
+    [Fact]
     public async Task NewWebsiteLeads_AreNeverAutoAssignedToAViewer()
     {
         var viewer = await MarketingUser("Aaron", CrmRole.Viewer);   // alphabetically first, no open leads
@@ -409,6 +431,32 @@ public sealed class CrmTests : IDisposable
             Assert.NotNull(t.CompletedAtUtc);
             Assert.StartsWith("Stopped automatically", t.Outcome);
         });
+    }
+
+    [Fact]
+    public async Task OptOut_MarksDoNotContact_ClearsFollowUp_AndClosesOpenTasks()
+    {
+        var rep = await MarketingUser("Rep", CrmRole.Sales);
+        _me.UserId = rep.Id;
+        var lead = new PlatformDemoRequest
+        {
+            Id = Guid.NewGuid(), FullName = "No More", WorkEmail = "", Phone = "1", AcademyName = "Quiet Academy",
+            AssignedToUserId = rep.Id, Stage = LeadStage.Contacted, NextFollowUpAtUtc = DateTime.UtcNow.AddDays(1),
+        };
+        _db.Context.PlatformDemoRequests.Add(lead);
+        _db.Context.CrmTasks.AddRange(
+            new CrmTask { Id = Guid.NewGuid(), LeadId = lead.Id, Title = "Open follow-up", DueAtUtc = DateTime.UtcNow.AddDays(1), AssignedToUserId = rep.Id },
+            new CrmTask { Id = Guid.NewGuid(), LeadId = lead.Id, Title = "Already done", DueAtUtc = DateTime.UtcNow, AssignedToUserId = rep.Id, CompletedAtUtc = DateTime.UtcNow });
+        await _db.Context.SaveChangesAsync();
+
+        var result = await Crm().OptOutAsync(lead.Id, default);
+
+        Assert.Equal((LeadStage.Lost, "Do not contact", StoreInquiryStatus.Closed), (result.Stage, result.LostReason, result.Status));
+        Assert.Null(result.NextFollowUpAtUtc);
+        var open = await _db.Context.CrmTasks.SingleAsync(x => x.Title == "Open follow-up");
+        Assert.NotNull(open.CompletedAtUtc);
+        Assert.Equal("Cancelled — contact opted out", open.Outcome);
+        Assert.Contains(await _db.Context.MarketingLeadActivities.Where(x => x.PlatformDemoRequestId == lead.Id).ToListAsync(), x => x.Type == "Opted out");
     }
 
     [Fact]

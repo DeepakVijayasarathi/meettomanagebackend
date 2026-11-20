@@ -1003,6 +1003,15 @@ namespace iucs.meettomanage.api.Services
 
         public async Task<MarketingLeadRecommendationDto> RecommendLeadAsync(PlatformDemoRequestDto lead, CancellationToken cancellationToken = default)
         {
+            if (lead.Stage == LeadStage.Lost && string.Equals(lead.LostReason, "Do not contact", StringComparison.OrdinalIgnoreCase))
+                return new MarketingLeadRecommendationDto
+                {
+                    Summary = "This contact has opted out of sales communication.",
+                    NextAction = "Do not call, e-mail, WhatsApp or start another follow-up plan unless a manager reopens the lead after receiving explicit permission.",
+                    SuggestedChannel = "None",
+                    SuggestedMessage = "",
+                    AiPowered = false,
+                };
             const string demoVideoUrl = "https://www.youtube.com/watch?v=wIadR73CVus";
             const string messageFooter = "Website: https://meettomanage.cloud\nDemo video: https://www.youtube.com/watch?v=wIadR73CVus\n\nLooking forward to connecting!\n\nBest regards,\nMeet to Manage team";
             static string WithFooter(string message, string videoUrl, string footer) =>

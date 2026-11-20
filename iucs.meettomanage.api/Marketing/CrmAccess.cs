@@ -3,6 +3,7 @@ using iucs.meettomanage.domain.Common;
 using iucs.meettomanage.application.Dto.Marketing;
 using iucs.meettomanage.domain.Data;
 using iucs.meettomanage.domain.Entities.Marketing;
+using iucs.meettomanage.domain.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Mvc.Filters;
@@ -62,6 +63,15 @@ public sealed class CrmAccess(MeetToManageDbContext db, ICurrentUserService curr
         var owner = await db.PlatformDemoRequests.AsNoTracking().Where(x => x.Id == leadId).Select(x => new { x.AssignedToUserId }).FirstOrDefaultAsync(ct);
         if (owner is not null && !CanSee(me, owner.AssignedToUserId)) throw new ForbiddenException("This lead belongs to another salesperson.");
     }
+
+    public Task<bool> IsDoNotContactAsync(Guid leadId, CancellationToken ct = default) =>
+        db.PlatformDemoRequests.AsNoTracking().AnyAsync(x => x.Id == leadId && x.Stage == LeadStage.Lost && x.LostReason == "Do not contact", ct);
+
+    public Task<bool> AnyDoNotContactAsync(IEnumerable<Guid> leadIds, CancellationToken ct = default)
+    {
+        var ids = leadIds.Distinct().ToList();
+        return db.PlatformDemoRequests.AsNoTracking().AnyAsync(x => ids.Contains(x.Id) && x.Stage == LeadStage.Lost && x.LostReason == "Do not contact", ct);
+    }
 }
 
 /// <summary>
@@ -79,6 +89,24 @@ public sealed class CrmLeadAccessFilter(CrmAccess access) : IAsyncActionFilter
         var action = (context.ActionDescriptor as ControllerActionDescriptor)?.ActionName ?? "";
         var role = await access.RoleAsync(ct);
         var isRead = HttpMethods.IsGet(context.HttpContext.Request.Method);
+
+        if (role != CrmRole.Manager && context.ActionArguments.TryGetValue("id", out var protectedId) && protectedId is Guid protectedLeadId)
+        {
+            var reopensOptOut = context.ActionArguments.TryGetValue("request", out var protectedBody) && protectedBody switch
+            {
+                SetLeadStageRequest s => s.Stage != LeadStage.Lost,
+                UpdatePlatformDemoRequestStatusRequest s => s.Status != StoreInquiryStatus.Closed,
+                UpdatePlatformDemoRequestRequest s => s.Status.HasValue && s.Status != StoreInquiryStatus.Closed,
+                _ => false,
+            };
+            if (reopensOptOut && await access.IsDoNotContactAsync(protectedLeadId, ct))
+                await access.RequireManagerAsync(ct);
+        }
+
+        if (role != CrmRole.Manager && context.ActionArguments.TryGetValue("request", out var bulkBody)
+            && bulkBody is BulkMarketingLeadRequest { Status: { } status } protectedBulk && status != StoreInquiryStatus.Closed
+            && await access.AnyDoNotContactAsync(protectedBulk.Ids, ct))
+            await access.RequireManagerAsync(ct);
 
         if (context.ActionArguments.TryGetValue("query", out var q) && q is MarketingLeadQuery query)
             query.VisibleToUserId = role == CrmRole.Sales ? access.UserId : null;

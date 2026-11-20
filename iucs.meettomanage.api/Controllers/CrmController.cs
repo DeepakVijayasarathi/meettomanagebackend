@@ -92,6 +92,9 @@ public sealed class CrmController(CrmService crm) : ControllerBase
     [HttpPost("leads/{id:guid}/log")]
     public async Task<ActionResult<PlatformDemoRequestDto>> LogInteraction(Guid id, LogCrmInteractionRequest request, CancellationToken ct) => Ok((await crm.LogInteractionAsync(id, request, ct)).ToDto());
 
+    [HttpPost("leads/{id:guid}/opt-out")]
+    public async Task<ActionResult<PlatformDemoRequestDto>> OptOut(Guid id, CancellationToken ct) => Ok((await crm.OptOutAsync(id, ct)).ToDto());
+
     // ---- reports
     [HttpGet("reports")]
     public async Task<ActionResult<CrmReport>> Reports([FromQuery] int days = 90, CancellationToken ct = default) => Ok(await crm.ReportAsync(days, ct));

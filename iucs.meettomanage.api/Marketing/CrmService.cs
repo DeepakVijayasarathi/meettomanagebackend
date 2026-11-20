@@ -376,6 +376,31 @@ public sealed partial class CrmService(MeetToManageDbContext db, CrmAccess acces
         return lead;
     }
 
+    /// <summary>
+    /// Permanently suppresses sales outreach until a manager deliberately reopens the lead. The existing Lost
+    /// lifecycle state keeps this migration-free, while the reserved reason lets every client enforce the guard.
+    /// Open follow-up tasks are closed and the scheduled follow-up is removed atomically with the audit entry.
+    /// </summary>
+    public async Task<PlatformDemoRequest> OptOutAsync(Guid id, CancellationToken ct)
+    {
+        await access.RequireWriteAsync(ct);
+        await access.EnsureCanSeeLeadAsync(id, ct);
+        var lead = await db.PlatformDemoRequests.FirstOrDefaultAsync(x => x.Id == id, ct) ?? throw new NotFoundException("Lead", id);
+        var now = DateTime.UtcNow;
+        LeadLifecycle.Apply(lead, LeadStage.Lost, now);
+        lead.LostReason = "Do not contact";
+        lead.NextFollowUpAtUtc = null;
+        var tasks = await db.CrmTasks.Where(x => x.LeadId == id && x.CompletedAtUtc == null).ToListAsync(ct);
+        foreach (var task in tasks)
+        {
+            task.CompletedAtUtc = now;
+            task.Outcome = "Cancelled — contact opted out";
+        }
+        Log(id, "Opted out", $"Do not contact. Cleared the next follow-up and cancelled {tasks.Count} open task{(tasks.Count == 1 ? "" : "s")}.");
+        await db.SaveChangesAsync(ct);
+        return lead;
+    }
+
     // ================================================================== follow-up plans and bulk work
 
     /// <summary>

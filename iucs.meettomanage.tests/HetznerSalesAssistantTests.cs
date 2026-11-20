@@ -154,6 +154,21 @@ public class HetznerSalesAssistantTests
     }
 
     [Fact]
+    public async Task Lead_recommendation_blocks_do_not_contact_leads_without_calling_ai()
+    {
+        var handler = new FakeHandler((HttpStatusCode.OK, OkBody));
+        var result = await Create(handler, new() { Enabled = true, ApiKey = "key", Endpoint = "https://ai.test/v1", Model = "primary" }).RecommendLeadAsync(new PlatformDemoRequestDto
+        {
+            FullName = "Asha", AcademyName = "Asha Academy", Stage = LeadStage.Lost, LostReason = "Do not contact",
+        });
+
+        Assert.Equal("None", result.SuggestedChannel);
+        Assert.Empty(result.SuggestedMessage);
+        Assert.Contains("Do not", result.NextAction, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
     public async Task Marketing_analysis_rejects_visitor_counts_above_authoritative_total()
     {
         const string body = """{"choices":[{"message":{"content":"{\"summary\":\"282 visitors arrived.\",\"observations\":[\"Traffic increased.\"],\"nextActions\":[\"Verify tracking.\"]}"}}]}""";
