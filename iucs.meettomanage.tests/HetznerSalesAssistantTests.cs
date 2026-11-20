@@ -116,6 +116,44 @@ public class HetznerSalesAssistantTests
     }
 
     [Fact]
+    public async Task Lead_recommendation_uses_first_outreach_for_an_imported_new_lead()
+    {
+        var result = await Create(new FakeHandler((HttpStatusCode.OK, OkBody)), new()).RecommendLeadAsync(new PlatformDemoRequestDto
+        {
+            FullName = "Asha", AcademyName = "Asha Academy", Phone = "9000000000", Source = "bengaluru_education_leads", Status = StoreInquiryStatus.New,
+        });
+
+        Assert.Contains("reaching out", result.SuggestedMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("thank you for your interest", result.SuggestedMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("won’t follow up", result.SuggestedMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("https://www.youtube.com/watch?v=wIadR73CVus", result.SuggestedMessage);
+    }
+
+    [Fact]
+    public async Task Lead_recommendation_uses_outreach_follow_up_after_contact()
+    {
+        var result = await Create(new FakeHandler((HttpStatusCode.OK, OkBody)), new()).RecommendLeadAsync(new PlatformDemoRequestDto
+        {
+            FullName = "Asha", AcademyName = "Asha Academy", Phone = "9000000000", Source = "Import", Status = StoreInquiryStatus.Contacted, LastContactedAtUtc = DateTime.UtcNow.AddDays(-2),
+        });
+
+        Assert.Contains("earlier message", result.SuggestedMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("thank you for your interest", result.SuggestedMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Lead_recommendation_keeps_attributed_website_enquiry_inbound()
+    {
+        var result = await Create(new FakeHandler((HttpStatusCode.OK, OkBody)), new()).RecommendLeadAsync(new PlatformDemoRequestDto
+        {
+            FullName = "Asha", AcademyName = "Asha Academy", Phone = "9000000000", LandingPath = "/pricing", Source = "Google", Status = StoreInquiryStatus.New,
+        });
+
+        Assert.Contains("thank you for your interest", result.SuggestedMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("I’m reaching out", result.SuggestedMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Marketing_analysis_rejects_visitor_counts_above_authoritative_total()
     {
         const string body = """{"choices":[{"message":{"content":"{\"summary\":\"282 visitors arrived.\",\"observations\":[\"Traffic increased.\"],\"nextActions\":[\"Verify tracking.\"]}"}}]}""";

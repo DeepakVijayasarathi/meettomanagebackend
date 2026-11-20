@@ -1007,19 +1007,33 @@ namespace iucs.meettomanage.api.Services
             const string messageFooter = "Website: https://meettomanage.cloud\nDemo video: https://www.youtube.com/watch?v=wIadR73CVus\n\nLooking forward to connecting!\n\nBest regards,\nMeet to Manage team";
             static string WithFooter(string message, string videoUrl, string footer) =>
                 message.Contains(videoUrl, StringComparison.OrdinalIgnoreCase) ? message.Trim() : $"{message.Trim()}\n\n{footer}";
+            static bool IsOutbound(string? visitorId, string? landingPath, string? source)
+            {
+                if (!string.IsNullOrWhiteSpace(visitorId) || !string.IsNullOrWhiteSpace(landingPath)) return false;
+                if (string.IsNullOrWhiteSpace(source)) return false;
+                return source.Trim().ToLowerInvariant() is not ("direct" or "website" or "website chat assistant" or "chat" or "get-started" or "demo request");
+            }
+            var outbound = IsOutbound(lead.VisitorId, lead.LandingPath, lead.Source);
+            var firstOutreach = outbound && lead.Status == StoreInquiryStatus.New && !lead.LastContactedAtUtc.HasValue;
+            var outreachType = firstOutreach ? "outbound_first" : outbound ? "outbound_follow_up" : "inbound";
+            var fallbackMessage = firstOutreach
+                ? $"Hi {lead.FullName}, I’m reaching out from Meet to Manage. We help academies like {lead.AcademyName} manage enquiries, classes, attendance, fees and parent updates in one place. Would you be open to a brief 10-minute call to see whether it could help your team? If this isn’t relevant, let me know and I won’t follow up."
+                : outbound
+                    ? $"Hi {lead.FullName}, I’m following up on my earlier message about Meet to Manage for {lead.AcademyName}. Would a brief platform walkthrough be useful, or would you prefer that I close the loop?"
+                    : $"Hi {lead.FullName}, thank you for your interest in Meet to Manage. When would be a convenient time for a short platform walkthrough?";
             var fallback = new MarketingLeadRecommendationDto
             {
                 Summary = $"{lead.LeadTemperature} lead from {lead.Source ?? "direct traffic"}; current status is {lead.Status}.",
-                NextAction = lead.Status == StoreInquiryStatus.New ? "Contact the lead today and confirm their academy's priorities." : "Complete the scheduled follow-up and update the outcome.",
+                NextAction = firstOutreach ? "Send a permission-based first outreach without claiming they contacted us." : outbound ? "Follow up on the earlier outreach without implying an inbound enquiry." : lead.Status == StoreInquiryStatus.New ? "Contact the lead today and confirm their academy's priorities." : "Complete the scheduled follow-up and update the outcome.",
                 SuggestedChannel = string.IsNullOrWhiteSpace(lead.Phone) ? "Email" : "WhatsApp",
-                SuggestedMessage = WithFooter($"Hi {lead.FullName}, thank you for your interest in Meet to Manage. When would be a convenient time for a short platform walkthrough?", demoVideoUrl, messageFooter),
+                SuggestedMessage = WithFooter(fallbackMessage, demoVideoUrl, messageFooter),
                 AiPowered = false,
             };
             if (!_options.IsConfigured) return fallback;
             var messages = new JsonArray
             {
-                new JsonObject { ["role"] = "system", ["content"] = "You are a B2B SaaS sales coach. Use only the supplied lead data. Return strict JSON with summary, nextAction, suggestedChannel (WhatsApp, Email, or Call), and suggestedMessage. Keep the personalised message body respectful and under 70 words. Do not add a signature, website or video link; the application adds the standard footer. Do not invent facts." },
-                new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(new { lead.FullName, lead.AcademyName, lead.Message, lead.Status, lead.Source, lead.Campaign, lead.LeadScore, lead.LeadTemperature, lead.LastContactedAtUtc, lead.NextFollowUpAtUtc }) },
+                new JsonObject { ["role"] = "system", ["content"] = "You are a B2B SaaS sales coach. Use only the supplied lead data. Return strict JSON with summary, nextAction, suggestedChannel (WhatsApp, Email, or Call), and suggestedMessage. Keep the personalised message body respectful and under 70 words. For outbound_first, write a permission-based introduction with an easy opt-out. For outbound_follow_up, refer only to the earlier outreach and offer to close the loop. For either outbound type, never claim the prospect showed interest, requested a demo, visited the website, or knows Meet to Manage. For inbound, acknowledge their enquiry naturally. Do not add a signature, website or video link; the application adds the standard footer. Do not invent facts." },
+                new JsonObject { ["role"] = "user", ["content"] = JsonSerializer.Serialize(new { outreachType, lead.FullName, lead.AcademyName, lead.Message, lead.Status, lead.Source, lead.Campaign, lead.LeadScore, lead.LeadTemperature, lead.LastContactedAtUtc, lead.NextFollowUpAtUtc }) },
             };
             try
             {
