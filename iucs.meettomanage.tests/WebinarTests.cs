@@ -55,7 +55,15 @@ public sealed class WebinarTests
             now.AddHours(1), now.AddHours(2), false);
         const string banner = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR8sAAAAASUVORK5CYII=";
         Assert.IsType<BadRequestObjectResult>(await controller.Create(input with { BannerImage = "data:image/png;base64,c3Zn" }, default));
-        var created = AsJson(await controller.Create(input with { BannerImage = banner }, default));
+        Assert.IsType<BadRequestObjectResult>(await controller.Create(input with { HostPhoto = "data:image/png;base64,c3Zn" }, default));
+        var created = AsJson(await controller.Create(input with
+        {
+            BannerImage = banner,
+            HostName = "Prithiv",
+            HostRole = "Chief Marketing Officer",
+            TeamName = "Meet to Manage team",
+            HostPhoto = banner,
+        }, default));
         var id = created.GetProperty("Id").GetGuid();
         var slug = created.GetProperty("Slug").GetString()!;
         Assert.IsType<NotFoundResult>(await controller.Get(slug, default));
@@ -65,6 +73,11 @@ public sealed class WebinarTests
         Assert.Equal(1, AsJson(await controller.List(default)).GetArrayLength());
         Assert.Equal("Trial offer", AsJson(await controller.Get(slug, default)).GetProperty("Details").GetProperty("Offers").GetString());
         Assert.Equal(banner, AsJson(await controller.Get(slug, default)).GetProperty("Details").GetProperty("BannerImage").GetString());
+        var hosts = AsJson(await controller.Get(slug, default)).GetProperty("Details");
+        Assert.Equal("Prithiv", hosts.GetProperty("HostName").GetString());
+        Assert.Equal("Chief Marketing Officer", hosts.GetProperty("HostRole").GetString());
+        Assert.Equal("Meet to Manage team", hosts.GetProperty("TeamName").GetString());
+        Assert.Equal(banner, hosts.GetProperty("HostPhoto").GetString());
         Assert.DoesNotContain(await blog.ListPublishedAsync(), post => post.Id == id);
         Assert.DoesNotContain(await blog.ListAllAsync(), post => post.Id == id);
         var contact = new CreatePlatformDemoRequestRequest
@@ -96,8 +109,20 @@ public sealed class WebinarTests
         AssertRoomToken(hostUrl, id, true);
         AssertRoomToken(guestUrl, id, false);
 
-        Assert.IsType<NoContentResult>(await controller.Update(id, input with { IsPublished = true, BannerImage = "" }, default));
-        Assert.Equal(JsonValueKind.Null, AsJson(await controller.Get(slug, default)).GetProperty("Details").GetProperty("BannerImage").ValueKind);
+        Assert.IsType<NoContentResult>(await controller.Update(id, input with
+        {
+            IsPublished = true,
+            BannerImage = "",
+            HostName = "",
+            HostRole = "",
+            TeamName = "Academy Success Team",
+            HostPhoto = "",
+        }, default));
+        var updated = AsJson(await controller.Get(slug, default)).GetProperty("Details");
+        Assert.Equal(JsonValueKind.Null, updated.GetProperty("BannerImage").ValueKind);
+        Assert.Equal("", updated.GetProperty("HostName").GetString());
+        Assert.Equal("Academy Success Team", updated.GetProperty("TeamName").GetString());
+        Assert.Equal(JsonValueKind.Null, updated.GetProperty("HostPhoto").ValueKind);
         Assert.IsType<NoContentResult>(await controller.Update(id, input, default));
         Assert.IsType<NotFoundResult>(await controller.Get(slug, default));
         Assert.IsType<NotFoundResult>(await controller.Register(slug, contact, leads, default));

@@ -27,6 +27,8 @@ public sealed class WebinarsController(
     private const string Marketing = nameof(UserRole.Marketing);
     private const int MaxBannerBytes = 500_000;
     private const int MaxBannerDataLength = ((MaxBannerBytes + 2) / 3) * 4 + 32;
+    private const int MaxHostPhotoBytes = 200_000;
+    private const int MaxHostPhotoDataLength = ((MaxHostPhotoBytes + 2) / 3) * 4 + 32;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     public sealed record WebinarInput(
@@ -36,9 +38,15 @@ public sealed class WebinarsController(
         [MaxLength(2000)] string? Benefits,
         [MaxLength(2000)] string? Offers,
         DateTimeOffset Start, DateTimeOffset End, bool IsPublished,
-        [MaxLength(MaxBannerDataLength)] string? BannerImage = null);
+        [MaxLength(MaxBannerDataLength)] string? BannerImage = null,
+        [MaxLength(100)] string? HostName = null,
+        [MaxLength(100)] string? HostRole = null,
+        [MaxLength(120)] string? TeamName = null,
+        [MaxLength(MaxHostPhotoDataLength)] string? HostPhoto = null);
 
-    public sealed record WebinarDetails(string Description, string Benefits, string Offers, DateTimeOffset Start, DateTimeOffset End, string? BannerImage = null);
+    public sealed record WebinarDetails(string Description, string Benefits, string Offers, DateTimeOffset Start,
+        DateTimeOffset End, string? BannerImage = null, string? HostName = null, string? HostRole = null,
+        string? TeamName = null, string? HostPhoto = null);
     public sealed record Webinar(
         Guid Id, string Slug, string Title, string Excerpt, bool IsPublished, WebinarDetails Details);
 
@@ -127,7 +135,8 @@ public sealed class WebinarsController(
     public async Task<IActionResult> Create(WebinarInput input, CancellationToken cancellationToken)
     {
         if (!ValidSchedule(input)) return BadRequest("Enter a valid webinar start and end time.");
-        if (!ValidBanner(input.BannerImage)) return BadRequest("Upload a PNG, JPG or WebP image up to 500 KB.");
+        if (!ValidImage(input.BannerImage, MaxBannerBytes, MaxBannerDataLength)) return BadRequest("Upload a PNG, JPG or WebP banner up to 500 KB.");
+        if (!ValidImage(input.HostPhoto, MaxHostPhotoBytes, MaxHostPhotoDataLength)) return BadRequest("Upload a PNG, JPG or WebP host photo up to 200 KB.");
         var created = await publishing.CreateAsync(new CreateBlogPostRequest
         {
             Slug = $"{Prefix}{Guid.NewGuid():N}",
@@ -144,15 +153,24 @@ public sealed class WebinarsController(
     public async Task<IActionResult> Update(Guid id, WebinarInput input, CancellationToken cancellationToken)
     {
         if (!ValidSchedule(input)) return BadRequest("Enter a valid webinar start and end time.");
-        if (!ValidBanner(input.BannerImage)) return BadRequest("Upload a PNG, JPG or WebP image up to 500 KB.");
+        if (!ValidImage(input.BannerImage, MaxBannerBytes, MaxBannerDataLength)) return BadRequest("Upload a PNG, JPG or WebP banner up to 500 KB.");
+        if (!ValidImage(input.HostPhoto, MaxHostPhotoBytes, MaxHostPhotoDataLength)) return BadRequest("Upload a PNG, JPG or WebP host photo up to 200 KB.");
         var post = await Events.FirstOrDefaultAsync(row => row.Id == id, cancellationToken);
         if (post is null) return NotFound();
+        var previous = Map(post)?.Details;
         await publishing.UpdateAsync(id, new UpdateBlogPostRequest
         {
             Slug = post.Slug,
             Title = input.Title,
             Excerpt = input.Excerpt,
-            Content = SerializeDetails(input with { BannerImage = input.BannerImage ?? Map(post)?.Details.BannerImage }),
+            Content = SerializeDetails(input with
+            {
+                BannerImage = input.BannerImage ?? previous?.BannerImage,
+                HostName = input.HostName ?? previous?.HostName,
+                HostRole = input.HostRole ?? previous?.HostRole,
+                TeamName = input.TeamName ?? previous?.TeamName,
+                HostPhoto = input.HostPhoto ?? previous?.HostPhoto,
+            }),
             IsPublished = input.IsPublished
         }, cancellationToken);
         return NoContent();
@@ -201,12 +219,14 @@ public sealed class WebinarsController(
     private static string SerializeDetails(WebinarInput input) =>
         JsonSerializer.Serialize(new WebinarDetails(
             input.Description.Trim(), input.Benefits?.Trim() ?? "", input.Offers?.Trim() ?? "", input.Start, input.End,
-            string.IsNullOrEmpty(input.BannerImage) ? null : input.BannerImage), Json);
+            string.IsNullOrEmpty(input.BannerImage) ? null : input.BannerImage,
+            input.HostName?.Trim(), input.HostRole?.Trim(), input.TeamName?.Trim(),
+            string.IsNullOrEmpty(input.HostPhoto) ? null : input.HostPhoto), Json);
 
-    private static bool ValidBanner(string? image)
+    private static bool ValidImage(string? image, int maxBytes, int maxDataLength)
     {
         if (string.IsNullOrEmpty(image)) return true;
-        if (image.Length > MaxBannerDataLength) return false;
+        if (image.Length > maxDataLength) return false;
         var separator = image.IndexOf(',');
         if (separator < 0) return false;
         var extension = image[..separator] switch
@@ -221,7 +241,7 @@ public sealed class WebinarsController(
         {
             var bytes = Convert.FromBase64String(image[(separator + 1)..]);
             var type = BrandLogo.Detect(bytes, $"banner{extension}");
-            return bytes.Length <= MaxBannerBytes && type is not null && image.StartsWith($"data:{type};", StringComparison.Ordinal);
+            return bytes.Length <= maxBytes && type is not null && image.StartsWith($"data:{type};", StringComparison.Ordinal);
         }
         catch (FormatException)
         {
