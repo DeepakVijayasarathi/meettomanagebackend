@@ -44,12 +44,19 @@ namespace iucs.meettomanage.application.Services
             var email = request.WorkEmail?.Trim().ToLowerInvariant() ?? "";
             var phone = NormalizePhone(request.Phone);
             var visitorId = Clean(request.VisitorId);
+            var source = NormalizeSource(request.Source);
+            var campaign = NormalizeToken(request.Campaign);
+            var webinar = source == "webinar";
             var duplicateSince = DateTime.UtcNow.AddMinutes(-10);
-            var existing = await _unitOfWork.Repository<PlatformDemoRequest>().Query()
-                .Where(x => x.CreatedAtUtc >= duplicateSince && (
+            var recent = _unitOfWork.Repository<PlatformDemoRequest>().Query().Where(x => x.CreatedAtUtc >= duplicateSince);
+            recent = webinar
+                ? recent.Where(x => x.Source == "webinar" && x.Campaign == campaign)
+                : recent.Where(x => x.Source != "webinar");
+            var existing = await recent
+                .Where(x =>
                     (email != "" && x.WorkEmail == email) ||
                     (phone != "" && x.Phone == phone) ||
-                    (visitorId != null && x.VisitorId == visitorId)))
+                    (visitorId != null && x.VisitorId == visitorId))
                 .OrderByDescending(x => x.CreatedAtUtc)
                 .FirstOrDefaultAsync(cancellationToken);
             if (existing is not null)
@@ -66,8 +73,8 @@ namespace iucs.meettomanage.application.Services
                 Phone = phone,
                 AcademyName = string.IsNullOrWhiteSpace(request.AcademyName) ? "Not provided" : request.AcademyName.Trim(),
                 Message = string.IsNullOrWhiteSpace(request.Message) ? null : request.Message.Trim(),
-                VisitorId = visitorId, Source = NormalizeSource(request.Source), Medium = NormalizeToken(request.Medium),
-                Campaign = NormalizeToken(request.Campaign), LandingPath = Clean(request.LandingPath),
+                VisitorId = visitorId, Source = source, Medium = NormalizeToken(request.Medium),
+                Campaign = campaign, LandingPath = Clean(request.LandingPath),
             };
             var ownerEmail = await IsOnAsync(LeadLifecycle.AutoAssign, cancellationToken) ? await AssignOwnerAsync(demoRequest, cancellationToken) : null;
             await _unitOfWork.Repository<PlatformDemoRequest>().AddAsync(demoRequest, cancellationToken);
@@ -81,7 +88,7 @@ namespace iucs.meettomanage.application.Services
             // while the lead remains safely committed before either starts.
             await Task.WhenAll(
                 SendLeadAlertAsync(demoRequest, ownerEmail, cancellationToken),
-                AcknowledgeAsync(demoRequest, cancellationToken));
+                webinar ? Task.CompletedTask : AcknowledgeAsync(demoRequest, cancellationToken));
             return demoRequest.ToDto();
         }
 

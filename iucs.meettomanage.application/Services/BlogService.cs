@@ -12,6 +12,7 @@ namespace iucs.meettomanage.application.Services
 {
     public partial class BlogService : IBlogService
     {
+        public const string WebinarSlugPrefix = "m2m-webinar-";
         // Average adult silent-reading speed — good enough for a "N min read" estimate,
         // not meant to be precise.
         private const int WordsPerMinute = 200;
@@ -31,7 +32,7 @@ namespace iucs.meettomanage.application.Services
             // returned until that moment passes.
             var now = DateTime.UtcNow;
             var posts = await _unitOfWork.Repository<BlogPost>().Query()
-                .Where(p => p.IsPublished && p.PublishedAtUtc <= now)
+                .Where(p => !p.Slug.StartsWith(WebinarSlugPrefix) && p.IsPublished && p.PublishedAtUtc <= now)
                 .OrderByDescending(p => p.PublishedAtUtc)
                 .ToListAsync(cancellationToken);
             return posts.Select(p => p.ToSummaryDto()).ToList();
@@ -42,7 +43,7 @@ namespace iucs.meettomanage.application.Services
             var normalized = slug.Trim().ToLowerInvariant();
             var now = DateTime.UtcNow;
             var post = await _unitOfWork.Repository<BlogPost>()
-                .FirstOrDefaultAsync(p => p.Slug == normalized && p.IsPublished && p.PublishedAtUtc <= now, cancellationToken)
+                .FirstOrDefaultAsync(p => !p.Slug.StartsWith(WebinarSlugPrefix) && p.Slug == normalized && p.IsPublished && p.PublishedAtUtc <= now, cancellationToken)
                 ?? throw new NotFoundException($"No published post found at '{slug}'.");
             return post.ToDetailDto();
         }
@@ -50,6 +51,7 @@ namespace iucs.meettomanage.application.Services
         public async Task<IReadOnlyList<BlogPostDto>> ListAllAsync(CancellationToken cancellationToken = default)
         {
             var posts = await _unitOfWork.Repository<BlogPost>().Query()
+                .Where(p => !p.Slug.StartsWith(WebinarSlugPrefix))
                 .OrderByDescending(p => p.CreatedAtUtc)
                 .ToListAsync(cancellationToken);
             return posts.Select(p => p.ToDto()).ToList();
