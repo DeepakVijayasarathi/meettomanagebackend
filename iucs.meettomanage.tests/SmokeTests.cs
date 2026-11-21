@@ -12736,7 +12736,8 @@ namespace iucs.meettomanage.tests
             await Track("visitor-content-1", "form_started", "/get-started");
             await Track("visitor-content-1", "form_submit_attempted", "/get-started");
             await Track("visitor-content-1", "form_submitted", "/get-started");
-            await new PlatformDemoRequestService(_db.UnitOfWork, _auditLog).CreateAsync(new CreatePlatformDemoRequestRequest
+            var demoService = new PlatformDemoRequestService(_db.UnitOfWork, _auditLog);
+            var savedThenDeleted = await demoService.CreateAsync(new CreatePlatformDemoRequestRequest
             {
                 FullName = "Content Reader", WorkEmail = "reader@x.com", Phone = "9000000012",
                 AcademyName = "Reader Academy", VisitorId = "visitor-content-1"
@@ -12754,6 +12755,11 @@ namespace iucs.meettomanage.tests
                 FullName = "Explicit Source", WorkEmail = "explicit-source@x.com", Phone = "+91 90000 00013",
                 AcademyName = "Source Academy", VisitorId = "visitor-content-5", LandingPath = "/get-started?from=old-guide"
             });
+            var deletedLead = await _db.UnitOfWork.Repository<iucs.meettomanage.domain.Entities.Marketing.PlatformDemoRequest>()
+                .TrackedQuery().FirstAsync(x => x.Id == savedThenDeleted.Id);
+            deletedLead.IsDeleted = true;
+            deletedLead.DeletedAtUtc = DateTime.UtcNow;
+            await _db.UnitOfWork.SaveChangesAsync(); // CRM deletion must not erase anonymous conversion history.
 
             var result = await analytics.GetContentPerformanceAsync(7, 330);
             Assert.Equal(5, result.BlogReaders);

@@ -489,6 +489,7 @@ namespace iucs.meettomanage.api.Services
                     directMeansNoAttributionWasCaptured_NotProofOfBrandAwareness = true,
                     formSubmittedVisitorsAboveDemoRequestsIndicatesAConversionPersistenceDiscrepancy = true,
                     formStartsWithoutSubmissionsIndicateDropOff_NotBrokenPageTracking = true,
+                    formStartsAboveSubmissionsMustNeverBeCalledAPersistenceDiscrepancy = true,
                 },
                 period = new { dashboard.Days, dashboard.StartDate, dashboard.EndDate },
                 currentPeriodTotals = dashboard.Totals,
@@ -502,6 +503,7 @@ namespace iucs.meettomanage.api.Services
                 dashboard.Countries,
                 dashboard.Devices,
                 dashboard.DemoRequestsByStatus,
+                visitorToDemo = dashboard.ConversionDetail,
             });
             var messages = new JsonArray
             {
@@ -510,7 +512,7 @@ namespace iucs.meettomanage.api.Services
                     "The authoritative period visitor total is currentPeriodTotals.Visitors. NEVER sum daily UniqueVisitorsThatDay because returning people can appear on several days. Page views are not visitors. " +
                     "Never report a visitor count above the authoritative total. Never describe a change above 100% as a share of visitors; distinguish percentage growth from percentage share. " +
                     "Zero recorded demo requests does not prove a broken funnel or tracking error. State both possible explanations neutrally: no conversion was recorded, and tracking should be verified before changing UX. " +
-                    "Use the form funnel evidence: submitted visitors above saved demo requests is a persistence discrepancy; starts without submissions is form drop-off; no starts means no form attempt was observed. " +
+                    "Use the form funnel evidence precisely: ONLY submitted visitors above saved demo requests is a persistence discrepancy. Starts above submissions is ordinary form drop-off or validation loss and MUST NEVER be called a persistence discrepancy. No starts means no form attempt was observed. " +
                     "Direct means attribution was not captured; it does not prove brand traffic, organic traffic, a launch, a campaign, or internal testing. A traffic increase is an observation, not evidence of its cause. " +
                     "Do not prescribe A/B testing when there are zero recorded conversions; first verify tracking and gather enough baseline conversions. Never invent causes, revenue, demographics or intent. " +
                     "Use exact labels: views for TopPages, visitors for Totals/Sources. Prefer checks that distinguish measurement problems from real behaviour. " +

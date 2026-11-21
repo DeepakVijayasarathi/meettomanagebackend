@@ -90,7 +90,7 @@ namespace iucs.meettomanage.application.Services
                 .Select(e => new { e.CreatedAtUtc, e.Type, e.Path, e.VisitorId, e.Source, e.Campaign, e.Device, e.Country })
                 .ToListAsync(cancellationToken);
             // A visitor counts as having booked when a demo request carries their visitor id.
-            var bookedVisitors = (await _unitOfWork.Repository<PlatformDemoRequest>().Query()
+            var bookedVisitors = (await _unitOfWork.Repository<PlatformDemoRequest>().Query().IgnoreQueryFilters()
                     .Where(r => r.VisitorId != null && r.CreatedAtUtc >= startUtc && r.CreatedAtUtc < endUtc)
                     .Select(r => r.VisitorId!)
                     .ToListAsync(cancellationToken))
@@ -239,7 +239,7 @@ namespace iucs.meettomanage.application.Services
                     .Select(g => g.Key).ToHashSet();
                 events = events.Where(e => keep.Contains(e.VisitorId)).ToList();
             }
-            var booked = (await _unitOfWork.Repository<PlatformDemoRequest>().Query()
+            var booked = (await _unitOfWork.Repository<PlatformDemoRequest>().Query().IgnoreQueryFilters()
                     .Where(r => r.VisitorId != null && r.CreatedAtUtc >= startUtc && r.CreatedAtUtc < endUtc)
                     .Select(r => r.VisitorId!).ToListAsync(cancellationToken))
                 .ToHashSet();
@@ -365,7 +365,7 @@ namespace iucs.meettomanage.application.Services
                 .Select(e => new { e.VisitorId, e.Path, e.Type, e.CreatedAtUtc })
                 .ToListAsync(cancellationToken);
             var views = events.Where(e => e.Type == MarketingEvent.PageView).ToList();
-            var booked = await _unitOfWork.Repository<PlatformDemoRequest>().Query()
+            var booked = await _unitOfWork.Repository<PlatformDemoRequest>().Query().IgnoreQueryFilters()
                     .Where(r => r.VisitorId != null && r.CreatedAtUtc >= startUtc && r.CreatedAtUtc < endUtc)
                     .Select(r => new { VisitorId = r.VisitorId!, r.CreatedAtUtc, r.LandingPath })
                     .ToListAsync(cancellationToken);
@@ -491,7 +491,10 @@ namespace iucs.meettomanage.application.Services
                 .Where(e => e.CreatedAtUtc >= previousStartUtc && e.CreatedAtUtc < endUtc)
                 .Select(e => new { e.CreatedAtUtc, e.Type, e.Path, e.VisitorId, e.Source, e.Medium, e.Campaign, e.Device, e.Country })
                 .ToListAsync(cancellationToken);
-            var requests = await _unitOfWork.Repository<PlatformDemoRequest>().Query()
+            // CRM deletion removes personal lead rows from every operational screen, but must not
+            // rewrite historical conversion totals. This query returns aggregate fields only, so
+            // include soft-deleted rows while keeping deleted contact details inaccessible.
+            var requests = await _unitOfWork.Repository<PlatformDemoRequest>().Query().IgnoreQueryFilters()
                 .Where(r => r.CreatedAtUtc >= previousStartUtc && r.CreatedAtUtc < endUtc)
                 .Select(r => new { r.CreatedAtUtc, r.Message, r.Status, r.Source, r.Campaign, r.LandingPath, r.VisitorId })
                 .ToListAsync(cancellationToken);
