@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
 using iucs.meettomanage.api.Controllers;
+using iucs.meettomanage.api.Marketing;
 using iucs.meettomanage.api.Services;
 using iucs.meettomanage.application.Dto.Marketing;
 using iucs.meettomanage.application.Services;
@@ -52,7 +53,9 @@ public sealed class WebinarTests
         var input = new WebinarsController.WebinarInput(
             "Marketing webinar", "An introduction", "A live walkthrough", "Live Q&A", "Trial offer",
             now.AddHours(1), now.AddHours(2), false);
-        var created = AsJson(await controller.Create(input, default));
+        const string banner = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR8sAAAAASUVORK5CYII=";
+        Assert.IsType<BadRequestObjectResult>(await controller.Create(input with { BannerImage = "data:image/png;base64,c3Zn" }, default));
+        var created = AsJson(await controller.Create(input with { BannerImage = banner }, default));
         var id = created.GetProperty("Id").GetGuid();
         var slug = created.GetProperty("Slug").GetString()!;
         Assert.IsType<NotFoundResult>(await controller.Get(slug, default));
@@ -61,6 +64,7 @@ public sealed class WebinarTests
         Assert.IsType<NoContentResult>(await controller.Update(id, input with { IsPublished = true }, default));
         Assert.Equal(1, AsJson(await controller.List(default)).GetArrayLength());
         Assert.Equal("Trial offer", AsJson(await controller.Get(slug, default)).GetProperty("Details").GetProperty("Offers").GetString());
+        Assert.Equal(banner, AsJson(await controller.Get(slug, default)).GetProperty("Details").GetProperty("BannerImage").GetString());
         Assert.DoesNotContain(await blog.ListPublishedAsync(), post => post.Id == id);
         Assert.DoesNotContain(await blog.ListAllAsync(), post => post.Id == id);
         var contact = new CreatePlatformDemoRequestRequest
@@ -79,6 +83,9 @@ public sealed class WebinarTests
         Assert.Equal(2, campaigns.Count);
         Assert.Contains(slug, campaigns);
         Assert.Contains(other, campaigns);
+        var registrationPage = AsJson(await controller.Registrations(id, new CrmAccess(db.Context, db.CurrentUser), default));
+        Assert.Equal(1, registrationPage.GetProperty("totalCount").GetInt32());
+        Assert.Equal(contact.WorkEmail, registrationPage.GetProperty("items")[0].GetProperty("WorkEmail").GetString());
 
         var hostUrl = AsJson(await controller.Host(id, default)).GetProperty("url").GetString()!;
         var attendee = AsJson(await controller.AttendeeLink(id, default));
@@ -89,6 +96,8 @@ public sealed class WebinarTests
         AssertRoomToken(hostUrl, id, true);
         AssertRoomToken(guestUrl, id, false);
 
+        Assert.IsType<NoContentResult>(await controller.Update(id, input with { IsPublished = true, BannerImage = "" }, default));
+        Assert.Equal(JsonValueKind.Null, AsJson(await controller.Get(slug, default)).GetProperty("Details").GetProperty("BannerImage").ValueKind);
         Assert.IsType<NoContentResult>(await controller.Update(id, input, default));
         Assert.IsType<NotFoundResult>(await controller.Get(slug, default));
         Assert.IsType<NotFoundResult>(await controller.Register(slug, contact, leads, default));

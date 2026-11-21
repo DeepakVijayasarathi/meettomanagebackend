@@ -1,6 +1,8 @@
 using System.ComponentModel.DataAnnotations;
 using System.Security.Claims;
 using System.Text.Json;
+using iucs.meettomanage.api.Services;
+using iucs.meettomanage.api.Marketing;
 using iucs.meettomanage.application.Common;
 using iucs.meettomanage.application.Common.Interfaces;
 using iucs.meettomanage.application.Dto.Marketing;
@@ -23,6 +25,8 @@ public sealed class WebinarsController(
 {
     private const string Prefix = BlogService.WebinarSlugPrefix;
     private const string Marketing = nameof(UserRole.Marketing);
+    private const int MaxBannerBytes = 500_000;
+    private const int MaxBannerDataLength = ((MaxBannerBytes + 2) / 3) * 4 + 32;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     public sealed record WebinarInput(
@@ -31,9 +35,10 @@ public sealed class WebinarsController(
         [Required, MaxLength(3000)] string Description,
         [MaxLength(2000)] string? Benefits,
         [MaxLength(2000)] string? Offers,
-        DateTimeOffset Start, DateTimeOffset End, bool IsPublished);
+        DateTimeOffset Start, DateTimeOffset End, bool IsPublished,
+        [MaxLength(MaxBannerDataLength)] string? BannerImage = null);
 
-    public sealed record WebinarDetails(string Description, string Benefits, string Offers, DateTimeOffset Start, DateTimeOffset End);
+    public sealed record WebinarDetails(string Description, string Benefits, string Offers, DateTimeOffset Start, DateTimeOffset End, string? BannerImage = null);
     public sealed record Webinar(
         Guid Id, string Slug, string Title, string Excerpt, bool IsPublished, WebinarDetails Details);
 
@@ -95,10 +100,34 @@ public sealed class WebinarsController(
     }
 
     [Authorize(Roles = Marketing)]
+    [HttpGet("manage/{id:guid}/registrations")]
+    public async Task<IActionResult> Registrations(Guid id, [FromServices] CrmAccess crm,
+        CancellationToken cancellationToken, [FromQuery, Range(1, 1_000_000)] int page = 1)
+    {
+        var slug = await Events.Where(post => post.Id == id).Select(post => post.Slug).FirstOrDefaultAsync(cancellationToken);
+        if (slug is null) return NotFound();
+
+        const int pageSize = 25;
+        var registrations = db.PlatformDemoRequests.AsNoTracking()
+            .Where(lead => lead.Source == "webinar" && lead.Campaign == slug && lead.ArchivedAtUtc == null);
+        if (await crm.VisibleToAsync(cancellationToken) is { } userId)
+            registrations = registrations.Where(lead => lead.AssignedToUserId == null || lead.AssignedToUserId == userId);
+
+        var totalCount = await registrations.CountAsync(cancellationToken);
+        var items = await registrations.OrderByDescending(lead => lead.CreatedAtUtc).ThenByDescending(lead => lead.Id)
+            .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(lead => new { lead.Id, lead.FullName, lead.WorkEmail, lead.Phone, lead.AcademyName, lead.CreatedAtUtc })
+            .ToListAsync(cancellationToken);
+        Response.Headers.CacheControl = "no-store";
+        return Ok(new { items, totalCount, page, pageSize });
+    }
+
+    [Authorize(Roles = Marketing)]
     [HttpPost("manage")]
     public async Task<IActionResult> Create(WebinarInput input, CancellationToken cancellationToken)
     {
         if (!ValidSchedule(input)) return BadRequest("Enter a valid webinar start and end time.");
+        if (!ValidBanner(input.BannerImage)) return BadRequest("Upload a PNG, JPG or WebP image up to 500 KB.");
         var created = await publishing.CreateAsync(new CreateBlogPostRequest
         {
             Slug = $"{Prefix}{Guid.NewGuid():N}",
@@ -115,6 +144,7 @@ public sealed class WebinarsController(
     public async Task<IActionResult> Update(Guid id, WebinarInput input, CancellationToken cancellationToken)
     {
         if (!ValidSchedule(input)) return BadRequest("Enter a valid webinar start and end time.");
+        if (!ValidBanner(input.BannerImage)) return BadRequest("Upload a PNG, JPG or WebP image up to 500 KB.");
         var post = await Events.FirstOrDefaultAsync(row => row.Id == id, cancellationToken);
         if (post is null) return NotFound();
         await publishing.UpdateAsync(id, new UpdateBlogPostRequest
@@ -122,7 +152,7 @@ public sealed class WebinarsController(
             Slug = post.Slug,
             Title = input.Title,
             Excerpt = input.Excerpt,
-            Content = SerializeDetails(input),
+            Content = SerializeDetails(input with { BannerImage = input.BannerImage ?? Map(post)?.Details.BannerImage }),
             IsPublished = input.IsPublished
         }, cancellationToken);
         return NoContent();
@@ -170,7 +200,34 @@ public sealed class WebinarsController(
 
     private static string SerializeDetails(WebinarInput input) =>
         JsonSerializer.Serialize(new WebinarDetails(
-            input.Description.Trim(), input.Benefits?.Trim() ?? "", input.Offers?.Trim() ?? "", input.Start, input.End), Json);
+            input.Description.Trim(), input.Benefits?.Trim() ?? "", input.Offers?.Trim() ?? "", input.Start, input.End,
+            string.IsNullOrEmpty(input.BannerImage) ? null : input.BannerImage), Json);
+
+    private static bool ValidBanner(string? image)
+    {
+        if (string.IsNullOrEmpty(image)) return true;
+        if (image.Length > MaxBannerDataLength) return false;
+        var separator = image.IndexOf(',');
+        if (separator < 0) return false;
+        var extension = image[..separator] switch
+        {
+            "data:image/png;base64" => ".png",
+            "data:image/jpeg;base64" => ".jpg",
+            "data:image/webp;base64" => ".webp",
+            _ => null,
+        };
+        if (extension is null) return false;
+        try
+        {
+            var bytes = Convert.FromBase64String(image[(separator + 1)..]);
+            var type = BrandLogo.Detect(bytes, $"banner{extension}");
+            return bytes.Length <= MaxBannerBytes && type is not null && image.StartsWith($"data:{type};", StringComparison.Ordinal);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
 
     private static Webinar? Map(BlogPost? post)
     {
