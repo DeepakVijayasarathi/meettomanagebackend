@@ -172,6 +172,13 @@ builder.Services.Add(new ServiceDescriptor(typeof(LocalFileStorage), sp => tenan
 builder.Services.Add(new ServiceDescriptor(typeof(RoutingFileStorage), sp => new RoutingFileStorage(
     sp.GetRequiredService<StorageProviderSwitch>(), sp.GetRequiredService<LocalFileStorage>(), sp.GetService<S3FileStorage>()), fileLifetime));
 builder.Services.Add(new ServiceDescriptor(typeof(IFileStorage), sp => sp.GetRequiredService<RoutingFileStorage>(), fileLifetime));
+builder.Services.AddKeyedSingleton<IFileStorage>("platform-marketing", (sp, _) =>
+{
+    using var platform = iucs.meettomanage.application.Common.TenantExecution.EnterPlatform();
+    var local = new LocalFileStorage(sp.GetRequiredService<IWebHostEnvironment>(), builder.Configuration,
+        sp.GetRequiredService<IHttpContextAccessor>(), s3Storage);
+    return new RoutingFileStorage(new StorageProviderSwitch(builder.Configuration), local, s3Storage);
+});
 builder.Services.Add(new ServiceDescriptor(typeof(IDirectUploadStorage), sp => sp.GetRequiredService<RoutingFileStorage>(), fileLifetime));
 // Parses uploaded bulk-import spreadsheets (.csv/.xlsx) for Users/Students/Departments/
 // Courses/Package Plans/Quiz Questions — stateless, so singleton is fine.

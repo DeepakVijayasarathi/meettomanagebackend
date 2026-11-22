@@ -6,10 +6,13 @@ public static class TenantExecution
     private static readonly AsyncLocal<Binding?> Slot = new();
     public sealed record Binding(Guid Id, string Code);
     public static Binding? Current => Slot.Value;
-    public static IDisposable Enter(Guid id, string code)
+    public static IDisposable Enter(Guid id, string code) => Set(new(id, code));
+    public static IDisposable EnterPlatform() => Set(null);
+
+    private static IDisposable Set(Binding? binding)
     {
         var previous = Slot.Value;
-        Slot.Value = new(id, code);
+        Slot.Value = binding;
         return new Restore(() => Slot.Value = previous);
     }
     private sealed class Restore(Action action) : IDisposable { public void Dispose() => action(); }
