@@ -184,7 +184,7 @@ public sealed class WebinarsController(
         if (webinar is null) return NotFound();
         if (webinar.Details.End <= DateTimeOffset.UtcNow) return Conflict("This webinar has ended.");
         var meetingUrl = await JoinUrl(id, moderator: true, expiresAtUtc: DateTime.UtcNow.AddHours(6), cancellationToken);
-        return meetingUrl is null ? Problem("Jitsi signing is unavailable.", statusCode: 503) : Ok(new { url = meetingUrl });
+        return Ok(new { url = meetingUrl });
     }
 
     [Authorize(Roles = Marketing)]
@@ -196,21 +196,23 @@ public sealed class WebinarsController(
         var expiresAtUtc = webinar.Details.End.UtcDateTime;
         if (expiresAtUtc <= DateTime.UtcNow) return Conflict("This webinar has ended.");
         var meetingUrl = await JoinUrl(id, moderator: false, expiresAtUtc, cancellationToken);
-        if (meetingUrl is null) return Problem("Jitsi signing is unavailable.", statusCode: 503);
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
         var slug = await shortLinks.CreateAsync(meetingUrl, expiresAtUtc, userId, cancellationToken);
         var apiBase = TenantExecution.Url($"{Request.Scheme}://{Request.Host}");
         return Ok(new { url = $"{apiBase}/m/{slug}", expiresAtUtc });
     }
 
-    private async Task<string?> JoinUrl(Guid id, bool moderator, DateTime expiresAtUtc, CancellationToken cancellationToken)
+    private async Task<string> JoinUrl(Guid id, bool moderator, DateTime expiresAtUtc, CancellationToken cancellationToken)
     {
         var config = await db.Integrations.Where(row => row.Key == "jitsi").Select(row => row.ConfigJson)
             .FirstOrDefaultAsync(cancellationToken);
         var room = $"m2m-webinar-{id:N}";
         var name = moderator ? User.Identity?.Name ?? "Webinar host" : "Guest";
         var token = jitsi.CreateToken(JitsiLinkBuilder.ResolveDomain(config), config, room, name, null, moderator, expiresAtUtc);
-        return string.IsNullOrWhiteSpace(token) ? null : JitsiLinkBuilder.BuildJoinUrl(room, config, token);
+        // The shared Jitsi deployment currently permits unsigned rooms, just like normal
+        // classrooms. Add JWT when configured, but do not make webinar hosting unavailable on
+        // an unsigned deployment: BuildJoinUrl deliberately supports both modes.
+        return JitsiLinkBuilder.BuildJoinUrl(room, config, token)!;
     }
 
     private static bool ValidSchedule(WebinarInput input) =>

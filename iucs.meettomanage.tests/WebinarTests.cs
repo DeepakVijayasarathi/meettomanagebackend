@@ -18,6 +18,46 @@ namespace iucs.meettomanage.tests;
 public sealed class WebinarTests
 {
     [Fact]
+    public async Task WebinarHostWorksWhenJitsiDeploymentUsesUnsignedRooms()
+    {
+        using var db = new TestDatabase();
+        var audit = new AuditLogService(db.UnitOfWork, db.CurrentUser);
+        var blog = new BlogService(db.UnitOfWork, audit);
+        var controller = new WebinarsController(
+            db.Context, blog, new JitsiTokenService(), new ShortLinkService(db.UnitOfWork))
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext
+                {
+                    User = new ClaimsPrincipal(new ClaimsIdentity(
+                        [new Claim(ClaimTypes.NameIdentifier, Guid.NewGuid().ToString())], "test"))
+                }
+            }
+        };
+        var integration = await db.Context.Integrations.SingleOrDefaultAsync(row => row.Key == "jitsi");
+        if (integration is null)
+        {
+            integration = new Integration { Key = "jitsi", Name = "Jitsi" };
+            db.Context.Integrations.Add(integration);
+        }
+        integration.ConfigJson = """{"domain":"meet.example.test"}""";
+        await db.Context.SaveChangesAsync();
+
+        var now = DateTimeOffset.UtcNow;
+        var created = AsJson(await controller.Create(new WebinarsController.WebinarInput(
+            "Unsigned webinar", "Introduction", "Live walkthrough", null, null,
+            now.AddHours(1), now.AddHours(2), false), default));
+        var id = created.GetProperty("Id").GetGuid();
+
+        var hostUrl = AsJson(await controller.Host(id, default)).GetProperty("url").GetString()!;
+        var uri = new Uri(hostUrl);
+        Assert.Equal("meet.example.test", uri.Host);
+        Assert.Equal($"/m2m-webinar-{id:N}", uri.AbsolutePath);
+        Assert.DoesNotContain("jwt=", uri.Query);
+    }
+
+    [Fact]
     public async Task PublishedWebinarHasItsOwnJitsiRoomAndStaysOutOfTheBlog()
     {
         using var db = new TestDatabase();
