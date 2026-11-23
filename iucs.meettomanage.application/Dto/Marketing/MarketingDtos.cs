@@ -555,6 +555,10 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int PricingVisitors { get; set; }
         public int DemoPageVisitors { get; set; }
         public int FormStartedVisitors { get; set; }
+
+        /// <summary>Unique visitors who scrolled the demo form into view during the period.</summary>
+        public int FormVisibleVisitors { get; set; }
+
         public int SubmitAttemptedVisitors { get; set; }
         public int ValidationFailedVisitors { get; set; }
         public int AbandonedVisitors { get; set; }
@@ -829,6 +833,10 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public int ChatVisitors { get; set; }
         public int BookedVisitors { get; set; }
         public int FormStartedVisitors { get; set; }
+
+        /// <summary>Unique visitors who scrolled the demo form into view during the period.</summary>
+        public int FormVisibleVisitors { get; set; }
+
         public int FormSubmitAttemptedVisitors { get; set; }
         public int FormSubmitFailedVisitors { get; set; }
         public int FormValidationFailedVisitors { get; set; }
