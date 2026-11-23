@@ -76,6 +76,7 @@ namespace iucs.meettomanage.application
             services.AddScoped<IChatbotService, ChatbotService>();
             services.AddScoped<ISupportTicketService, SupportTicketService>();
             services.AddScoped<IStaffLeaveService, StaffLeaveService>();
+            services.AddScoped<IReviewService, ReviewService>();
             return services;
         }
     }
