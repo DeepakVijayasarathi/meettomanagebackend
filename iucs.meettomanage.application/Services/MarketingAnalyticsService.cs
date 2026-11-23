@@ -536,6 +536,7 @@ namespace iucs.meettomanage.application.Services
                     ChatsStarted = conversationVisitors,
                     DemoRequests = requestsList.Count,
                     FormStartedVisitors = list.Where(e => e.Type == MarketingEvent.FormStarted).Select(e => e.VisitorId).Distinct().Count(),
+                    FormVisibleVisitors = list.Where(e => e.Type == MarketingEvent.FormVisible).Select(e => e.VisitorId).Distinct().Count(),
                     FormSubmitAttemptedVisitors = list.Where(e => e.Type == MarketingEvent.FormSubmitAttempted).Select(e => e.VisitorId).Distinct().Count(),
                     FormSubmitFailedVisitors = list.Where(e => e.Type == MarketingEvent.FormSubmitFailed).Select(e => e.VisitorId).Distinct().Count(),
                     FormSubmittedVisitors = list.Where(e => e.Type == MarketingEvent.FormSubmitted).Select(e => e.VisitorId).Distinct().Count(),
