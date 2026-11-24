@@ -55,6 +55,18 @@ public sealed class WebinarTests
         Assert.Equal("meet.example.test", uri.Host);
         Assert.Equal($"/m2m-webinar-{id:N}", uri.AbsolutePath);
         Assert.DoesNotContain("jwt=", uri.Query);
+
+        var slug = created.GetProperty("Slug").GetString()!;
+        Assert.IsType<NoContentResult>(await controller.Update(id, new WebinarsController.WebinarInput(
+            "Unsigned webinar", "Introduction", "Live walkthrough", null, null,
+            now.AddHours(1), now.AddHours(2), true), default));
+        var contact = new CreatePlatformDemoRequestRequest
+        {
+            FullName = "Unsigned webinar attendee", WorkEmail = "unsigned@example.test", Phone = "+919123456789",
+            AcademyName = "Example Academy",
+        };
+        var leads = new PlatformDemoRequestService(db.UnitOfWork, audit);
+        Assert.IsType<NoContentResult>(await controller.Register(slug, contact, leads, default));
     }
 
     [Fact]
@@ -126,9 +138,14 @@ public sealed class WebinarTests
             AcademyName = "Example Academy"
         };
         var other = AsJson(await controller.Create(input with { IsPublished = true }, default)).GetProperty("Slug").GetString()!;
-        Assert.IsType<NoContentResult>(await controller.Register(slug, contact, leads, default));
-        Assert.IsType<NoContentResult>(await controller.Register(slug, contact, leads, default));
-        Assert.IsType<NoContentResult>(await controller.Register(other, contact, leads, default));
+        var confirmation = AsJson(await controller.Register(slug, contact, leads, default));
+        var confirmationUrl = confirmation.GetProperty("joinUrl").GetString()!;
+        AssertRoomToken(confirmationUrl, id, false);
+        var guestToken = new JwtSecurityTokenHandler().ReadJwtToken(QueryHelpers.ParseQuery(new Uri(confirmationUrl).Query)["jwt"].ToString());
+        Assert.Equal(input.End.ToUnixTimeSeconds(), new DateTimeOffset(guestToken.ValidTo).ToUnixTimeSeconds());
+        Assert.Equal("no-store", controller.Response.Headers.CacheControl.ToString());
+        AsJson(await controller.Register(slug, contact, leads, default));
+        AsJson(await controller.Register(other, contact, leads, default));
         var campaigns = await db.Context.Set<iucs.meettomanage.domain.Entities.Marketing.PlatformDemoRequest>()
             .Where(lead => lead.WorkEmail == contact.WorkEmail)
             .Select(lead => lead.Campaign)

@@ -24,6 +24,7 @@ public sealed class WebinarsController(
     MeetToManageDbContext db, IBlogService publishing, IJitsiTokenService jitsi, IShortLinkService shortLinks) : ControllerBase
 {
     private const string Prefix = BlogService.WebinarSlugPrefix;
+    private const string AcademyWebinarSlug = "m2m-webinar-882af77ca6cf4ffcb9bd2dc5aa2f4712";
     private const string Marketing = nameof(UserRole.Marketing);
     private const int MaxBannerBytes = 500_000;
     private const int MaxBannerDataLength = ((MaxBannerBytes + 2) / 3) * 4 + 32;
@@ -49,6 +50,8 @@ public sealed class WebinarsController(
         string? TeamName = null, string? HostPhoto = null);
     public sealed record Webinar(
         Guid Id, string Slug, string Title, string Excerpt, bool IsPublished, WebinarDetails Details);
+
+    public sealed record WebinarQuestion([Required, MaxLength(600)] string Question);
 
     private IQueryable<BlogPost> Events => db.BlogPosts.AsNoTracking().Where(post => post.Slug.StartsWith(Prefix));
     private IQueryable<BlogPost> Published(DateTime now) =>
@@ -76,6 +79,30 @@ public sealed class WebinarsController(
     }
 
     [AllowAnonymous]
+    [EnableRateLimiting("marketing-chat")]
+    [HttpPost("{slug}/questions")]
+    public async Task<IActionResult> Ask(string slug, WebinarQuestion input,
+        [FromServices] ISalesAssistant assistant, CancellationToken cancellationToken)
+    {
+        var webinar = Map(await Published(DateTime.UtcNow).FirstOrDefaultAsync(row => row.Slug == slug, cancellationToken));
+        if (webinar is null) return NotFound();
+        var academyWebinar = webinar.Slug == AcademyWebinarSlug;
+        var facts = JsonSerializer.Serialize(new
+        {
+            webinar.Title, webinar.Excerpt, webinar.Details.Description, webinar.Details.Benefits, webinar.Details.Offers,
+            HostName = webinar.Details.HostName ?? (academyWebinar ? "Prithivi S" : null),
+            HostRole = webinar.Details.HostRole ?? (academyWebinar ? "Co-founder & Chief of Marketing" : null),
+            webinar.Details.TeamName,
+            AdditionalTopics = academyWebinar ? "Student admissions and live class management." : null,
+            StartIst = webinar.Details.Start.ToOffset(TimeSpan.FromMinutes(330)),
+            EndIst = webinar.Details.End.ToOffset(TimeSpan.FromMinutes(330)),
+            RegistrationOpen = webinar.Details.End > DateTimeOffset.UtcNow,
+            Format = "A free online webinar. The RSVP form collects registration details. The confirmation shows the joining link when available, and the team also shares joining instructions separately.",
+        }, Json);
+        return Ok(new { reply = await assistant.AnswerWebinarQuestionAsync(facts, input.Question.Trim(), cancellationToken) });
+    }
+
+    [AllowAnonymous]
     [EnableRateLimiting("store-inquiry")]
     [HttpPost("{slug}/register")]
     public async Task<IActionResult> Register(string slug, CreatePlatformDemoRequestRequest input,
@@ -96,7 +123,10 @@ public sealed class WebinarsController(
             LandingPath = $"/webinars/{webinar.Slug}",
             Message = $"Webinar registration for {webinar.Title} (starts {webinar.Details.Start:O})"
         }, cancellationToken);
-        return NoContent();
+        Response.Headers.CacheControl = "no-store";
+        var joinUrl = await JoinUrl(webinar.Id, moderator: false, expiresAtUtc: webinar.Details.End.UtcDateTime,
+            cancellationToken: cancellationToken, requireSigned: true);
+        return joinUrl is null ? NoContent() : Ok(new { joinUrl });
     }
 
     [Authorize(Roles = Marketing)]
@@ -197,18 +227,19 @@ public sealed class WebinarsController(
         if (expiresAtUtc <= DateTime.UtcNow) return Conflict("This webinar has ended.");
         var meetingUrl = await JoinUrl(id, moderator: false, expiresAtUtc, cancellationToken);
         var userId = Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var slug = await shortLinks.CreateAsync(meetingUrl, expiresAtUtc, userId, cancellationToken);
+        var slug = await shortLinks.CreateAsync(meetingUrl!, expiresAtUtc, userId, cancellationToken);
         var apiBase = TenantExecution.Url($"{Request.Scheme}://{Request.Host}");
         return Ok(new { url = $"{apiBase}/m/{slug}", expiresAtUtc });
     }
 
-    private async Task<string> JoinUrl(Guid id, bool moderator, DateTime expiresAtUtc, CancellationToken cancellationToken)
+    private async Task<string?> JoinUrl(Guid id, bool moderator, DateTime expiresAtUtc, CancellationToken cancellationToken, bool requireSigned = false)
     {
         var config = await db.Integrations.Where(row => row.Key == "jitsi").Select(row => row.ConfigJson)
             .FirstOrDefaultAsync(cancellationToken);
         var room = $"m2m-webinar-{id:N}";
         var name = moderator ? User.Identity?.Name ?? "Webinar host" : "Guest";
         var token = jitsi.CreateToken(JitsiLinkBuilder.ResolveDomain(config), config, room, name, null, moderator, expiresAtUtc);
+        if (requireSigned && string.IsNullOrWhiteSpace(token)) return null;
         // The shared Jitsi deployment currently permits unsigned rooms, just like normal
         // classrooms. Add JWT when configured, but do not make webinar hosting unavailable on
         // an unsigned deployment: BuildJoinUrl deliberately supports both modes.

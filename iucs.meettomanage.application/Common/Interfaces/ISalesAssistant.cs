@@ -12,6 +12,7 @@ namespace iucs.meettomanage.application.Common.Interfaces
     public interface ISalesAssistant
     {
         Task<SalesChatResponse> ReplyAsync(IReadOnlyList<SalesChatTurn> conversation, CancellationToken cancellationToken = default, MarketingLeadAttributionDto? attribution = null);
+        Task<string> AnswerWebinarQuestionAsync(string webinarFacts, string question, CancellationToken cancellationToken = default);
         Task<IReadOnlyList<string>> TranslateAsync(IReadOnlyList<string> texts, string targetLanguage, CancellationToken cancellationToken = default);
         Task<MarketingAiInsightsDto> AnalyzeMarketingAsync(MarketingDashboardDto dashboard, CancellationToken cancellationToken = default);
         Task<MarketingBlogAnalysisDto> AnalyzeBlogPerformanceAsync(MarketingContentPerformanceDto performance, CancellationToken cancellationToken = default);
