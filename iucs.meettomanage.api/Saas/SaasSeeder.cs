@@ -77,6 +77,7 @@ public static class SaasSeeder
         }
 
         await ApplyNovember2026PricingAsync(db, logger, ct);
+        await ApplyPremiumMonthlyPricingAsync(db, ct);
 
         // Plans created before session/recording metering was introduced do not have these
         // catalogue rows. Backfill only missing values: operator-edited limits are never
@@ -172,7 +173,9 @@ public static class SaasSeeder
             changed = true;
         }
 
-        if (Find("growth") is { } growth && StillPriced(growth, 7_999m))
+        if (Find("growth") is { SortOrder: 2 } growth && StillPriced(growth, 7_999m)
+            && growth.Prices.Any(price => price.IsActive && price.Currency == "INR"
+                && price.BillingInterval == BillingInterval.Year && price.Amount == 79_990m))
         {
             foreach (var price in growth.Prices.Where(p => p.IsActive && p.Currency == "INR")) price.IsActive = false;
             db.PlanPrices.AddRange(
@@ -199,6 +202,34 @@ public static class SaasSeeder
         if (!changed) return;
         await db.SaveChangesAsync(ct);
         logger.LogInformation("Applied the November 2026 price list (Free, Basic, Pro, Growth).");
+    }
+
+    private static async Task ApplyPremiumMonthlyPricingAsync(MasterDbContext db, CancellationToken ct)
+    {
+        var updates = new (string Code, string? Name, decimal Previous, decimal New)[]
+        {
+            ("basic", "Pro Basic", 999m, 1_499m),
+            ("pro", null, 2_499m, 3_499m),
+            ("growth", null, 5_999m, 7_999m),
+        };
+        var codes = updates.Select(update => update.Code).ToArray();
+        var plans = await db.Plans.Include(plan => plan.Prices).Where(plan => codes.Contains(plan.Code)).ToListAsync(ct);
+        foreach (var (code, name, previous, newAmount) in updates)
+        {
+            var plan = plans.SingleOrDefault(plan => plan.Code == code);
+            var current = plan?.Prices.SingleOrDefault(price => price.IsActive && price.Currency == "INR"
+                && price.BillingInterval == BillingInterval.Month);
+            if (plan is null || current is null || current.Amount != previous) continue;
+
+            current.IsActive = false;
+            db.PlanPrices.Add(new PlanPrice
+            {
+                PlanId = plan.Id, BillingInterval = current.BillingInterval, Currency = current.Currency, Amount = newAmount,
+            });
+            if (name is not null && plan.Name == "Basic") plan.Name = name;
+            plan.UpdatedAtUtc = DateTime.UtcNow;
+        }
+        await db.SaveChangesAsync(ct);
     }
 
     private sealed record Limits(long Students, long Staff, long StorageMb, long SessionMinutes,

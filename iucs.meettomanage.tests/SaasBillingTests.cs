@@ -373,7 +373,7 @@ public sealed class SaasSeederTests : IDisposable
     }
 
     [Fact]
-    public async Task NovemberPriceListAddsBasicAndProRepricesGrowthAndKeepsExistingSubscribersPrices()
+    public async Task PremiumMonthlyPricesKeepAnnualRatesAndLegacyPriceRows()
     {
         var options = Options.Create(new SaasOptions());
         await SaasSeeder.SeedAsync(_factory, options, NullLogger.Instance);
@@ -389,12 +389,17 @@ public sealed class SaasSeederTests : IDisposable
             return new TenantEntitlements(true, plan.Code, plan.Name, SaasSubscriptionStatus.Active, plan.Entitlements.ToDictionary(x => x.Key, x => x.Value));
         }
 
-        Assert.Equal(999m, Monthly("basic"));
-        Assert.Equal(2_499m, Monthly("pro"));
-        Assert.Equal(5_999m, Monthly("growth"));
+        Assert.Equal(1_499m, Monthly("basic"));
+        Assert.Equal(3_499m, Monthly("pro"));
+        Assert.Equal(7_999m, Monthly("growth"));
         Assert.Equal(1, plans.Count(x => x.Code == "basic"));
-        // Growth's old price stays on file (inactive) for anyone already paying it.
-        Assert.Contains(plans.Single(x => x.Code == "growth").Prices, p => !p.IsActive && p.Amount == 7_999m);
+        Assert.Equal("Pro Basic", plans.Single(x => x.Code == "basic").Name);
+        foreach (var (code, oldMonthly, yearly) in new[] { ("basic", 999m, 9_990m), ("pro", 2_499m, 24_990m), ("growth", 5_999m, 59_990m) })
+        {
+            var prices = plans.Single(x => x.Code == code).Prices;
+            Assert.Contains(prices, price => !price.IsActive && price.BillingInterval == BillingInterval.Month && price.Amount == oldMonthly);
+            Assert.Equal(yearly, Assert.Single(prices, price => price.IsActive && price.BillingInterval == BillingInterval.Year).Amount);
+        }
         // Starter is hidden from new buyers but still exists for its subscribers.
         Assert.False(plans.Single(x => x.Code == "starter").IsPublic);
 
