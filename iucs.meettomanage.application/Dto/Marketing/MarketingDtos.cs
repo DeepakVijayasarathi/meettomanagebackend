@@ -525,6 +525,10 @@ namespace iucs.meettomanage.application.Dto.Marketing
 
         public MarketingConversionDetailDto ConversionDetail { get; set; } = new();
 
+        /// <summary>Separates acquisition channel from meaningful prospect behaviour. Known bots
+        /// are rejected before storage and are therefore never included in these visitor counts.</summary>
+        public MarketingTrafficQualityDto TrafficQuality { get; set; } = new();
+
         public List<MarketingDailyPointDto> Daily { get; set; } = new();
 
         public List<NamedCountDto> TopPages { get; set; } = new();
@@ -545,6 +549,18 @@ namespace iucs.meettomanage.application.Dto.Marketing
         public List<MarketingPerformanceDto> SourceQuality { get; set; } = new();
         public List<MarketingPerformanceDto> CampaignPerformance { get; set; } = new();
         public List<MarketingPerformanceDto> LandingPagePerformance { get; set; } = new();
+    }
+
+    public class MarketingTrafficQualityDto
+    {
+        public int TotalVisitors { get; set; }
+        public int CampaignVisitors { get; set; }
+        public int OrganicReferralVisitors { get; set; }
+        public int DirectVisitors { get; set; }
+        public int EngagedVisitors { get; set; }
+        public int QualifiedProspects { get; set; }
+        public int LowEngagementVisitors { get; set; }
+        public bool KnownBotsExcluded { get; set; } = true;
     }
 
     /// <summary>Unique-visitor stages and alternate conversion paths for a selected dashboard period.</summary>

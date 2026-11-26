@@ -12793,6 +12793,13 @@ namespace iucs.meettomanage.tests
             Assert.Equal(1, dashboard.ConversionDetail.SubmitAttemptedVisitors);
             Assert.Equal(1, dashboard.ConversionDetail.SavedFormLeadVisitors);
             Assert.Equal(2, dashboard.ConversionDetail.TotalSavedLeadVisitors);
+            Assert.True(dashboard.TrafficQuality.KnownBotsExcluded);
+            Assert.Equal(5, dashboard.TrafficQuality.TotalVisitors);
+            Assert.Equal(0, dashboard.TrafficQuality.CampaignVisitors);
+            Assert.Equal(5, dashboard.TrafficQuality.DirectVisitors);
+            Assert.Equal(4, dashboard.TrafficQuality.EngagedVisitors);
+            Assert.Equal(2, dashboard.TrafficQuality.QualifiedProspects);
+            Assert.Equal(1, dashboard.TrafficQuality.LowEngagementVisitors);
 
             // Visitor text sent to the AI never carries contact details.
             Assert.Equal("Call me on [phone] or [email] about fees", MarketingAnalyticsService.RedactContact("Call me on +91 98765 43210 or asha@x.com about fees"));

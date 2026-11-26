@@ -590,6 +590,40 @@ namespace iucs.meettomanage.application.Services
                 .Select(g => g.First())
                 .ToList();
 
+            static bool IsPaidMedium(string? medium) => medium is not null && medium.ToLowerInvariant() is
+                "cpc" or "ppc" or "paid" or "paid-search" or "paid-social" or "display" or "affiliate";
+            var campaignVisitorIds = firstTouch
+                .Where(e => e.Campaign != null || IsPaidMedium(e.Medium))
+                .Select(e => e.VisitorId)
+                .ToHashSet();
+            var measuredVisitorIds = firstTouch.Select(e => e.VisitorId).ToHashSet();
+            var savedLeadVisitorIds = currentRequests.Select(r => r.VisitorId!).ToHashSet();
+            var intentTypes = new HashSet<string>
+            {
+                MarketingEvent.ChatStarted, MarketingEvent.FormStarted, MarketingEvent.FormSubmitAttempted,
+                MarketingEvent.FormSubmitted, MarketingEvent.WhatsAppClicked, MarketingEvent.SalesCtaClicked,
+                MarketingEvent.ContentCtaClicked, MarketingEvent.ExitIntentSubmitted,
+            };
+            var visitorGroups = current.GroupBy(e => e.VisitorId).ToList();
+            var engagedVisitorIds = visitorGroups
+                .Where(g => measuredVisitorIds.Contains(g.Key) && (g.Count(e => e.Type == MarketingEvent.PageView) > 1 || g.Any(e => intentTypes.Contains(e.Type))))
+                .Select(g => g.Key)
+                .ToHashSet();
+            var qualifiedVisitorIds = visitorGroups
+                .Where(g => measuredVisitorIds.Contains(g.Key) && (savedLeadVisitorIds.Contains(g.Key) || g.Any(e => intentTypes.Contains(e.Type))))
+                .Select(g => g.Key)
+                .ToHashSet();
+            var trafficQuality = new MarketingTrafficQualityDto
+            {
+                TotalVisitors = firstTouch.Count,
+                CampaignVisitors = campaignVisitorIds.Count,
+                OrganicReferralVisitors = firstTouch.Count(e => e.Source != null && !campaignVisitorIds.Contains(e.VisitorId)),
+                DirectVisitors = firstTouch.Count(e => e.Source == null && !campaignVisitorIds.Contains(e.VisitorId)),
+                EngagedVisitors = engagedVisitorIds.Count,
+                QualifiedProspects = qualifiedVisitorIds.Count,
+                LowEngagementVisitors = Math.Max(0, firstTouch.Count - engagedVisitorIds.Count),
+            };
+
             static List<MarketingPerformanceDto> Performance(
                 IEnumerable<(string Name, StoreInquiryStatus Status)> leadRows,
                 IEnumerable<string> visitorRows)
@@ -642,6 +676,7 @@ namespace iucs.meettomanage.application.Services
                 Totals = Totals(current.Select(e => (e.Type, e.VisitorId)), currentRequests.Select(r => (r.Message, r.Status)), currentConversations.Select(c => c.VisitorKey)),
                 Previous = Totals(previous.Select(e => (e.Type, e.VisitorId)), previousRequests.Select(r => (r.Message, r.Status)), previousConversations.Select(c => c.VisitorKey)),
                 ConversionDetail = conversionDetail,
+                TrafficQuality = trafficQuality,
                 Daily = daily,
                 TopPages = Top(views.Select(e => e.Path), 10),
                 TopBlogPosts = Top(views.Where(e => e.Path.StartsWith("/blog/")).Select(e => e.Path), 10),
