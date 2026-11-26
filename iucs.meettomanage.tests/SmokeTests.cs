@@ -12870,6 +12870,10 @@ namespace iucs.meettomanage.tests
             // An analytics start without a persisted transcript must not appear as a viewable chat.
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "chat_started", Path = "/pricing", VisitorId = "visitor-aaaa" }, desktop);
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/", VisitorId = "visitor-cccc" }, "Googlebot/2.1 (+http://www.google.com/bot.html)");
+            // Modern scraping services often identify their automation framework without using
+            // the word "bot". These must not inflate Direct traffic in the marketing dashboard.
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/privacy", VisitorId = "visitor-playwright" }, "Mozilla/5.0 Playwright/1.57 Chrome/140.0");
+            await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/policy", VisitorId = "visitor-scrapy" }, "Scrapy/2.13 (+https://scrapy.org)");
             await analytics.TrackAsync(new TrackMarketingEventRequest { Type = "page_view", Path = "/<script>", VisitorId = "visitor-dddd" }, desktop);
 
             await new MarketingChatLogService(_db.UnitOfWork).RecordTurnAsync(

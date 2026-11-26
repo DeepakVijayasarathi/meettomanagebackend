@@ -739,7 +739,7 @@ namespace iucs.meettomanage.application.Services
             return "desktop";
         }
 
-        [GeneratedRegex("bot|crawl|spider|slurp|facebookexternalhit|embedly|preview|headless|lighthouse|pingdom|uptime|monitor|curl|wget|python-requests", RegexOptions.IgnoreCase)]
+        [GeneratedRegex("bot|crawl|spider|slurp|facebookexternalhit|embedly|preview|headless|lighthouse|pingdom|uptime|monitor|curl|wget|python-requests|python-urllib|httpclient|go-http-client|scrapy|selenium|playwright|puppeteer|phantomjs|bytespider|semrush|ahrefs|mj12bot|dotbot|petalbot|dataforseo|claudebot|gptbot|chatgpt-user", RegexOptions.IgnoreCase)]
         private static partial Regex BotPattern();
 
         [GeneratedRegex(@"ipad|tablet|android(?!.*mobile)", RegexOptions.IgnoreCase)]
