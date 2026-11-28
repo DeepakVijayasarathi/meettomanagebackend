@@ -118,6 +118,7 @@ public sealed class WebinarsController(
             WorkEmail = input.WorkEmail,
             Phone = input.Phone,
             AcademyName = input.AcademyName,
+            VisitorId = input.VisitorId,
             Source = "webinar",
             Campaign = webinar.Slug,
             LandingPath = $"/webinars/{webinar.Slug}",
@@ -158,6 +159,57 @@ public sealed class WebinarsController(
             .ToListAsync(cancellationToken);
         Response.Headers.CacheControl = "no-store";
         return Ok(new { items, totalCount, page, pageSize });
+    }
+
+    [Authorize(Roles = Marketing)]
+    [HttpGet("manage/{id:guid}/analytics")]
+    public async Task<IActionResult> Analytics(Guid id, [FromServices] CrmAccess crm, CancellationToken cancellationToken)
+    {
+        var slug = await Events.Where(post => post.Id == id).Select(post => post.Slug).FirstOrDefaultAsync(cancellationToken);
+        if (slug is null) return NotFound();
+
+        var publicSlug = slug == AcademyWebinarSlug ? "academy-management-webinar-december-2026" : slug;
+        var path = $"/webinars/{publicSlug}";
+        var legacyPath = $"/webinars/{slug}";
+        var events = db.MarketingEvents.AsNoTracking().Where(entry => entry.Path == path || entry.Path == legacyPath);
+        var pageViews = events.Where(entry => entry.Type == MarketingEvent.PageView);
+        var variant = $"webinar:{id:N}";
+        var joinVariant = $"join:{id:N}";
+
+        var registrations = db.PlatformDemoRequests.AsNoTracking()
+            .Where(lead => lead.Source == "webinar" && lead.Campaign == slug && lead.ArchivedAtUtc == null);
+        if (await crm.VisibleToAsync(cancellationToken) is { } userId)
+            registrations = registrations.Where(lead => lead.AssignedToUserId == null || lead.AssignedToUserId == userId);
+
+        var sources = await pageViews
+            .GroupBy(entry => entry.Source ?? "Direct")
+            .Select(group => new { name = group.Key, count = group.Select(entry => entry.VisitorId).Distinct().Count() })
+            .OrderByDescending(item => item.count)
+            .Take(8)
+            .ToListAsync(cancellationToken);
+        var dailyRegistrations = await registrations
+            .GroupBy(lead => lead.CreatedAtUtc.Date)
+            .Select(group => new { date = group.Key, count = group.Count() })
+            .OrderBy(item => item.date)
+            .ToListAsync(cancellationToken);
+
+        var result = new
+        {
+            pageViews = await pageViews.CountAsync(cancellationToken),
+            visitors = await pageViews.Select(entry => entry.VisitorId).Distinct().CountAsync(cancellationToken),
+            formViews = await events.Where(entry => entry.Type == MarketingEvent.FormVisible && entry.Variant == variant).Select(entry => entry.VisitorId).Distinct().CountAsync(cancellationToken),
+            formStarts = await events.Where(entry => entry.Type == MarketingEvent.FormStarted && entry.Variant == variant).Select(entry => entry.VisitorId).Distinct().CountAsync(cancellationToken),
+            submitAttempts = await events.Where(entry => entry.Type == MarketingEvent.FormSubmitAttempted && entry.Variant == variant).Select(entry => entry.VisitorId).Distinct().CountAsync(cancellationToken),
+            trackedSubmissions = await events.Where(entry => entry.Type == MarketingEvent.FormSubmitted && entry.Variant == variant).Select(entry => entry.VisitorId).Distinct().CountAsync(cancellationToken),
+            registrations = await registrations.CountAsync(cancellationToken),
+            joinClicks = await events.Where(entry => entry.Type == MarketingEvent.ContentCtaClicked && entry.Variant == joinVariant).Select(entry => entry.VisitorId).Distinct().CountAsync(cancellationToken),
+            demoClicks = await events.Where(entry => entry.Type == MarketingEvent.SalesCtaClicked && entry.Variant == "webinar-demo").Select(entry => entry.VisitorId).Distinct().CountAsync(cancellationToken),
+            converted = await registrations.CountAsync(lead => lead.Status == StoreInquiryStatus.Converted || lead.TenantId != null, cancellationToken),
+            sources,
+            dailyRegistrations,
+        };
+        Response.Headers.CacheControl = "no-store";
+        return Ok(result);
     }
 
     [Authorize(Roles = Marketing)]
