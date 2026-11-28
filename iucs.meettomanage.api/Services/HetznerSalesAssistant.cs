@@ -509,6 +509,8 @@ namespace iucs.meettomanage.api.Services
                     formSubmittedVisitorsAboveDemoRequestsIndicatesAConversionPersistenceDiscrepancy = true,
                     formStartsWithoutSubmissionsIndicateDropOff_NotBrokenPageTracking = true,
                     formStartsAboveSubmissionsMustNeverBeCalledAPersistenceDiscrepancy = true,
+                    rawBrowserIdentitiesAreNotQualifiedProspects = true,
+                    lowEngagementShareAtOrAbove80PercentWithNoQualifiedProspectsMustNotBeDescribedAsSignificantGrowth = true,
                 },
                 period = new { dashboard.Days, dashboard.StartDate, dashboard.EndDate },
                 currentPeriodTotals = dashboard.Totals,
@@ -521,6 +523,7 @@ namespace iucs.meettomanage.api.Services
                 dashboard.Mediums,
                 dashboard.Countries,
                 dashboard.Devices,
+                dashboard.TrafficQuality,
                 dashboard.DemoRequestsByStatus,
                 visitorToDemo = dashboard.ConversionDetail,
             });
@@ -533,6 +536,7 @@ namespace iucs.meettomanage.api.Services
                     "Zero recorded demo requests does not prove a broken funnel or tracking error. State both possible explanations neutrally: no conversion was recorded, and tracking should be verified before changing UX. " +
                     "Use the form funnel evidence precisely: ONLY submitted visitors above saved demo requests is a persistence discrepancy. Starts above submissions is ordinary form drop-off or validation loss and MUST NEVER be called a persistence discrepancy. No starts means no form attempt was observed. " +
                     "Direct means attribution was not captured; it does not prove brand traffic, organic traffic, a launch, a campaign, or internal testing. A traffic increase is an observation, not evidence of its cause. " +
+                    "TrafficQuality is authoritative for audience quality. If QualifiedProspects is zero and LowEngagementVisitors are at least 80% of TotalVisitors, do not call the traffic increase significant or successful. Lead with the low-quality share and say raw browser identities increased, not qualified visitors. " +
                     "Do not prescribe A/B testing when there are zero recorded conversions; first verify tracking and gather enough baseline conversions. Never invent causes, revenue, demographics or intent. " +
                     "Use exact labels: views for TopPages, visitors for Totals/Sources. Prefer checks that distinguish measurement problems from real behaviour. " +
                     "Return strict JSON: summary string, observations array (2-4), nextActions array (3-5). Prioritize specific actions and state uncertainty. No markdown." },
@@ -554,6 +558,8 @@ namespace iucs.meettomanage.api.Services
                     {
                         var combinedActions = actions.Concat(fallback.NextActions).Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToList();
                         var result = new MarketingAiInsightsDto { Summary = summary[..Math.Min(summary.Length, 800)], Observations = observations.Take(4).ToList(), NextActions = combinedActions, AiPowered = true, GeneratedAtUtc = DateTime.UtcNow };
+                        if (IsPredominantlyLowQuality(dashboard))
+                            result.Summary = LowQualitySummary(dashboard);
                         if (!HasImpossibleVisitorClaim(result, dashboard.Totals.Visitors)) return result;
                         _logger.LogWarning("Rejected marketing AI analysis because a claimed visitor count exceeded the authoritative total of {Visitors}", dashboard.Totals.Visitors);
                     }
@@ -572,6 +578,17 @@ namespace iucs.meettomanage.api.Services
             foreach (System.Text.RegularExpressions.Match match in System.Text.RegularExpressions.Regex.Matches(text, @"\b([\d,]+)\s+(?:unique\s+)?visitors?\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 if (int.TryParse(match.Groups[1].Value.Replace(",", ""), out var claimed) && claimed > authoritativeTotal) return true;
             return false;
+        }
+
+        private static bool IsPredominantlyLowQuality(MarketingDashboardDto dashboard) =>
+            dashboard.TrafficQuality.TotalVisitors >= 5 &&
+            dashboard.TrafficQuality.QualifiedProspects == 0 &&
+            dashboard.TrafficQuality.LowEngagementVisitors * 100d / dashboard.TrafficQuality.TotalVisitors >= 80;
+
+        private static string LowQualitySummary(MarketingDashboardDto dashboard)
+        {
+            var q = dashboard.TrafficQuality;
+            return $"{q.TotalVisitors} raw browser identities were recorded, but {q.LowEngagementVisitors} were low-engagement and 0 qualified prospects were observed. This is not evidence of meaningful audience growth; {q.DirectVisitors} visit(s) had no captured attribution and should be investigated as possible automation, internal testing or untagged traffic.";
         }
 
         public async Task<MarketingVisitorInsightDto> AnalyzeVisitorAsync(MarketingVisitorDetailDto visitor, CancellationToken cancellationToken = default)
@@ -1019,7 +1036,10 @@ namespace iucs.meettomanage.api.Services
             var funnelObservation = t.FormSubmittedVisitors > t.DemoRequests
                 ? $"The browser tracked {t.FormSubmittedVisitors} form submitter(s), while {t.DemoRequests} demo request(s) were saved."
                 : $"{t.FormStartedVisitors} visitor(s) started the demo form and {t.FormSubmittedVisitors} submitted it.";
-            return new MarketingAiInsightsDto { Summary = $"{t.Visitors} visitors produced {t.DemoRequests} demo requests ({t.ConversionRate:0.#}%) during this {dashboard.Days}-day period.", Observations = [$"Visitors viewed {t.PagesPerVisitor:0.#} pages each on average.", funnelObservation, $"{t.ChatStartRate:0.#}% started chat; {t.ChatBookings} demo requests came through chat."], NextActions = actions.Take(5).ToList(), AiPowered = false, GeneratedAtUtc = DateTime.UtcNow };
+            var summary = IsPredominantlyLowQuality(dashboard)
+                ? LowQualitySummary(dashboard)
+                : $"{t.Visitors} visitors produced {t.DemoRequests} demo requests ({t.ConversionRate:0.#}%) during this {dashboard.Days}-day period.";
+            return new MarketingAiInsightsDto { Summary = summary, Observations = [$"Visitors viewed {t.PagesPerVisitor:0.#} pages each on average.", funnelObservation, $"{t.ChatStartRate:0.#}% started chat; {t.ChatBookings} demo requests came through chat."], NextActions = actions.Take(5).ToList(), AiPowered = false, GeneratedAtUtc = DateTime.UtcNow };
         }
 
         public async Task<MarketingLeadRecommendationDto> RecommendLeadAsync(PlatformDemoRequestDto lead, CancellationToken cancellationToken = default)

@@ -12806,6 +12806,33 @@ namespace iucs.meettomanage.tests
         }
 
         [Fact]
+        public async Task MarketingInsights_DoNotCelebratePredominantlyLowQualityTraffic()
+        {
+            var assistant = new iucs.meettomanage.api.Services.HetznerSalesAssistant(
+                new NoHttpClientFactory(), new PlatformDemoRequestService(_db.UnitOfWork, _auditLog),
+                Microsoft.Extensions.Options.Options.Create(new iucs.meettomanage.application.Common.Options.HetznerAiOptions()),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<iucs.meettomanage.api.Services.HetznerSalesAssistant>.Instance);
+            var dashboard = new MarketingDashboardDto
+            {
+                Days = 1,
+                Totals = new MarketingTotalsDto { Visitors = 17, PageViews = 18 },
+                Previous = new MarketingTotalsDto { Visitors = 2, PageViews = 2 },
+                TrafficQuality = new MarketingTrafficQualityDto
+                {
+                    TotalVisitors = 17, DirectVisitors = 17, EngagedVisitors = 1,
+                    QualifiedProspects = 0, LowEngagementVisitors = 16,
+                },
+            };
+
+            var insight = await assistant.AnalyzeMarketingAsync(dashboard);
+
+            Assert.False(insight.AiPowered);
+            Assert.Contains("17 raw browser identities", insight.Summary);
+            Assert.Contains("16 were low-engagement", insight.Summary);
+            Assert.Contains("not evidence of meaningful audience growth", insight.Summary);
+        }
+
+        [Fact]
         public async Task PlatformDemoRequest_IsValidatedAndRecentRetriesAreIdempotent()
         {
             var invalid = new CreatePlatformDemoRequestRequest { FullName = "Invalid", Phone = "call-me", AcademyName = "Test" };
